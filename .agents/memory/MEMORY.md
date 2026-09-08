@@ -1,0 +1,22 @@
+- [Verifying async DESIGN subagent completion](design-subagent-verification.md) — "success" status doesn't mean UI is finished; always inspect actual page files before trusting the summary.
+- [Clerk routing="path" blank page](clerk-signin-blank-page.md) — gating an entire internal app behind Clerk requires redirecting to /sign-in, not rendering <SignIn> inline elsewhere.
+- [Orval schema/const naming collisions](orval-zod-name-collision.md) — OpenAPI schema names can collide with generated zod const names causing TS2308; rename the schema, not the code.
+- [OpenAPI regex escaping](openapi-regex-escaping.md) — single-quoted YAML patterns need one backslash; doubled slashes make Orval/Zod reject valid values.
+- [Orval generated-output churn](orval-generated-output-churn.md) — codegen can add blank-run noise and briefly remove live imports; normalize output and restart the frontend after generation.
+- [Auth and role testing](dev-auth-bypass-testing.md) — DISABLE_AUTH is fully removed; RBAC tests require a real Clerk test user and temporary role changes.
+- [Audit log design](audit-log-design.md) — append-only write trail via res.finish middleware after requireAuth; entityId only for canonical UUID/numeric ids.
+- [Orval query enabled needs queryKey](orval-query-enabled-querykey.md) — list hooks reject `{ query: { enabled } }` alone (TS2741); pass `queryKey: get<Op>QueryKey(params)` too.
+- [Rate limiting & CORS behind Replit proxy](rate-limit-behind-replit-proxy.md) — set trust proxy, key limiter by user id (fallback ipKeyGenerator), fail-closed CORS from REPLIT_DOMAINS.
+- [Clerk admin-created password accounts](clerk-admin-created-users.md) — mark email verified after createUser; device-verification code can't be disabled; compensate Clerk on DB failure.
+- [Private object serving must be allow-listed](private-object-serving.md) — storage template serves any private object and its auth check fails under Clerk; register paths in a table and 404 the rest.
+- [Storage cleanup consistency](storage-cleanup-consistency.md) — serialize attach/delete and commit each successful object cleanup so partial failures never leave broken database references.
+- [Drivers are application users](drivers-are-users.md) — assign drivers only by app-user UUID; never reintroduce free-text driver identities.
+- [Delivery completion workflow](delivery-completion-workflow.md) — driver marks Done; only logistician approval of an uploaded act makes the delivery Closed.
+- [Undated deliveries](undated-deliveries.md) — undated rows belong to a schedule month, survive month replacement, and cannot be completed until dated.
+- [Express route-prefix guards](express-route-prefix-guards.md) — on root-mounted routers, protect case-insensitive string routes with matching string-prefix middleware, not case-sensitive regexes.
+- [Development smoke environment guards](development-smoke-environment-guards.md) — don't identify Replit development by REPLIT_ENVIRONMENT or by comparing its two DB URLs.
+- [Additive role-schema publishing](additive-role-schema-publishing.md) — keep old enum defaults and populated legacy columns until new role values commit in production.
+- [Preview/apply identifier normalization](preview-apply-normalization.md) — migration previews and apply operations must share one canonicalizer or displayed rows can become unmatchable.
+- [Synchronizing data-backed UI counters](data-backed-counter-sync.md) — browser smoke must wait for fixture-backed counts, not merely for an element initially rendered with zero.
+- [Legacy similarity reviews](legacy-similarity-reviews.md) — keep name-derived group keys out of URLs and invalidate reviews when group membership changes.
+- [Cleanup commit-failure fixtures](cleanup-commit-failure-fixtures.md) — arm after object deletion, fail only the dedicated client's actual COMMIT, then recover on a fresh connection.

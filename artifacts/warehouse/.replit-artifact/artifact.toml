@@ -1,0 +1,31 @@
+kind = "web"
+previewPath = "/"
+title = "Складской учёт"
+version = "1.0.0"
+id = "artifacts/warehouse"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 24594
+
+[services.development]
+run = "pnpm --filter @workspace/warehouse run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/warehouse", "run", "build" ]
+publicDir = "artifacts/warehouse/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "24594"
+BASE_PATH = "/"

@@ -1,0 +1,16 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "Cn0NMVgTZUhXlJNQmlgzG"
+uri = "file://exports/warehouse_project_backup.zip"
+type = "unspecified"
+title = "Полная копия программы (код проекта)"
+logical_id = "aae0d0c6-56e1-447c-b596-4992cdebc8f0"
+
+[[outputs]]
+id = "yozQuh4c6MA8q7vnYcxhF"
+uri = "file://exports/warehouse_database_backup.zip"
+type = "unspecified"
+title = "Резервная копия базы данных (SQL)"
+logical_id = "92efbb33-6b02-4e5c-96d6-6ec8cff72747"

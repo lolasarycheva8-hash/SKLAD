@@ -1,0 +1,3745 @@
+openapi: 3.1.0
+info:
+  # Do not change the title, if the title changes, the import paths will be broken
+  title: Api
+  version: 0.1.0
+  description: API specification
+servers:
+  - url: /api
+    description: Base API path
+tags:
+  - name: health
+    description: Health operations
+  - name: products
+    description: Product catalog operations
+  - name: categories
+    description: Category operations
+  - name: goods-receipts
+    description: Goods receipt documents (поступление товара)
+  - name: dashboard
+    description: Dashboard summary operations
+  - name: sites
+    description: Serviced sites (objects) directory
+  - name: deliveries
+    description: Delivery schedule operations (график развоза, план/факт)
+  - name: clients
+    description: Client directory operations
+  - name: orders
+    description: Client order operations (заказы клиентов)
+  - name: shipments
+    description: Shipment operations (отгрузки, накладные)
+  - name: users
+    description: App user role/permission management
+paths:
+  /healthz:
+    get:
+      operationId: healthCheck
+      tags: [health]
+      summary: Health check
+      description: Returns server health status
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+
+  /categories:
+    get:
+      operationId: listCategories
+      tags: [categories]
+      summary: List all categories
+      responses:
+        "200":
+          description: List of categories
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Category"
+    post:
+      operationId: createCategory
+      tags: [categories]
+      summary: Create a category
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCategoryInput"
+      responses:
+        "201":
+          description: Created category
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Category"
+
+  /categories/{id}:
+    patch:
+      operationId: updateCategory
+      tags: [categories]
+      summary: Rename a category
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateCategoryInput"
+      responses:
+        "200":
+          description: Updated category
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Category"
+    delete:
+      operationId: deleteCategory
+      tags: [categories]
+      summary: Delete a category
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Deleted
+
+  /products:
+    get:
+      operationId: listProducts
+      tags: [products]
+      summary: List all products with current stock
+      parameters:
+        - name: search
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: categoryId
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: lowStockOnly
+          in: query
+          required: false
+          schema:
+            type: boolean
+      responses:
+        "200":
+          description: List of products
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Product"
+    post:
+      operationId: createProduct
+      tags: [products]
+      summary: Create a product
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateProductInput"
+      responses:
+        "201":
+          description: Created product
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Product"
+
+  /products/bulk:
+    post:
+      operationId: createProductsBulk
+      tags: [products]
+      summary: Create multiple products at once (импорт из Excel), upsert by sku
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateProductsBulkInput"
+      responses:
+        "201":
+          description: Created/updated products
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Product"
+
+  /products/{id}:
+    get:
+      operationId: getProduct
+      tags: [products]
+      summary: Get a product by id
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Product
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Product"
+    patch:
+      operationId: updateProduct
+      tags: [products]
+      summary: Update a product
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateProductInput"
+      responses:
+        "200":
+          description: Updated product
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Product"
+    delete:
+      operationId: deleteProduct
+      tags: [products]
+      summary: Delete a product
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Deleted
+
+  /goods-receipts:
+    get:
+      operationId: listGoodsReceipts
+      tags: [goods-receipts]
+      summary: List goods receipt documents (история поступлений товара)
+      responses:
+        "200":
+          description: List of goods receipts
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/GoodsReceipt"
+    post:
+      operationId: createGoodsReceipt
+      tags: [goods-receipts]
+      summary: >
+        Register a "Поступление товара" document with a supplier document number, type, total sum,
+        and a list of received items. For each item, adds stock to an existing product, creates a
+        new product, or creates a new price-variant card if the sale price changed.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateGoodsReceiptInput"
+      responses:
+        "201":
+          description: Created goods receipt
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GoodsReceipt"
+
+  /goods-receipts/{id}:
+    get:
+      operationId: getGoodsReceipt
+      tags: [goods-receipts]
+      summary: Get a goods receipt document by id
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Goods receipt
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GoodsReceipt"
+    patch:
+      operationId: updateGoodsReceipt
+      tags: [goods-receipts]
+      summary: >
+        Update a draft (not posted) goods receipt: header fields (docNumber, docType, note)
+        and item quantities, or remove items. Rejected with 400 if the document is posted.
+        Item quantity changes and removals are synced to the movements ledger.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateGoodsReceiptInput"
+      responses:
+        "200":
+          description: Updated goods receipt
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GoodsReceipt"
+    delete:
+      operationId: deleteGoodsReceipt
+      tags: [goods-receipts]
+      summary: >
+        Delete a goods receipt document (admin only). Removes the document, its items,
+        and all linked "in" movements, so the received stock is reversed.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Deleted
+
+  /goods-receipts/{id}/post:
+    post:
+      operationId: postGoodsReceipt
+      tags: [goods-receipts]
+      summary: >
+        Провести документ поступления. After posting, the document becomes read-only
+        (no edits allowed); only an admin can delete it.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Posted goods receipt
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GoodsReceipt"
+
+  /sites:
+    get:
+      operationId: listSites
+      tags: [sites]
+      summary: List all serviced sites
+      parameters:
+        - name: search
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: List of sites
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Site"
+    post:
+      operationId: createSite
+      tags: [sites]
+      summary: Create a serviced site
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSiteInput"
+      responses:
+        "201":
+          description: Created site
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Site"
+
+  /sites/bulk:
+    post:
+      operationId: createSitesBulk
+      tags: [sites]
+      summary: Create multiple sites at once (импорт из Excel), upsert by name
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSitesBulkInput"
+      responses:
+        "201":
+          description: Created/updated sites
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Site"
+
+  /sites/{id}:
+    get:
+      operationId: getSite
+      tags: [sites]
+      summary: Get a site by id
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Site
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Site"
+    patch:
+      operationId: updateSite
+      tags: [sites]
+      summary: Update a serviced site
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateSiteInput"
+      responses:
+        "200":
+          description: Updated site
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Site"
+    delete:
+      operationId: deleteSite
+      tags: [sites]
+      summary: Delete a serviced site
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Deleted
+
+  /deliveries:
+    get:
+      operationId: listDeliveries
+      tags: [deliveries]
+      summary: List delivery schedule entries
+      parameters:
+        - name: month
+          in: query
+          required: false
+          description: Filter by month, format YYYY-MM
+          schema:
+            type: string
+        - name: dateFrom
+          in: query
+          required: false
+          description: Filter deliveries with plannedDate >= dateFrom (format YYYY-MM-DD). Takes precedence over month when provided.
+          schema:
+            type: string
+        - name: dateTo
+          in: query
+          required: false
+          description: Filter deliveries with plannedDate <= dateTo (format YYYY-MM-DD). Takes precedence over month when provided.
+          schema:
+            type: string
+        - name: siteId
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: driverUserId
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/DeliveryStatus"
+      responses:
+        "200":
+          description: List of deliveries
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Delivery"
+    post:
+      operationId: createDelivery
+      tags: [deliveries]
+      summary: Create a planned delivery (график)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateDeliveryInput"
+      responses:
+        "201":
+          description: Created delivery
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Delivery"
+
+  /deliveries/bulk:
+    post:
+      operationId: createDeliveriesBulk
+      tags: [deliveries]
+      summary: Create multiple planned deliveries at once (генерация графика на месяц)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateDeliveriesBulkInput"
+      responses:
+        "201":
+          description: Created deliveries
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Delivery"
+
+  /deliveries/bulk/replace:
+    post:
+      operationId: replaceDeliveriesBulk
+      tags: [deliveries]
+      summary: Replace all deliveries for a selected month
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReplaceDeliveriesBulkInput"
+      responses:
+        "201":
+          description: Replaced deliveries
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Delivery"
+
+  /deliveries/bulk/actual:
+    post:
+      operationId: updateDeliveriesActualBulk
+      tags: [deliveries]
+      summary: Upload actual delivery dates (superadmin only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateDeliveriesActualBulkInput"
+      responses:
+        "200":
+          description: Actual dates updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UpdateDeliveriesActualBulkResult"
+
+  /deliveries/{id}:
+    patch:
+      operationId: updateDelivery
+      tags: [deliveries]
+      summary: Record actual delivery date (факт), planned date stays immutable
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateDeliveryInput"
+      responses:
+        "200":
+          description: Updated delivery
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Delivery"
+    delete:
+      operationId: deleteDelivery
+      tags: [deliveries]
+      summary: Delete a delivery schedule entry
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Deleted
+
+  /deliveries/{id}/reschedule:
+    post:
+      operationId: rescheduleDelivery
+      tags: [deliveries]
+      summary: Перенести доставку на другую дату (сохраняет исходную дату и автора переноса)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RescheduleDeliveryInput"
+      responses:
+        "200":
+          description: Rescheduled delivery
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Delivery"
+
+  /deliveries/{id}/approve-act:
+    post:
+      operationId: approveDeliveryAct
+      tags: [deliveries]
+      summary: Confirm the attached act and close a completed delivery
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Closed delivery (idempotently returns an already closed delivery)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Delivery"
+
+  /deliveries/{id}/photos:
+    get:
+      operationId: listDeliveryPhotos
+      tags: [deliveries]
+      summary: Список фото-актов доставки
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Photos
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/DeliveryPhoto"
+    post:
+      operationId: addDeliveryPhoto
+      tags: [deliveries]
+      summary: Приложить фото-акт к доставке (редактор графика или водитель этой доставки)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddDeliveryPhotoInput"
+      responses:
+        "201":
+          description: Created photo record
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeliveryPhoto"
+
+  /delivery-photos/{id}:
+    delete:
+      operationId: deleteDeliveryPhoto
+      tags: [deliveries]
+      summary: Удалить фото-акт
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Deleted
+
+  /sites/{id}/close:
+    post:
+      operationId: closeSite
+      tags: [sites]
+      summary: Закрыть объект (временно исключить из развоза)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CloseSiteInput"
+      responses:
+        "200":
+          description: Closed site
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Site"
+
+  /sites/{id}/reopen:
+    post:
+      operationId: reopenSite
+      tags: [sites]
+      summary: Открыть объект снова
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Reopened site
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Site"
+
+  /inventory-items:
+    get:
+      operationId: listInventoryItems
+      tags: [inventory]
+      summary: Справочник инвентаря
+      responses:
+        "200":
+          description: Items
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/InventoryItem"
+    post:
+      operationId: createInventoryItem
+      tags: [inventory]
+      summary: Добавить позицию инвентаря
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateInventoryItemInput"
+      responses:
+        "201":
+          description: Created item
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InventoryItem"
+
+  /inventory-items/{id}:
+    patch:
+      operationId: updateInventoryItem
+      tags: [inventory]
+      summary: Изменить позицию инвентаря
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateInventoryItemInput"
+      responses:
+        "200":
+          description: Updated item
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InventoryItem"
+    delete:
+      operationId: deleteInventoryItem
+      tags: [inventory]
+      summary: Удалить позицию инвентаря
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Deleted
+
+  /inventory-requests:
+    get:
+      operationId: listInventoryRequests
+      tags: [inventory]
+      summary: Заявки на инвентарь
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/InventoryRequestStatus"
+        - name: siteId
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Requests
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/InventoryRequest"
+    post:
+      operationId: createInventoryRequest
+      tags: [inventory]
+      summary: Создать заявку на инвентарь (доступно любому вошедшему сотруднику)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateInventoryRequestInput"
+      responses:
+        "201":
+          description: Created request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InventoryRequest"
+
+  /inventory-requests/{id}/approve:
+    post:
+      operationId: approveInventoryRequest
+      tags: [inventory]
+      summary: Одобрить заявку
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DecideInventoryRequestInput"
+      responses:
+        "200":
+          description: Approved request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InventoryRequest"
+
+  /inventory-requests/{id}/reject:
+    post:
+      operationId: rejectInventoryRequest
+      tags: [inventory]
+      summary: Отклонить заявку
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DecideInventoryRequestInput"
+      responses:
+        "200":
+          description: Rejected request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InventoryRequest"
+
+  /inventory-requests/{id}/done:
+    post:
+      operationId: markInventoryRequestDone
+      tags: [inventory]
+      summary: Отметить заявку выданной (исполненной)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Done request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InventoryRequest"
+
+  /deliveries/site-lookup:
+    get:
+      tags: [deliveries]
+      operationId: listDeliverySiteLookup
+      summary: List minimum site fields needed by the deliveries workspace
+      responses:
+        "200":
+          description: Delivery site lookup rows.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/DeliverySiteLookup"
+
+  /lookups/receipt-products:
+    get:
+      tags: [goods-receipts]
+      operationId: listReceiptProductLookup
+      summary: List product fields needed to prepare a goods receipt
+      responses:
+        "200":
+          description: Receipt product lookup rows
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/ReceiptProductLookup" }
+
+  /lookups/receipt-categories:
+    get:
+      tags: [goods-receipts]
+      operationId: listReceiptCategoryLookup
+      summary: List categories needed to prepare a goods receipt
+      responses:
+        "200":
+          description: Receipt category lookup rows
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/NamedLookup" }
+
+  /lookups/order-clients:
+    get:
+      tags: [orders]
+      operationId: listOrderClientLookup
+      summary: List clients needed to prepare an order
+      responses:
+        "200":
+          description: Order client lookup rows
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/NamedLookup" }
+
+  /lookups/order-products:
+    get:
+      tags: [orders]
+      operationId: listOrderProductLookup
+      summary: List products needed to prepare an order
+      responses:
+        "200":
+          description: Order product lookup rows
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/PricedProductLookup" }
+
+  /lookups/inventory-sites:
+    get:
+      tags: [inventory]
+      operationId: listInventorySiteLookup
+      summary: List sites needed to prepare an inventory request
+      responses:
+        "200":
+          description: Inventory site lookup rows
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/NamedLookup" }
+
+  /lookups/shipment-sites:
+    get:
+      tags: [shipments]
+      operationId: listShipmentSiteLookup
+      summary: List sites needed to prepare a shipment
+      responses:
+        "200":
+          description: Shipment site lookup rows
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/ShipmentSiteLookup" }
+
+  /lookups/shipment-products:
+    get:
+      tags: [shipments]
+      operationId: listShipmentProductLookup
+      summary: List products needed while editing a shipment
+      responses:
+        "200":
+          description: Shipment product lookup rows
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/PricedProductLookup" }
+
+  /lookups/shipment-orders:
+    get:
+      tags: [shipments]
+      operationId: listShipmentOrderLookup
+      summary: List orders eligible for shipment selection
+      responses:
+        "200":
+          description: Shipment order lookup rows
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/ShipmentOrderLookup" }
+
+  /lookups/shipment-orders/{id}:
+    get:
+      tags: [shipments]
+      operationId: getShipmentOrderLookup
+      summary: Get order detail needed to prepare or edit a shipment
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Shipment order detail
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ShipmentOrderLookup" }
+
+  /orders/{id}/shipments:
+    get:
+      tags: [orders]
+      operationId: listOrderShipmentLookup
+      summary: List shipment summary rows for an order workspace
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Order shipment summary rows
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/OrderShipmentLookup" }
+
+  /storage/uploads/request-url:
+    post:
+      tags: [storage]
+      operationId: requestUploadUrl
+      summary: Request a presigned URL for a delivery act upload
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UploadUrlRequest"
+      responses:
+        "200":
+          description: Presigned upload URL generated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UploadUrlResponse"
+
+  /storage/objects/{objectPath}:
+    get:
+      tags: [storage]
+      operationId: getStorageObject
+      summary: Serve an uploaded object
+      parameters:
+        - name: objectPath
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Object content streamed with correct Content-Type.
+          content:
+            "*/*":
+              schema:
+                type: string
+                format: binary
+
+  /users/me:
+    get:
+      operationId: getCurrentUser
+      tags: [users]
+      summary: Get current authenticated user's role and permissions
+      responses:
+        "200":
+          description: Current app user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AppUser"
+
+  /users:
+    get:
+      operationId: listUsers
+      tags: [users]
+      summary: List all app users (admin only)
+      responses:
+        "200":
+          description: List of app users
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AppUser"
+
+  /drivers:
+    get:
+      operationId: listDrivers
+      tags: [users]
+      summary: List users marked as drivers
+      responses:
+        "200":
+          description: Driver users available for assignment
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/DriverUser"
+
+  /users/{id}:
+    patch:
+      operationId: updateUserRole
+      tags: [users]
+      summary: Update a user's role and assigned sections (admin only)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateUserRoleInput"
+      responses:
+        "200":
+          description: Updated app user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AppUser"
+
+  /admin/clear-data:
+    post:
+      operationId: clearAllData
+      tags: [users]
+      summary: Delete all business data (admin only, destructive)
+      responses:
+        "200":
+          description: All business data deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClearAllDataResult"
+
+  /admin/legacy-driver-assignments:
+    get:
+      operationId: getLegacyDriverAssignments
+      tags: [users]
+      summary: List unresolved legacy driver assignments (admin only)
+      responses:
+        "200":
+          description: Unique legacy driver names with unresolved assignment counts
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/LegacyDriverAssignmentCandidate"
+    post:
+      operationId: resolveLegacyDriverAssignments
+      tags: [users]
+      summary: Resolve legacy driver names to driver users (admin only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LegacyDriverAssignmentResolutionInput"
+      responses:
+        "200":
+          description: Actual assignment counts updated by the operation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LegacyDriverAssignmentResolutionResult"
+
+  /admin/legacy-driver-similarity-reviews:
+    put:
+      operationId: setLegacyDriverSimilarityReview
+      tags: [users]
+      summary: Mark or unmark a legacy driver similarity group as reviewed (admin only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LegacyDriverSimilarityReviewInput"
+      responses:
+        "200":
+          description: Current review state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LegacyDriverSimilarityReviewResult"
+
+  /users/create:
+    post:
+      operationId: createUser
+      tags: [users]
+      summary: Create a user account with password and access rights (admin only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateUserInput"
+      responses:
+        "201":
+          description: User created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AppUser"
+
+  /audit:
+    get:
+      operationId: listAuditLog
+      tags: [audit]
+      summary: List audit log entries (admin only)
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+        - name: entity
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: userId
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Page of audit log entries, newest first
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuditLogPage"
+
+  /audit/delivery-upload-cleanup:
+    get:
+      operationId: getDeliveryUploadCleanupHealth
+      tags: [audit]
+      summary: Get automatic delivery upload cleanup health (admin only)
+      responses:
+        "200":
+          description: Last automatic cleanup run and freshness state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeliveryUploadCleanupHealth"
+
+  /my/deliveries:
+    get:
+      operationId: listMyDeliveries
+      tags: [my]
+      summary: Deliveries visible to the current user (bound driver or assigned sites)
+      parameters:
+        - name: from
+          in: query
+          required: false
+          description: Date YYYY-MM-DD
+          schema:
+            type: string
+            pattern: '^\d{4}-\d{2}-\d{2}$'
+        - name: to
+          in: query
+          required: false
+          description: Date YYYY-MM-DD
+          schema:
+            type: string
+            pattern: '^\d{4}-\d{2}-\d{2}$'
+        - name: siteId
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: search
+          in: query
+          required: false
+          description: Case-insensitive substring of site name or address
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Deliveries for the current user's bindings
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Delivery"
+
+  /my/deliveries/{id}/done:
+    post:
+      operationId: markMyDeliveryDone
+      tags: [my]
+      summary: Mark own delivery as done today (driver-bound users only)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Updated delivery
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Delivery"
+
+  /my/deliveries/{id}/comment:
+    patch:
+      operationId: updateMyDeliveryComment
+      tags: [my]
+      summary: Update the shared delivery note as the currently assigned active driver
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeliveryCommentUpdate"
+      responses:
+        "200":
+          description: Updated delivery
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Delivery"
+
+  /my/sites-summary:
+    get:
+      operationId: getMySitesSummary
+      tags: [my]
+      summary: Plan/fact summary per assigned site for the current user
+      parameters:
+        - name: from
+          in: query
+          required: false
+          description: Date YYYY-MM-DD
+          schema:
+            type: string
+            pattern: '^\d{4}-\d{2}-\d{2}$'
+        - name: to
+          in: query
+          required: false
+          description: Date YYYY-MM-DD
+          schema:
+            type: string
+            pattern: '^\d{4}-\d{2}-\d{2}$'
+      responses:
+        "200":
+          description: Per-site plan/fact rows
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/MySiteSummary"
+
+  /trade-names:
+    get:
+      operationId: listTradeNames
+      tags: [tradeNames]
+      summary: List trade names directory
+      responses:
+        "200":
+          description: Trade names
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TradeName"
+    post:
+      operationId: createTradeName
+      tags: [tradeNames]
+      summary: Add a trade name to the directory (sites edit permission)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTradeNameInput"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TradeName"
+
+  /trade-names/{id}:
+    delete:
+      operationId: deleteTradeName
+      tags: [tradeNames]
+      summary: Remove a trade name from the directory (sites edit permission)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Deleted
+
+  /delivery-types:
+    get:
+      operationId: listDeliveryTypes
+      tags: [deliveryTypes]
+      summary: List delivery types directory
+      responses:
+        "200":
+          description: Delivery types
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/DeliveryTypeEntry"
+    post:
+      operationId: createDeliveryType
+      tags: [deliveryTypes]
+      summary: Add a delivery type to the directory (sites edit permission)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateDeliveryTypeInput"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeliveryTypeEntry"
+
+  /delivery-types/{id}:
+    delete:
+      operationId: deleteDeliveryType
+      tags: [deliveryTypes]
+      summary: Remove a delivery type from the directory (sites edit permission)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Deleted
+
+  /clients:
+    get:
+      operationId: listClients
+      tags: [clients]
+      summary: List all clients
+      parameters:
+        - name: search
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: List of clients
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Client"
+    post:
+      operationId: createClient
+      tags: [clients]
+      summary: Create a client
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateClientInput"
+      responses:
+        "201":
+          description: Created client
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Client"
+
+  /clients/{id}:
+    patch:
+      operationId: updateClient
+      tags: [clients]
+      summary: Update a client
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateClientInput"
+      responses:
+        "200":
+          description: Updated client
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Client"
+    delete:
+      operationId: deleteClient
+      tags: [clients]
+      summary: Delete a client
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Deleted
+
+  /orders:
+    get:
+      operationId: listOrders
+      tags: [orders]
+      summary: List client orders
+      parameters:
+        - name: clientId
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: isPaid
+          in: query
+          required: false
+          schema:
+            type: boolean
+      responses:
+        "200":
+          description: List of orders
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Order"
+    post:
+      operationId: createOrder
+      tags: [orders]
+      summary: Create a client order with line items
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateOrderInput"
+      responses:
+        "201":
+          description: Created order
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+
+  /orders/{id}:
+    get:
+      operationId: getOrder
+      tags: [orders]
+      summary: Get an order by id, including shipped progress per line item
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Order
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+    patch:
+      operationId: updateOrder
+      tags: [orders]
+      summary: Update an order's payment status or note
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateOrderInput"
+      responses:
+        "200":
+          description: Updated order
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+    delete:
+      operationId: deleteOrder
+      tags: [orders]
+      summary: Delete an order (only if nothing has been shipped)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Deleted
+
+  /orders/{id}/payments:
+    get:
+      operationId: listOrderPayments
+      tags: [orders]
+      summary: List payment history for an order
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: List of payments
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/OrderPayment"
+    post:
+      operationId: createOrderPayment
+      tags: [orders]
+      summary: Record a payment (advance or additional) against an order
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateOrderPaymentInput"
+      responses:
+        "201":
+          description: Updated order with recalculated payment totals
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+
+  /shipments:
+    get:
+      operationId: listShipments
+      tags: [shipments]
+      summary: List shipments
+      parameters:
+        - name: orderId
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: siteId
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: List of shipments
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Shipment"
+    post:
+      operationId: createShipment
+      tags: [shipments]
+      summary: Create a shipment against a paid order; validates against remaining order quantities and creates "out" stock movements
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateShipmentInput"
+      responses:
+        "201":
+          description: Created shipment
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Shipment"
+        "400":
+          description: Validation error (order not paid or quantity exceeds remaining order amount)
+
+  /shipments/{id}:
+    get:
+      operationId: getShipment
+      tags: [shipments]
+      summary: Get a shipment by id (used for накладная printing)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Shipment
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Shipment"
+    patch:
+      operationId: updateShipment
+      tags: [shipments]
+      summary: Update a shipment's metadata (note, driver, site, date). Items/quantities are immutable once shipped.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateShipmentInput"
+      responses:
+        "200":
+          description: Updated shipment
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Shipment"
+
+  /shipments/{id}/dispatch:
+    post:
+      operationId: dispatchShipment
+      tags: [shipments]
+      summary: >
+        Передать курьеру: locks the shipment against further edits and makes its
+        накладная printable. Cannot be undone via the API.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Dispatched shipment
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Shipment"
+        "400":
+          description: Shipment already dispatched
+
+  /shipments/{id}/delete:
+    post:
+      operationId: deleteShipment
+      tags: [shipments]
+      summary: >
+        Admin-only: mark a shipment as deleted (soft delete) with a mandatory note,
+        instead of editing it. Reverses stock via a compensating "in" movement for
+        each item. Cannot be undone via the API; create a new shipment instead.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeleteShipmentInput"
+      responses:
+        "200":
+          description: Deleted (soft) shipment
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Shipment"
+        "400":
+          description: Shipment already marked as deleted
+        "403":
+          description: Only admins can mark a shipment for deletion
+
+  /dashboard/delivery-summary:
+    get:
+      operationId: getDeliveryDashboardSummary
+      tags: [dashboard]
+      summary: Get план-факт delivery statistics for a month
+      parameters:
+        - name: month
+          in: query
+          required: false
+          description: Format YYYY-MM, defaults to current month
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Delivery dashboard summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeliveryDashboardSummary"
+
+  /dashboard/summary:
+    get:
+      operationId: getDashboardSummary
+      tags: [dashboard]
+      summary: Get warehouse dashboard summary
+      responses:
+        "200":
+          description: Dashboard summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardSummary"
+
+components:
+  schemas:
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+      required:
+        - status
+
+    Category:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+      required: [id, name, createdAt]
+
+    CreateCategoryInput:
+      type: object
+      properties:
+        name:
+          type: string
+      required: [name]
+
+    UpdateCategoryInput:
+      type: object
+      properties:
+        name:
+          type: string
+      required: [name]
+
+    Product:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        sku:
+          type: string
+        unit:
+          type: string
+          description: Unit of measure, e.g. шт, кг, л
+        purchasePrice:
+          type: number
+          description: Закупочная цена
+        price:
+          type: number
+          description: Продажная цена
+        categoryId:
+          type: string
+          nullable: true
+        categoryName:
+          type: string
+          nullable: true
+        currentStock:
+          type: number
+        minStock:
+          type: number
+          description: Minimum stock threshold for low-stock alerts
+        supplier:
+          type: string
+          nullable: true
+          description: Поставщик
+        supplierContact:
+          type: string
+          nullable: true
+          description: Контакт поставщика
+        isLowStock:
+          type: boolean
+          description: currentStock < 30% of minStock
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - name
+        - sku
+        - unit
+        - purchasePrice
+        - price
+        - currentStock
+        - minStock
+        - supplier
+        - supplierContact
+        - isLowStock
+        - createdAt
+
+    CreateProductInput:
+      type: object
+      properties:
+        name:
+          type: string
+        sku:
+          type: string
+        unit:
+          type: string
+        purchasePrice:
+          type: number
+        price:
+          type: number
+        categoryId:
+          type: string
+          nullable: true
+        minStock:
+          type: number
+        supplier:
+          type: string
+          nullable: true
+        supplierContact:
+          type: string
+          nullable: true
+        initialStock:
+          type: number
+      required: [name, sku, unit, price]
+
+    GoodsReceiptItemInput:
+      type: object
+      properties:
+        productId:
+          type: string
+          nullable: true
+          description: Existing product to receive stock against. Omit to create a brand-new product.
+        name:
+          type: string
+        sku:
+          type: string
+          nullable: true
+          description: Auto-generated if omitted or if a price-variant card needs to be created.
+        unit:
+          type: string
+        purchasePrice:
+          type: number
+        price:
+          type: number
+        categoryId:
+          type: string
+          nullable: true
+        minStock:
+          type: number
+        supplier:
+          type: string
+          nullable: true
+        supplierContact:
+          type: string
+          nullable: true
+        quantity:
+          type: number
+          exclusiveMinimum: 0
+      required: [name, unit, price, quantity]
+
+    GoodsReceiptItem:
+      type: object
+      properties:
+        id:
+          type: string
+        productId:
+          type: string
+        productName:
+          type: string
+        productUnit:
+          type: string
+        quantity:
+          type: number
+        price:
+          type: number
+        createdNewProductCard:
+          type: boolean
+          description: True if a new price-variant (or brand-new) product card was created for this item.
+      required:
+        - id
+        - productId
+        - productName
+        - productUnit
+        - quantity
+        - price
+        - createdNewProductCard
+
+    GoodsReceipt:
+      type: object
+      properties:
+        id:
+          type: string
+        docNumber:
+          type: string
+          description: Номер документа поставщика
+        docType:
+          type: string
+          description: Вид документа (накладная, УПД, счёт-фактура и т.п.)
+        totalSum:
+          type: number
+          description: Сумма по документу поставщика
+        note:
+          type: string
+          nullable: true
+        isPosted:
+          type: boolean
+          description: Документ проведён (read-only after posting)
+        suppliers:
+          type: array
+          items:
+            type: string
+          description: Distinct suppliers of the products in this receipt (for filtering)
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/GoodsReceiptItem"
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - docNumber
+        - docType
+        - totalSum
+        - note
+        - isPosted
+        - suppliers
+        - items
+        - createdAt
+
+    CreateGoodsReceiptInput:
+      type: object
+      properties:
+        docNumber:
+          type: string
+        docType:
+          type: string
+        totalSum:
+          type: number
+        note:
+          type: string
+          nullable: true
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/GoodsReceiptItemInput"
+          minItems: 1
+      required: [docNumber, docType, totalSum, items]
+
+    UpdateGoodsReceiptInput:
+      type: object
+      properties:
+        docNumber:
+          type: string
+        docType:
+          type: string
+        note:
+          type: string
+          nullable: true
+        items:
+          type: array
+          description: >
+            Full list of remaining items with (possibly updated) quantities. Items of the
+            document missing from this list are removed. New items cannot be added here.
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+                description: Existing goods_receipt_items id
+              quantity:
+                type: number
+                exclusiveMinimum: 0
+            required: [id, quantity]
+
+    CreateProductsBulkInput:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/CreateProductInput"
+      required: [items]
+
+    UpdateProductInput:
+      type: object
+      properties:
+        name:
+          type: string
+        sku:
+          type: string
+        unit:
+          type: string
+        purchasePrice:
+          type: number
+        price:
+          type: number
+        categoryId:
+          type: string
+          nullable: true
+        minStock:
+          type: number
+        supplier:
+          type: string
+          nullable: true
+        supplierContact:
+          type: string
+          nullable: true
+
+    Site:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+          description: Unique site name
+        address:
+          type: string
+        branch:
+          type: string
+          description: Куст
+        customer:
+          type: string
+          description: Торговое название объекта (необязательно; непустое значение строго из справочника trade_names)
+        client:
+          type: string
+          description: Клиент
+        manager:
+          type: string
+          description: Закреплённый менеджер
+        managerContact:
+          type: string
+          description: Контакт менеджера
+        director:
+          type: string
+          description: Закреплённый руководитель
+        project:
+          type: string
+          description: Закреплённый проект
+        driverUserId:
+          type: [string, "null"]
+          format: uuid
+          description: UUID закреплённого пользователя-водителя
+        driver:
+          type: string
+          description: Отображаемое имя водителя или «Не назначен»
+        deliveryType:
+          type: string
+          description: Тип поставки (из справочника delivery_types; может быть пустым)
+        closedFrom:
+          type: string
+          format: date
+          nullable: true
+          description: Дата, с которой объект закрыт (null — объект работает)
+        reopenDate:
+          type: string
+          format: date
+          nullable: true
+          description: Планируемая дата открытия (если известна)
+        closureReason:
+          type: string
+          nullable: true
+        closedBy:
+          type: string
+          nullable: true
+        isClosed:
+          type: boolean
+          description: Закрыт ли объект на текущую дату (учитывает closedFrom/reopenDate)
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - name
+        - address
+        - branch
+        - customer
+        - client
+        - manager
+        - managerContact
+        - director
+        - project
+        - driverUserId
+        - driver
+        - deliveryType
+        - closedFrom
+        - reopenDate
+        - closureReason
+        - closedBy
+        - isClosed
+        - createdAt
+
+    CreateSiteInput:
+      type: object
+      properties:
+        name:
+          type: string
+        address:
+          type: string
+        branch:
+          type: string
+        customer:
+          type: string
+          description: Необязательное торговое название объекта
+        client:
+          type: string
+        manager:
+          type: string
+        managerContact:
+          type: string
+        director:
+          type: string
+        project:
+          type: string
+        driverUserId:
+          type: [string, "null"]
+          format: uuid
+        deliveryType:
+          type: string
+      required:
+        - name
+        - address
+        - branch
+        - client
+        - manager
+        - director
+        - project
+
+    UpdateSiteInput:
+      type: object
+      properties:
+        name:
+          type: string
+        address:
+          type: string
+        branch:
+          type: string
+        customer:
+          type: string
+        client:
+          type: string
+        manager:
+          type: string
+        managerContact:
+          type: string
+        director:
+          type: string
+        project:
+          type: string
+        driverUserId:
+          type: [string, "null"]
+          format: uuid
+        deliveryType:
+          type: string
+
+    DeliveryStatus:
+      type: string
+      description: |
+        pending — план в будущем, факта нет; on_time — доставлено в срок или раньше;
+        late — доставлено позже плана; overdue — план уже прошёл, факта нет
+      enum: [pending, on_time, late, overdue]
+
+    DeliveryWorkflowStatus:
+      type: string
+      description: planned — not completed; done — actual date set but act unapproved; closed — act approved
+      enum: [planned, done, closed]
+
+    Delivery:
+      type: object
+      properties:
+        id:
+          type: string
+        siteId:
+          type: string
+        siteName:
+          type: string
+        siteAddress:
+          type: string
+        driverUserId:
+          type: [string, "null"]
+          format: uuid
+        driver:
+          type: string
+        plannedDate:
+          type: [string, "null"]
+          format: date
+          description: Плановая дата доставки (null, если дата ещё не назначена)
+        scheduleMonth:
+          type: [string, "null"]
+          pattern: '^\d{4}-(0[1-9]|1[0-2])$'
+          description: Месяц владения строкой графика; null возможен только у legacy rows
+        actualDate:
+          type: string
+          format: date
+          nullable: true
+          description: Фактическая дата доставки (редактируемая)
+        actApprovedAt:
+          type: [string, "null"]
+          format: date-time
+        actApprovedBy:
+          type: [string, "null"]
+          format: uuid
+        workflowStatus:
+          $ref: "#/components/schemas/DeliveryWorkflowStatus"
+        note:
+          type: string
+          nullable: true
+        status:
+          $ref: "#/components/schemas/DeliveryStatus"
+        lagDays:
+          type: integer
+          description: Отклонение факта от плана в днях (положительное — отставание)
+          nullable: true
+        rescheduledFromDate:
+          type: string
+          format: date
+          nullable: true
+          description: Исходная плановая дата до переноса (null — переносов не было)
+        rescheduledBy:
+          type: string
+          nullable: true
+        rescheduledAt:
+          type: string
+          format: date-time
+          nullable: true
+        photosCount:
+          type: integer
+          description: Количество приложенных фото-актов
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - siteId
+        - siteName
+        - siteAddress
+        - driverUserId
+        - driver
+        - plannedDate
+        - scheduleMonth
+        - actualDate
+        - actApprovedAt
+        - actApprovedBy
+        - workflowStatus
+        - note
+        - status
+        - lagDays
+        - rescheduledFromDate
+        - rescheduledBy
+        - rescheduledAt
+        - photosCount
+        - createdAt
+
+    CreateDeliveryInput:
+      type: object
+      properties:
+        siteId:
+          type: string
+        driverUserId:
+          type: [string, "null"]
+          format: uuid
+        plannedDate:
+          type: [string, "null"]
+          format: date
+        scheduleMonth:
+          type: [string, "null"]
+          pattern: '^\d{4}-(0[1-9]|1[0-2])$'
+        note:
+          type: string
+      required: [siteId]
+
+    CreateDeliveriesBulkInput:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/CreateDeliveryInput"
+      required: [items]
+
+    ReplaceDeliveriesBulkInput:
+      type: object
+      properties:
+        month:
+          type: string
+          pattern: '^\d{4}-(0[1-9]|1[0-2])$'
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/CreateDeliveryInput"
+      required: [month, items]
+
+    DeliveryActualInput:
+      type: object
+      properties:
+        id:
+          type: string
+        actualDate:
+          type: string
+          format: date
+      required: [id, actualDate]
+
+    UpdateDeliveriesActualBulkInput:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/DeliveryActualInput"
+      required: [items]
+
+    UpdateDeliveriesActualBulkResult:
+      type: object
+      properties:
+        updated:
+          type: integer
+          minimum: 0
+      required: [updated]
+
+    UpdateDeliveryInput:
+      type: object
+      properties:
+        plannedDate:
+          type: [string, "null"]
+          format: date
+        actualDate:
+          type: string
+          format: date
+          nullable: true
+        note:
+          type: string
+          nullable: true
+        driverUserId:
+          type: [string, "null"]
+          format: uuid
+          description: Замена водителя на эту конкретную доставку (не меняет привязку объекта)
+
+    DeliveryCommentUpdate:
+      type: object
+      additionalProperties: false
+      properties:
+        note:
+          type: [string, "null"]
+      required: [note]
+
+    DriverPlanFactStat:
+      type: object
+      properties:
+        driver:
+          type: string
+        total:
+          type: integer
+        onTime:
+          type: integer
+        planFactPercent:
+          type: number
+      required: [driver, total, onTime, planFactPercent]
+
+    DeliveryDashboardSummary:
+      type: object
+      properties:
+        month:
+          type: string
+        totalScheduled:
+          type: integer
+        undatedCount:
+          type: integer
+          description: Количество доставок без назначенной даты в выбранном месяце
+        dueCount:
+          type: integer
+          description: Доставки, плановая дата которых уже наступила
+        onTimeCount:
+          type: integer
+        lateCount:
+          type: integer
+        overdueCount:
+          type: integer
+        planFactPercent:
+          type: number
+        avgLagDays:
+          type: number
+        planFactByDriver:
+          type: array
+          items:
+            $ref: "#/components/schemas/DriverPlanFactStat"
+        overdueDeliveries:
+          type: array
+          items:
+            $ref: "#/components/schemas/Delivery"
+        todayTotal:
+          type: integer
+          description: Количество доставок, запланированных на сегодня
+        todayByDriver:
+          type: array
+          items:
+            $ref: "#/components/schemas/DriverCount"
+        todayDeliveries:
+          type: array
+          description: Все доставки, запланированные на сегодня
+          items:
+            $ref: "#/components/schemas/Delivery"
+      required:
+        - month
+        - totalScheduled
+        - undatedCount
+        - dueCount
+        - onTimeCount
+        - lateCount
+        - overdueCount
+        - planFactPercent
+        - avgLagDays
+        - planFactByDriver
+        - overdueDeliveries
+        - todayTotal
+        - todayByDriver
+        - todayDeliveries
+
+    DriverCount:
+      type: object
+      properties:
+        driver:
+          type: string
+        count:
+          type: integer
+        done:
+          type: integer
+          description: Сколько из сегодняшних доставок водителя уже выполнено (есть actualDate)
+      required: [driver, count, done]
+
+    DashboardSummary:
+      type: object
+      properties:
+        lowStockCount:
+          type: integer
+          description: Товары с остатком менее 30% от минимального
+      required:
+        - lowStockCount
+
+    CreateSitesBulkInput:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/CreateSiteInput"
+      required: [items]
+
+    TradeName:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+      required: [id, name, createdAt]
+
+    CreateTradeNameInput:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+      required: [name]
+
+    DeliveryTypeEntry:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+      required: [id, name, createdAt]
+
+    CreateDeliveryTypeInput:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+      required: [name]
+
+    Client:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        contact:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+      required: [id, name, contact, createdAt]
+
+    CreateClientInput:
+      type: object
+      properties:
+        name:
+          type: string
+        contact:
+          type: string
+          nullable: true
+      required: [name]
+
+    UpdateClientInput:
+      type: object
+      minProperties: 1
+      properties:
+        name:
+          type: string
+        contact:
+          type: string
+          nullable: true
+
+    Section:
+      type: string
+      enum:
+        [products, receipts, sites, deliveries, clients, orders, shipments, inventory]
+
+    UserRole:
+      type: string
+      enum: [admin, driver, logistician, manager]
+
+    AppUser:
+      type: object
+      properties:
+        id:
+          type: string
+        clerkUserId:
+          type: string
+        email:
+          type: string
+        name:
+          type: string
+          nullable: true
+        phone:
+          type: string
+          nullable: true
+        role:
+          $ref: "#/components/schemas/UserRole"
+        editableSections:
+          type: array
+          description: Разделы, доступные пользователю
+          items:
+            $ref: "#/components/schemas/Section"
+        assignedSiteIds:
+          type: array
+          nullable: true
+          items:
+            type: string
+          description: Объекты, закреплённые за пользователем (менеджер/руководитель проекта)
+        createdAt:
+          type: string
+          format: date-time
+      required: [id, clerkUserId, email, name, phone, role, editableSections, assignedSiteIds, createdAt]
+
+    DriverUser:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: [string, "null"]
+        email:
+          type: string
+      required: [id, name, email]
+
+    LegacyDriverAssignment:
+      type: object
+      properties:
+        legacyName:
+          type: string
+          minLength: 1
+        siteCount:
+          type: integer
+          minimum: 0
+        deliveryCount:
+          type: integer
+          minimum: 0
+        totalCount:
+          type: integer
+          minimum: 0
+      required: [legacyName, siteCount, deliveryCount, totalCount]
+
+    LegacyDriverAssignmentCandidate:
+      allOf:
+        - $ref: "#/components/schemas/LegacyDriverAssignment"
+        - type: object
+          properties:
+            similarityGroup:
+              type: [string, "null"]
+              description: Одинаковый идентификатор у вероятных дублей; null у имён без похожих вариантов. Не влияет на применение сопоставления.
+            similarityReviewed:
+              type: boolean
+              description: Администратор уже подтвердил, что варианты этой группы не нужно автоматически объединять.
+            similarityReviewedAt:
+              type: [string, "null"]
+              format: date-time
+              description: Время актуальной проверки группы; null у непроверенной группы.
+            similarityReviewedByName:
+              type: [string, "null"]
+              description: Имя проверившего администратора; null у непроверенной группы или после удаления его учётной записи.
+          required:
+            [
+              similarityGroup,
+              similarityReviewed,
+              similarityReviewedAt,
+              similarityReviewedByName,
+            ]
+
+    LegacyDriverSimilarityReviewInput:
+      type: object
+      properties:
+        similarityGroup:
+          type: string
+          minLength: 1
+        reviewed:
+          type: boolean
+      required: [similarityGroup, reviewed]
+
+    LegacyDriverSimilarityReviewResult:
+      type: object
+      properties:
+        similarityGroup:
+          type: string
+          minLength: 1
+        reviewed:
+          type: boolean
+      required: [similarityGroup, reviewed]
+
+    LegacyDriverAssignmentResolution:
+      type: object
+      properties:
+        legacyName:
+          type: string
+          minLength: 1
+        driverUserId:
+          type: string
+          format: uuid
+      required: [legacyName, driverUserId]
+
+    LegacyDriverAssignmentResolutionInput:
+      type: object
+      properties:
+        mappings:
+          type: array
+          minItems: 1
+          maxItems: 200
+          items:
+            $ref: "#/components/schemas/LegacyDriverAssignmentResolution"
+      required: [mappings]
+
+    LegacyDriverAssignmentResolutionItem:
+      allOf:
+        - $ref: "#/components/schemas/LegacyDriverAssignment"
+        - type: object
+          properties:
+            driverUserId:
+              type: string
+              format: uuid
+          required: [driverUserId]
+
+    LegacyDriverAssignmentResolutionResult:
+      type: object
+      properties:
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/LegacyDriverAssignmentResolutionItem"
+        sitesUpdated:
+          type: integer
+          minimum: 0
+        deliveriesUpdated:
+          type: integer
+          minimum: 0
+        totalUpdated:
+          type: integer
+          minimum: 0
+      required: [results, sitesUpdated, deliveriesUpdated, totalUpdated]
+
+    UpdateUserRoleInput:
+      type: object
+      properties:
+        name:
+          type: string
+          nullable: true
+        phone:
+          type: string
+          nullable: true
+        role:
+          $ref: "#/components/schemas/UserRole"
+        editableSections:
+          type: array
+          description: Разделы, назначенные логисту или руководителю
+          items:
+            $ref: "#/components/schemas/Section"
+        assignedSiteIds:
+          type: array
+          nullable: true
+          items:
+            type: string
+      required: [role, editableSections]
+
+    CreateUserInput:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          minLength: 8
+        name:
+          type: string
+          nullable: true
+        role:
+          $ref: "#/components/schemas/UserRole"
+        editableSections:
+          type: array
+          description: Разделы, назначенные логисту или руководителю
+          items:
+            $ref: "#/components/schemas/Section"
+      required: [email, password, role, editableSections]
+
+    AuditLogEntry:
+      type: object
+      properties:
+        id:
+          type: string
+        userId:
+          type: string
+          nullable: true
+        userEmail:
+          type: string
+        userName:
+          type: string
+          nullable: true
+        method:
+          type: string
+        entity:
+          type: string
+        entityId:
+          type: string
+          nullable: true
+        path:
+          type: string
+        statusCode:
+          type: integer
+        meta:
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        [id, userId, userEmail, userName, method, entity, entityId, path, statusCode, createdAt]
+
+    AuditLogPage:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/AuditLogEntry"
+        total:
+          type: integer
+      required: [items, total]
+
+    DeliveryUploadCleanupSummary:
+      type: object
+      properties:
+        scanned:
+          type: integer
+        candidates:
+          type: integer
+        deleted:
+          type: integer
+        resumedPhotoDeletions:
+          type: integer
+        resumedDeliveryDeletions:
+          type: integer
+        failed:
+          type: integer
+      required:
+        [
+          scanned,
+          candidates,
+          deleted,
+          resumedPhotoDeletions,
+          resumedDeliveryDeletions,
+          failed,
+        ]
+
+    DeliveryUploadCleanupHealth:
+      type: object
+      properties:
+        lastRunAt:
+          type: [string, "null"]
+          format: date-time
+        lastSuccessfulRunAt:
+          type: [string, "null"]
+          format: date-time
+        status:
+          type: string
+          enum: [never, success, failed]
+        summary:
+          anyOf:
+            - $ref: "#/components/schemas/DeliveryUploadCleanupSummary"
+            - type: "null"
+        staleAfterHours:
+          type: integer
+        isStale:
+          type: boolean
+      required:
+        [lastRunAt, lastSuccessfulRunAt, status, summary, staleAfterHours, isStale]
+
+    MySiteSummary:
+      type: object
+      properties:
+        siteId:
+          type: string
+        siteName:
+          type: string
+        address:
+          type: string
+        driverUserId:
+          type: [string, "null"]
+          format: uuid
+        driver:
+          type: string
+        planned:
+          type: integer
+          description: Всего плановых доставок за период
+        done:
+          type: integer
+          description: Выполнено (есть actualDate)
+        overdue:
+          type: integer
+          description: Просрочено (дата прошла, факта нет)
+      required: [siteId, siteName, address, driverUserId, driver, planned, done, overdue]
+
+    ClearAllDataResult:
+      type: object
+      properties:
+        cleared:
+          type: boolean
+      required: [cleared]
+
+    OrderItemInput:
+      type: object
+      properties:
+        productId:
+          type: string
+        quantity:
+          type: number
+          exclusiveMinimum: 0
+        price:
+          type: number
+          minimum: 0
+      required: [productId, quantity, price]
+
+    OrderItem:
+      type: object
+      properties:
+        id:
+          type: string
+        productId:
+          type: string
+        productName:
+          type: string
+        quantity:
+          type: number
+        price:
+          type: number
+        shippedQuantity:
+          type: number
+          description: Сумма количества по этой позиции во всех отгрузках заказа
+        remainingQuantity:
+          type: number
+          description: quantity - shippedQuantity
+      required:
+        - id
+        - productId
+        - productName
+        - quantity
+        - price
+        - shippedQuantity
+        - remainingQuantity
+
+    Order:
+      type: object
+      properties:
+        id:
+          type: string
+        clientId:
+          type: string
+        clientName:
+          type: string
+        isPaid:
+          type: boolean
+          description: Вычисляется автоматически — true, если сумма платежей >= totalAmount
+        paidAmount:
+          type: number
+          description: Сумма всех платежей по заказу
+        overpaidAmount:
+          type: number
+          description: Превышение суммы платежей над totalAmount (переплата)
+        note:
+          type: string
+          nullable: true
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/OrderItem"
+        totalAmount:
+          type: number
+          description: Сумма всех позиций (quantity * price)
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - clientId
+        - clientName
+        - isPaid
+        - paidAmount
+        - overpaidAmount
+        - note
+        - items
+        - totalAmount
+        - createdAt
+
+    CreateOrderInput:
+      type: object
+      properties:
+        clientId:
+          type: string
+        note:
+          type: string
+          nullable: true
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/OrderItemInput"
+          minItems: 1
+      required: [clientId, items]
+
+    UpdateOrderInput:
+      type: object
+      properties:
+        note:
+          type: string
+          nullable: true
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/OrderItemInput"
+          minItems: 1
+          description: Полная замена списка позиций заказа. Нельзя уменьшить количество ниже уже отгруженного по позиции, и нельзя убрать позицию, если по ней уже была отгрузка.
+
+    OrderPayment:
+      type: object
+      properties:
+        id:
+          type: string
+        orderId:
+          type: string
+        amount:
+          type: number
+          exclusiveMinimum: 0
+        note:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+      required: [id, orderId, amount, note, createdAt]
+
+    CreateOrderPaymentInput:
+      type: object
+      properties:
+        amount:
+          type: number
+          exclusiveMinimum: 0
+        note:
+          type: string
+          nullable: true
+      required: [amount]
+
+    ShipmentItemInput:
+      type: object
+      properties:
+        productId:
+          type: string
+        quantity:
+          type: number
+          exclusiveMinimum: 0
+      required: [productId, quantity]
+
+    ShipmentItem:
+      type: object
+      properties:
+        id:
+          type: string
+        productId:
+          type: string
+        productName:
+          type: string
+        productUnit:
+          type: string
+        quantity:
+          type: number
+        price:
+          type: number
+          description: Цена товара из соответствующей позиции заказа
+      required: [id, productId, productName, productUnit, quantity, price]
+
+    Shipment:
+      type: object
+      properties:
+        id:
+          type: string
+        orderId:
+          type: string
+        orderNumber:
+          type: string
+        clientName:
+          type: string
+        siteId:
+          type: string
+        siteName:
+          type: string
+        siteAddress:
+          type: string
+        driverUserId:
+          type: [string, "null"]
+          format: uuid
+        driver:
+          type: string
+        shipmentDate:
+          type: string
+          format: date
+        note:
+          type: string
+          nullable: true
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ShipmentItem"
+        totalAmount:
+          type: number
+        isDispatched:
+          type: boolean
+          description: True once "Передать курьеру" was pressed; locks editing and enables printing.
+        dispatchedAt:
+          type: string
+          format: date-time
+          nullable: true
+        isDeleted:
+          type: boolean
+          description: >
+            True once an admin marked this shipment for deletion instead of editing it.
+            Stock was reversed via a compensating movement; document is read-only.
+        deletedAt:
+          type: string
+          format: date-time
+          nullable: true
+        deleteNote:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - orderId
+        - orderNumber
+        - clientName
+        - siteId
+        - siteName
+        - siteAddress
+        - driverUserId
+        - driver
+        - shipmentDate
+        - note
+        - items
+        - totalAmount
+        - isDispatched
+        - dispatchedAt
+        - isDeleted
+        - deletedAt
+        - deleteNote
+        - createdAt
+
+    DeleteShipmentInput:
+      type: object
+      properties:
+        note:
+          type: string
+          minLength: 1
+      required: [note]
+
+    CreateShipmentInput:
+      type: object
+      properties:
+        orderId:
+          type: string
+        siteId:
+          type: string
+        driverUserId:
+          type: [string, "null"]
+          format: uuid
+        shipmentDate:
+          type: string
+          format: date
+        note:
+          type: string
+          nullable: true
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ShipmentItemInput"
+          minItems: 1
+      required: [orderId, siteId, shipmentDate, items]
+
+    UpdateShipmentInput:
+      type: object
+      properties:
+        siteId:
+          type: string
+        driverUserId:
+          type: [string, "null"]
+          format: uuid
+        shipmentDate:
+          type: string
+          format: date
+        note:
+          type: string
+          nullable: true
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ShipmentItemInput"
+          minItems: 1
+
+    RescheduleDeliveryInput:
+      type: object
+      properties:
+        newDate:
+          type: string
+          format: date
+          description: Новая плановая дата доставки
+      required: [newDate]
+
+    DeliveryPhoto:
+      type: object
+      properties:
+        id:
+          type: string
+        deliveryId:
+          type: string
+        objectPath:
+          type: string
+          description: Путь объекта в хранилище (использовать как /api/storage{objectPath})
+        fileName:
+          type: string
+        mimeType:
+          type: string
+        uploadedBy:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+      required: [id, deliveryId, objectPath, fileName, mimeType, uploadedBy, createdAt]
+
+    AddDeliveryPhotoInput:
+      type: object
+      properties:
+        objectPath:
+          type: string
+          description: objectPath из ответа на запрос ссылки загрузки
+        fileName:
+          type: string
+        mimeType:
+          type: string
+      required: [objectPath, fileName, mimeType]
+
+    CloseSiteInput:
+      type: object
+      properties:
+        closedFrom:
+          type: string
+          format: date
+          description: Дата, с которой объект закрыт
+        reopenDate:
+          type: string
+          format: date
+          nullable: true
+        reason:
+          type: string
+          nullable: true
+      required: [closedFrom]
+
+    InventoryItem:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        unit:
+          type: string
+        category:
+          type: string
+          nullable: true
+        sort:
+          type: integer
+        active:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+      required: [id, name, unit, category, sort, active, createdAt]
+
+    CreateInventoryItemInput:
+      type: object
+      properties:
+        name:
+          type: string
+        unit:
+          type: string
+        category:
+          type: string
+          nullable: true
+        sort:
+          type: integer
+      required: [name, unit]
+
+    UpdateInventoryItemInput:
+      type: object
+      properties:
+        name:
+          type: string
+        unit:
+          type: string
+        category:
+          type: string
+          nullable: true
+        sort:
+          type: integer
+        active:
+          type: boolean
+
+    InventoryRequestStatus:
+      type: string
+      description: new — новая; approved — одобрена; rejected — отклонена; done — выдана
+      enum: [new, approved, rejected, done]
+
+    InventoryRequestItem:
+      type: object
+      properties:
+        id:
+          type: string
+        itemId:
+          type: string
+          nullable: true
+        name:
+          type: string
+        unit:
+          type: string
+        qty:
+          type: number
+      required: [id, itemId, name, unit, qty]
+
+    InventoryRequestItemInput:
+      type: object
+      properties:
+        itemId:
+          type: string
+          description: Позиция из справочника инвентаря
+        qty:
+          type: number
+          minimum: 0.01
+      required: [itemId, qty]
+
+    InventoryRequest:
+      type: object
+      properties:
+        id:
+          type: string
+        siteId:
+          type: string
+          nullable: true
+        siteName:
+          type: string
+          nullable: true
+        status:
+          $ref: "#/components/schemas/InventoryRequestStatus"
+        note:
+          type: string
+          nullable: true
+        createdBy:
+          type: string
+        decidedBy:
+          type: string
+          nullable: true
+        decidedAt:
+          type: string
+          format: date-time
+          nullable: true
+        decisionNote:
+          type: string
+          nullable: true
+        doneBy:
+          type: string
+          nullable: true
+        doneAt:
+          type: string
+          format: date-time
+          nullable: true
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/InventoryRequestItem"
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        [id, siteId, siteName, status, note, createdBy, decidedBy, decidedAt, decisionNote, doneBy, doneAt, items, createdAt]
+
+    CreateInventoryRequestInput:
+      type: object
+      properties:
+        siteId:
+          type: string
+          nullable: true
+        note:
+          type: string
+          nullable: true
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/InventoryRequestItemInput"
+          minItems: 1
+      required: [items]
+
+    DecideInventoryRequestInput:
+      type: object
+      properties:
+        note:
+          type: string
+          nullable: true
+
+    UploadUrlRequest:
+      type: object
+      required: [deliveryId, name, size, contentType]
+      properties:
+        deliveryId:
+          type: string
+          format: uuid
+        name:
+          type: string
+          minLength: 1
+        size:
+          type: integer
+          minimum: 1
+        contentType:
+          type: string
+          minLength: 1
+
+    DeliverySiteLookup:
+      type: object
+      required: [id, name, address, branch, manager, deliveryType, client, driver, driverUserId, isClosed]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        address: { type: string }
+        branch: { type: string }
+        manager: { type: string }
+        deliveryType: { type: string }
+        client: { type: string }
+        driver: { type: string }
+        driverUserId: { type: [string, "null"], format: uuid }
+        isClosed: { type: boolean }
+
+    NamedLookup:
+      type: object
+      required: [id, name]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+
+    ReceiptProductLookup:
+      type: object
+      required: [id, name, sku, unit, categoryId, purchasePrice, price, minStock, supplier, supplierContact, currentStock]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        sku: { type: string }
+        unit: { type: string }
+        categoryId: { type: [string, "null"], format: uuid }
+        purchasePrice: { type: number }
+        price: { type: number }
+        minStock: { type: number }
+        supplier: { type: [string, "null"] }
+        supplierContact: { type: [string, "null"] }
+        currentStock: { type: number }
+
+    PricedProductLookup:
+      type: object
+      required: [id, name, unit, price]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        unit: { type: string }
+        price: { type: number }
+
+    ShipmentSiteLookup:
+      type: object
+      required: [id, name, driverUserId]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        driverUserId: { type: [string, "null"], format: uuid }
+
+    ShipmentOrderItemLookup:
+      type: object
+      required: [id, productId, productName, quantity, price, shippedQuantity, remainingQuantity]
+      properties:
+        id: { type: string, format: uuid }
+        productId: { type: string, format: uuid }
+        productName: { type: string }
+        quantity: { type: number }
+        price: { type: number }
+        shippedQuantity: { type: number }
+        remainingQuantity: { type: number }
+
+    ShipmentOrderLookup:
+      type: object
+      required: [id, clientName, isPaid, items]
+      properties:
+        id: { type: string, format: uuid }
+        clientName: { type: string }
+        isPaid: { type: boolean }
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/ShipmentOrderItemLookup" }
+
+    OrderShipmentLookup:
+      type: object
+      required: [id, siteName, driver, shipmentDate, totalAmount, isDispatched, isDeleted]
+      properties:
+        id: { type: string, format: uuid }
+        siteName: { type: string }
+        driver: { type: string }
+        shipmentDate: { type: string }
+        totalAmount: { type: number }
+        isDispatched: { type: boolean }
+        isDeleted: { type: boolean }
+
+    UploadUrlResponse:
+      type: object
+      required: [uploadURL, objectPath]
+      properties:
+        uploadURL:
+          type: string
+          format: uri
+        objectPath:
+          type: string
+          description: Normalized object path (e.g. /objects/uploads/uuid). Store this in the database.
