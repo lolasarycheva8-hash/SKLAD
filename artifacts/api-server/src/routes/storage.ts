@@ -15,6 +15,7 @@ import {
   canAccessDeliveryActs,
   canUploadDeliveryActs,
 } from "../lib/delivery-acts";
+import { createStorageFailureLogFields } from "../lib/storage-log-sanitizer";
 
 const router: IRouter = Router();
 const objectStorageService = new ObjectStorageService();
@@ -84,7 +85,13 @@ router.post(
         }),
       );
     } catch (error) {
-      req.log.error({ err: error }, "Error generating upload URL");
+      req.log.error(
+        createStorageFailureLogFields({
+          operation: "request-upload-url",
+          error,
+        }),
+        "Error generating upload URL",
+      );
       res.status(500).json({ error: "Failed to generate upload URL" });
     }
   },
@@ -123,7 +130,16 @@ router.get(
         res.end();
       }
     } catch (error) {
-      req.log.error({ err: error }, "Error serving public object");
+      const raw = req.params.filePath;
+      const filePath = Array.isArray(raw) ? raw.join("/") : raw;
+      req.log.error(
+        createStorageFailureLogFields({
+          operation: "download-public-object",
+          error,
+          objectPath: filePath,
+        }),
+        "Error serving public object",
+      );
       res.status(500).json({ error: "Failed to serve public object" });
     }
   },
@@ -137,11 +153,10 @@ router.get(
  * be protected with authentication or ACL checks based on the use case.
  */
 router.get("/storage/objects/*path", async (req: Request, res: Response) => {
+  const raw = req.params.path;
+  const wildcardPath = Array.isArray(raw) ? raw.join("/") : raw;
+  const objectPath = `/objects/${wildcardPath}`;
   try {
-    const raw = req.params.path;
-    const wildcardPath = Array.isArray(raw) ? raw.join("/") : raw;
-    const objectPath = `/objects/${wildcardPath}`;
-
     if (!hasAuthenticatedSession(req)) {
       res.status(401).json({ error: "Unauthorized" });
       return;
@@ -209,11 +224,25 @@ router.get("/storage/objects/*path", async (req: Request, res: Response) => {
     }
   } catch (error) {
     if (error instanceof ObjectNotFoundError) {
-      req.log.warn({ err: error }, "Object not found");
+      req.log.warn(
+        createStorageFailureLogFields({
+          operation: "download-private-object",
+          error,
+          objectPath,
+        }),
+        "Object not found",
+      );
       res.status(404).json({ error: "Object not found" });
       return;
     }
-    req.log.error({ err: error }, "Error serving object");
+    req.log.error(
+      createStorageFailureLogFields({
+        operation: "download-private-object",
+        error,
+        objectPath,
+      }),
+      "Error serving object",
+    );
     res.status(500).json({ error: "Failed to serve object" });
   }
 });

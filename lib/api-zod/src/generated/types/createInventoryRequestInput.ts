@@ -5,7 +5,7 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
-import type { InventoryRequestItemInput } from './inventoryRequestItemInput';
+import type { InventoryRequestItemInput } from "./inventoryRequestItemInput";
 
 export interface CreateInventoryRequestInput {
   siteId?: string | null;

@@ -18,12 +18,17 @@ import {
   CheckCircle2,
   ClipboardCheck,
   Boxes,
+  UserRoundCog,
 } from "lucide-react";
 import { useClerk } from "@clerk/react";
 import { cn } from "@/lib/utils";
+import { queueSessionSwitch } from "@/lib/session-switch";
 import { usePermissions } from "@/hooks/use-permissions";
 import { Sheet, SheetContent, SheetTrigger, SheetTitle } from "@/components/ui/sheet";
-import type { Section } from "@workspace/api-client-react";
+import {
+  useCreateImpersonationReturnUrl,
+  type Section,
+} from "@workspace/api-client-react";
 
 type NavItem = {
   href: string;
@@ -41,11 +46,15 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/receipts", label: "Поступление товара", icon: PackagePlus, section: "receipts" },
   { href: "/clients", label: "Клиенты", icon: Users, section: "clients" },
   { href: "/sites", label: "Объекты", icon: Building2, section: "sites" },
-  { href: "/delivery-types", label: "Типы поставки", icon: Truck, section: "sites" },
   { href: "/products", label: "Товары", icon: Package, section: "products" },
   { href: "/categories", label: "Категории", icon: Tag, section: "products" },
 ];
 
+const DELIVERY_TYPES_NAV_ITEM: NavItem = {
+  href: "/delivery-types",
+  label: "Типы поставки",
+  icon: Truck,
+};
 const ADMIN_NAV_ITEM: NavItem = { href: "/users", label: "Пользователи", icon: ShieldCheck };
 const AUDIT_NAV_ITEM: NavItem = { href: "/audit", label: "Журнал действий", icon: ScrollText };
 const MY_DELIVERIES_ITEM: NavItem = { href: "/my", label: "Мои доставки", icon: CheckCircle2 };
@@ -54,11 +63,22 @@ const MY_SITES_ITEM: NavItem = { href: "/my-sites", label: "Мои объект�
 export function Layout({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
   const { isAdmin, isDriver, canView, user } = usePermissions();
-  const { signOut } = useClerk();
+  const { signOut, session } = useClerk();
+  const returnFromImpersonation = useCreateImpersonationReturnUrl();
   const [mobileOpen, setMobileOpen] = useState(false);
 
   const hasSites = (user?.assignedSiteIds?.length ?? 0) > 0;
   const isFieldUser = !isAdmin && isDriver;
+  const isImpersonating = Boolean(session?.actor);
+
+  async function stopImpersonation() {
+    try {
+      const { token } = await returnFromImpersonation.mutateAsync();
+      queueSessionSwitch(token);
+    } catch {
+      await signOut({ redirectUrl: `${import.meta.env.BASE_URL}sign-in` });
+    }
+  }
 
   let navItems: NavItem[];
   if (isFieldUser) {
@@ -72,7 +92,9 @@ export function Layout({ children }: { children: React.ReactNode }) {
       ...NAV_ITEMS.filter(
         (item) => isAdmin || (!!item.section && canView(item.section)),
       ),
-      ...(isAdmin ? [ADMIN_NAV_ITEM, AUDIT_NAV_ITEM] : []),
+      ...(isAdmin
+        ? [DELIVERY_TYPES_NAV_ITEM, ADMIN_NAV_ITEM, AUDIT_NAV_ITEM]
+        : []),
     ];
   }
 
@@ -121,7 +143,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
           Выйти
         </button>
         <div className="px-2 text-xs text-sidebar-foreground/50">
-          Складской учёт v1.0
+          ЛексиТД v1.0
         </div>
       </div>
     </>
@@ -148,25 +170,47 @@ export function Layout({ children }: { children: React.ReactNode }) {
             <SheetTitle className="sr-only">Меню</SheetTitle>
             <div className="h-14 flex items-center gap-2 px-5 border-b border-sidebar-border">
               <Warehouse className="h-6 w-6 text-sidebar-primary" />
-              <span className="font-bold text-lg text-white">Склад</span>
+              <span className="font-bold text-lg text-white">ЛексиТД</span>
             </div>
             {nav}
           </SheetContent>
         </Sheet>
         <Warehouse className="h-5 w-5 text-sidebar-primary" />
-        <span className="font-bold text-white">Склад</span>
+        <span className="font-bold text-white">ЛексиТД</span>
       </header>
 
       {/* Desktop sidebar */}
       <aside className="hidden md:flex w-64 shrink-0 bg-sidebar text-sidebar-foreground border-r border-sidebar-border flex-col">
         <div className="h-16 flex items-center gap-2 px-5 border-b border-sidebar-border">
           <Warehouse className="h-6 w-6 text-sidebar-primary" />
-          <span className="font-bold text-lg text-white">Склад</span>
+          <span className="font-bold text-lg text-white">ЛексиТД</span>
         </div>
         {nav}
       </aside>
 
       <main className="flex-1 min-w-0">
+        {isImpersonating && (
+          <div
+            className="sticky top-0 z-50 flex flex-wrap items-center justify-between gap-3 border-b border-orange-300 bg-orange-100 px-4 py-2 text-sm text-orange-950 md:px-6"
+            data-testid="banner-impersonation"
+          >
+            <div className="flex items-center gap-2">
+              <UserRoundCog className="h-4 w-4" />
+              <span>
+                Вы вошли как{" "}
+                <strong>{user?.name || user?.email || "пользователь"}</strong>
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={stopImpersonation}
+              className="font-medium underline underline-offset-2 hover:no-underline"
+              data-testid="button-stop-impersonation"
+            >
+              Вернуться в учётную запись администратора
+            </button>
+          </div>
+        )}
         <div className="px-4 py-4 md:px-6 md:py-8">{children}</div>
       </main>
     </div>

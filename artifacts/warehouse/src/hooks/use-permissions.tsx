@@ -41,6 +41,10 @@ type PermissionsContextValue = {
 
 const PermissionsContext = createContext<PermissionsContextValue | null>(null);
 
+export function isDriverUser(user: Pick<AppUser, "role" | "isDriver"> | undefined): boolean {
+  return !!user && (user.role === "driver" || user.isDriver);
+}
+
 export function PermissionsProvider({ children }: { children: React.ReactNode }) {
   const { data: user, isLoading, error } = useGetCurrentUser({
     query: { queryKey: getGetCurrentUserQueryKey(), retry: false },
@@ -55,7 +59,7 @@ export function PermissionsProvider({ children }: { children: React.ReactNode })
   }
 
   const isAdmin = user?.role === "admin";
-  const isDriver = user?.role === "driver";
+  const isDriver = isDriverUser(user);
 
   function canView(section: Section): boolean {
     if (!user) return false;

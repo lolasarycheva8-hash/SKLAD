@@ -5,13 +5,13 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
-import type { OrderItemInput } from './orderItemInput';
+import type { OrderItemInput } from "./orderItemInput";
 
 export interface UpdateOrderInput {
   note?: string | null;
   /**
-     * Полная замена списка позиций заказа. Нельзя уменьшить количество ниже уже отгруженного по позиции, и нельзя убрать позицию, если по ней уже была отгрузка.
-     * @minItems 1
-     */
+   * Полная замена списка позиций заказа. Нельзя уменьшить количество ниже уже отгруженного по позиции, и нельзя убрать позицию, если по ней уже была отгрузка.
+   * @minItems 1
+   */
   items?: OrderItemInput[];
 }

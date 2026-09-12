@@ -18,7 +18,7 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
-import { FileText, Loader2, Trash2, Upload, Camera, CheckSquare, CheckCircle2 } from "lucide-react";
+import { Download, FileText, Loader2, Trash2, Upload, Camera, CheckSquare, CheckCircle2 } from "lucide-react";
 import type { Delivery, DeliveryPhoto } from "@workspace/api-client-react";
 import {
   Alert,
@@ -31,6 +31,8 @@ import {
   type DeliveryActUploadSession,
   uploadDeliveryActsSequentially,
 } from "@/lib/delivery-workspace";
+import { downloadFileResponse } from "@/lib/download-file";
+import { resolveAppUrl } from "@/lib/download-file";
 
 interface DeliveryPhotosDialogProps {
   delivery: Delivery | null;
@@ -39,6 +41,7 @@ interface DeliveryPhotosDialogProps {
   canEdit: boolean;
   canApprove?: boolean;
   canDelete?: boolean;
+  canDownload?: boolean;
 }
 
 const pendingDeliveryUploads = new Set<string>();
@@ -81,11 +84,13 @@ export function DeliveryPhotosDialog({
   canEdit,
   canApprove = false,
   canDelete = canEdit,
+  canDownload = canEdit || canApprove,
 }: DeliveryPhotosDialogProps) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [uploadSession, setUploadSession] =
     useState<DeliveryActUploadSession<File> | null>(null);
+  const [isDownloading, setIsDownloading] = useState(false);
   const activeDeliveryIdRef = useRef(delivery?.id);
   const dialogOpenRef = useRef(open);
   const dialogCycleRef = useRef(0);
@@ -157,13 +162,26 @@ export function DeliveryPhotosDialog({
         }
       },
       onError: (error: any, _variables, context) => {
-        if (context?.dialogCycle === dialogCycleRef.current) {
+        if (context?.dialogCycle !== dialogCycleRef.current) return;
+        if (error?.status === 404) {
+          if (delivery?.id) {
+            queryClient.invalidateQueries({
+              queryKey: getListDeliveryPhotosQueryKey(delivery.id),
+            });
+            queryClient.invalidateQueries({ queryKey: getListDeliveriesQueryKey() });
+            queryClient.invalidateQueries({ queryKey: getListMyDeliveriesQueryKey() });
+          }
           toast({
-            title: "Ошибка",
-            description: error.message,
-            variant: "destructive",
+            title: "Акт уже удалён",
+            description: "Список актов обновлён: файл удалил другой администратор.",
           });
+          return;
         }
+        toast({
+          title: "Ошибка",
+          description: error?.data?.error ?? error?.message,
+          variant: "destructive",
+        });
       },
     },
   });
@@ -283,12 +301,31 @@ export function DeliveryPhotosDialog({
     await uploadFiles(files);
   }
 
+  async function handleDownload() {
+    if (!delivery?.id || isDownloading) return;
+    setIsDownloading(true);
+    try {
+      await downloadFileResponse(
+        `/api/deliveries/${encodeURIComponent(delivery.id)}/acts/download`,
+        `акты-доставки-${delivery.id}.zip`,
+      );
+    } catch (error) {
+      toast({
+        title: "Не удалось скачать акты",
+        description: error instanceof Error ? error.message : "Повторите попытку",
+        variant: "destructive",
+      });
+    } finally {
+      setIsDownloading(false);
+    }
+  }
+
   return (
     <Dialog
       open={open}
       onOpenChange={handleDialogOpenChange}
     >
-      <DialogContent className="max-w-xl">
+      <DialogContent className="w-[calc(100vw_-_2rem)] max-w-xl min-w-0 max-h-[90dvh] overflow-y-auto flex flex-col">
         <DialogHeader>
           <DialogTitle>Акты доставки</DialogTitle>
         </DialogHeader>
@@ -317,19 +354,19 @@ export function DeliveryPhotosDialog({
                 >
                   {photo.mimeType.startsWith("image/") ? (
                     <a
-                      href={`/api/storage${photo.objectPath}`}
+                      href={resolveAppUrl(`/api/storage${photo.objectPath}`)}
                       target="_blank"
                       rel="noreferrer"
                     >
                       <img
-                        src={`/api/storage${photo.objectPath}`}
+                        src={resolveAppUrl(`/api/storage${photo.objectPath}`)}
                         alt={photo.fileName}
                         className="w-full h-36 object-cover"
                       />
                     </a>
                   ) : (
                     <a
-                      href={`/api/storage${photo.objectPath}`}
+                      href={resolveAppUrl(`/api/storage${photo.objectPath}`)}
                       target="_blank"
                       rel="noreferrer"
                       className="flex min-h-28 items-center gap-3 p-4 text-sm hover:bg-muted/40"
@@ -358,6 +395,24 @@ export function DeliveryPhotosDialog({
                 </div>
               )}
             </div>
+
+            {canDownload && (photos?.length ?? 0) > 0 && (
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full"
+                onClick={handleDownload}
+                disabled={isDownloading}
+                data-testid="button-download-delivery-acts"
+              >
+                {isDownloading ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <Download className="mr-2 h-4 w-4" />
+                )}
+                {isDownloading ? "Формируем архив..." : "Скачать все акты"}
+              </Button>
+            )}
 
             {uploadResults.length > 0 && (
               <Alert

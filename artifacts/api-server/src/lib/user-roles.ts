@@ -5,6 +5,13 @@ export type AuthenticatedAppUser = Omit<AppUser, "role" | "legacyDriver"> & {
   role: UserRole;
 };
 
+export function isDriverUser(user: {
+  role: string;
+  isDriver: boolean;
+}): boolean {
+  return user.role === "driver" || user.isDriver;
+}
+
 export function normalizeUserRole(role: AppUser["role"]): UserRole {
   switch (role) {
     case "editor":

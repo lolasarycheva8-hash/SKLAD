@@ -1,5 +1,6 @@
 import type { NextFunction, Request, Response } from "express";
 import type { Section } from "@workspace/db";
+import { isDriverUser } from "../lib/user-roles.ts";
 
 export function requirePermission(section: Section) {
   return (req: Request, res: Response, next: NextFunction): void => {
@@ -79,7 +80,7 @@ export function requireDriver(
   res: Response,
   next: NextFunction,
 ): void {
-  if (req.appUser?.role !== "driver" && !req.appUser?.isDriver) {
+  if (!req.appUser || !isDriverUser(req.appUser)) {
     res.status(403).json({ error: "Требуется роль водителя" });
     return;
   }

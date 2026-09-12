@@ -5,6 +5,14 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
+export interface UserImpersonationTicket {
+  /**
+   * Short-lived, one-time Clerk ticket
+   * @minLength 1
+   */
+  token: string;
+}
+
 export interface HealthStatus {
   status: string;
 }
@@ -154,8 +162,10 @@ export interface Site {
   branch: string;
   /** Торговое название объекта (необязательно; непустое значение строго из справочника trade_names) */
   customer: string;
-  /** Клиент */
+  /** Отображаемое название клиента, сохранённое вместе с объектом */
   client: string;
+  /** Стабильная обязательная связь с клиентом */
+  clientId: string;
   /** Закреплённый менеджер */
   manager: string;
   /** Контакт менеджера */
@@ -165,14 +175,16 @@ export interface Site {
   /** Закреплённый проект */
   project: string;
   /**
-     * UUID закреплённого пользователя-водителя
-     * @nullable
-     */
+   * UUID закреплённого пользователя-водителя
+   * @nullable
+   */
   driverUserId: string | null;
   /** Отображаемое имя водителя или «Не назначен» */
   driver: string;
   /** Тип поставки (из справочника delivery_types; может быть пустым) */
   deliveryType: string;
+  /** Особенности работы объекта или подъезда большой машины */
+  features: string;
   /** Дата, с которой объект закрыт (null — объект работает) */
   closedFrom: string | null;
   /** Планируемая дата открытия (если известна) */
@@ -184,13 +196,41 @@ export interface Site {
   createdAt: string;
 }
 
-export interface CreateSiteInput {
+export interface SiteBranchLookup {
+  name: string;
+}
+
+export type DeleteClientConflictCode =
+  (typeof DeleteClientConflictCode)[keyof typeof DeleteClientConflictCode];
+
+export const DeleteClientConflictCode = {
+  CLIENT_HAS_SITES: "CLIENT_HAS_SITES",
+  CLIENT_HAS_ORDERS: "CLIENT_HAS_ORDERS",
+} as const;
+
+export type DeleteClientConflictBlockingSitesPreviewItem = {
+  id: string;
+  name: string;
+};
+
+export type DeleteClientConflictBlockingSites = {
+  /** @minimum 1 */
+  count: number;
+  /** @maxItems 3 */
+  preview: DeleteClientConflictBlockingSitesPreviewItem[];
+};
+
+export interface DeleteClientConflict {
+  error: string;
+  code: DeleteClientConflictCode;
+  blockingSites?: DeleteClientConflictBlockingSites;
+}
+
+export interface SiteWriteInputBase {
   name: string;
   address: string;
   branch: string;
-  /** Необязательное торговое название объекта */
-  customer?: string;
-  client: string;
+  clientId: string;
   manager: string;
   managerContact?: string;
   director: string;
@@ -198,14 +238,50 @@ export interface CreateSiteInput {
   /** @nullable */
   driverUserId?: string | null;
   deliveryType?: string;
+  features?: string;
 }
+
+export type CreateSiteInput = SiteWriteInputBase & {
+  /**
+   * Обязательное непустое торговое название объекта из справочника
+   * @minLength 1
+   * @pattern .*\S.*
+   */
+  customer: string;
+};
+
+export type BulkSiteInput = SiteWriteInputBase & {
+  /** Необязательное торговое название объекта */
+  customer?: string;
+  id?: string;
+};
 
 export interface UpdateSiteInput {
   name?: string;
   address?: string;
   branch?: string;
   customer?: string;
-  client?: string;
+  clientId: string;
+  manager?: string;
+  managerContact?: string;
+  director?: string;
+  project?: string;
+  /** @nullable */
+  driverUserId?: string | null;
+  deliveryType?: string;
+  features?: string;
+}
+
+export interface UpdateSiteFeaturesInput {
+  features: string;
+}
+
+export interface SiteChangeProposal {
+  name?: string;
+  address?: string;
+  branch?: string;
+  customer?: string;
+  clientId?: string;
   manager?: string;
   managerContact?: string;
   director?: string;
@@ -215,30 +291,62 @@ export interface UpdateSiteInput {
   deliveryType?: string;
 }
 
+export type SiteChangeRequestStatus =
+  (typeof SiteChangeRequestStatus)[keyof typeof SiteChangeRequestStatus];
+
+export const SiteChangeRequestStatus = {
+  pending: "pending",
+  approved: "approved",
+  rejected: "rejected",
+} as const;
+
+export interface SiteChangeRequest {
+  id: string;
+  /** @nullable */
+  siteId: string | null;
+  siteName: string;
+  /** @nullable */
+  authorUserId: string | null;
+  authorName: string;
+  authorEmail: string;
+  payload: SiteChangeProposal;
+  originalPayload: SiteChangeProposal;
+  status: SiteChangeRequestStatus;
+  createdAt: string;
+  /** @nullable */
+  decidedAt: string | null;
+  /** @nullable */
+  decidedByUserId: string | null;
+  /** @nullable */
+  decidedByName: string | null;
+  /** @nullable */
+  decidedByEmail: string | null;
+}
+
 /**
  * pending — план в будущем, факта нет; on_time — доставлено в срок или раньше;
  * late — доставлено позже плана; overdue — план уже прошёл, факта нет
  */
-export type DeliveryStatus = typeof DeliveryStatus[keyof typeof DeliveryStatus];
-
+export type DeliveryStatus =
+  (typeof DeliveryStatus)[keyof typeof DeliveryStatus];
 
 export const DeliveryStatus = {
-  pending: 'pending',
-  on_time: 'on_time',
-  late: 'late',
-  overdue: 'overdue',
+  pending: "pending",
+  on_time: "on_time",
+  late: "late",
+  overdue: "overdue",
 } as const;
 
 /**
  * planned — not completed; done — actual date set but act unapproved; closed — act approved
  */
-export type DeliveryWorkflowStatus = typeof DeliveryWorkflowStatus[keyof typeof DeliveryWorkflowStatus];
-
+export type DeliveryWorkflowStatus =
+  (typeof DeliveryWorkflowStatus)[keyof typeof DeliveryWorkflowStatus];
 
 export const DeliveryWorkflowStatus = {
-  planned: 'planned',
-  done: 'done',
-  closed: 'closed',
+  planned: "planned",
+  done: "done",
+  closed: "closed",
 } as const;
 
 export interface Delivery {
@@ -246,19 +354,34 @@ export interface Delivery {
   siteId: string;
   siteName: string;
   siteAddress: string;
+  /**
+   * Телефон менеджера объекта для связи с водителем
+   * @nullable
+   */
+  managerContact?: string | null;
   /** @nullable */
   driverUserId: string | null;
   driver: string;
   /**
-     * Плановая дата доставки (null, если дата ещё не назначена)
-     * @nullable
-     */
+   * Плановая дата доставки (null, если дата ещё не назначена)
+   * @nullable
+   */
   plannedDate: string | null;
   /**
-     * Месяц владения строкой графика; null возможен только у legacy rows
-     * @nullable
-     * @pattern ^\d{4}-(0[1-9]|1[0-2])$
-     */
+   * Уточнённая плановая дата только для отчётности; не изменяет исходный план, график или показатели
+   * @nullable
+   */
+  correctedPlannedDate?: string | null;
+  /**
+   * Тип поставки для этой доставки; null означает использовать значение объекта
+   * @nullable
+   */
+  deliveryType?: string | null;
+  /**
+   * Месяц владения строкой графика; null возможен только у legacy rows
+   * @nullable
+   * @pattern ^\d{4}-(0[1-9]|1[0-2])$
+   */
   scheduleMonth: string | null;
   /** Фактическая дата доставки (редактируемая) */
   actualDate: string | null;
@@ -267,7 +390,10 @@ export interface Delivery {
   /** @nullable */
   actApprovedBy: string | null;
   workflowStatus: DeliveryWorkflowStatus;
+  /** Комментарий водителя; логист видит его только для чтения */
   note: string | null;
+  /** Примечание логиста для водителя; водитель видит его только для чтения */
+  logisticianNote: string | null;
   status: DeliveryStatus;
   /** Отклонение факта от плана в днях (положительное — отставание) */
   lagDays: number | null;
@@ -287,11 +413,22 @@ export interface CreateDeliveryInput {
   /** @nullable */
   plannedDate?: string | null;
   /**
-     * @nullable
-     * @pattern ^\d{4}-(0[1-9]|1[0-2])$
-     */
+   * Уточнённая плановая дата только для отчётности
+   * @nullable
+   */
+  correctedPlannedDate?: string | null;
+  /** @nullable */
+  actualDate?: string | null;
+  /**
+   * Тип поставки для этой доставки; null означает использовать значение объекта
+   * @nullable
+   */
+  deliveryType?: string | null;
+  /**
+   * @nullable
+   * @pattern ^\d{4}-(0[1-9]|1[0-2])$
+   */
   scheduleMonth?: string | null;
-  note?: string;
 }
 
 export interface CreateDeliveriesBulkInput {
@@ -321,12 +458,18 @@ export interface UpdateDeliveriesActualBulkResult {
 export interface UpdateDeliveryInput {
   /** @nullable */
   plannedDate?: string | null;
-  actualDate?: string | null;
-  note?: string | null;
   /**
-     * Замена водителя на эту конкретную доставку (не меняет привязку объекта)
-     * @nullable
-     */
+   * Уточнённая плановая дата только для отчётности; null очищает значение
+   * @nullable
+   */
+  correctedPlannedDate?: string | null;
+  actualDate?: string | null;
+  /** Примечание для водителя; изменять может только логист */
+  logisticianNote?: string | null;
+  /**
+   * Замена водителя на эту конкретную доставку (не меняет привязку объекта)
+   * @nullable
+   */
   driverUserId?: string | null;
 }
 
@@ -376,7 +519,7 @@ export interface DashboardSummary {
 }
 
 export interface CreateSitesBulkInput {
-  items: CreateSiteInput[];
+  items: BulkSiteInput[];
 }
 
 export interface TradeName {
@@ -405,6 +548,8 @@ export interface Client {
   id: string;
   name: string;
   contact: string | null;
+  /** @minimum 0 */
+  siteCount: number;
   createdAt: string;
 }
 
@@ -418,28 +563,26 @@ export interface UpdateClientInput {
   contact?: string | null;
 }
 
-export type Section = typeof Section[keyof typeof Section];
-
+export type Section = (typeof Section)[keyof typeof Section];
 
 export const Section = {
-  products: 'products',
-  receipts: 'receipts',
-  sites: 'sites',
-  deliveries: 'deliveries',
-  clients: 'clients',
-  orders: 'orders',
-  shipments: 'shipments',
-  inventory: 'inventory',
+  products: "products",
+  receipts: "receipts",
+  sites: "sites",
+  deliveries: "deliveries",
+  clients: "clients",
+  orders: "orders",
+  shipments: "shipments",
+  inventory: "inventory",
 } as const;
 
-export type UserRole = typeof UserRole[keyof typeof UserRole];
-
+export type UserRole = (typeof UserRole)[keyof typeof UserRole];
 
 export const UserRole = {
-  admin: 'admin',
-  driver: 'driver',
-  logistician: 'logistician',
-  manager: 'manager',
+  admin: "admin",
+  driver: "driver",
+  logistician: "logistician",
+  manager: "manager",
 } as const;
 
 export interface AppUser {
@@ -449,6 +592,8 @@ export interface AppUser {
   name: string | null;
   phone: string | null;
   role: UserRole;
+  /** Legacy-флаг водительской учётной записи */
+  isDriver: boolean;
   /** Разделы, доступные пользователю */
   editableSections: Section[];
   /** Объекты, закреплённые за пользователем (менеджер/руководитель проекта) */
@@ -474,25 +619,27 @@ export interface LegacyDriverAssignment {
   totalCount: number;
 }
 
-export type LegacyDriverAssignmentCandidate = LegacyDriverAssignment & ({
+export type LegacyDriverAssignmentCandidate = LegacyDriverAssignment & {
   /**
-     * Одинаковый идентификатор у вероятных дублей; null у имён без похожих вариантов. Не влияет на применение сопоставления.
-     * @nullable
-     */
+   * Одинаковый идентификатор у вероятных дублей; null у имён без похожих вариантов. Не влияет на применение сопоставления.
+   * @nullable
+   */
   similarityGroup: string | null;
   /** Администратор уже подтвердил, что варианты этой группы не нужно автоматически объединять. */
   similarityReviewed: boolean;
   /**
-     * Время актуальной проверки группы; null у непроверенной группы.
-     * @nullable
-     */
+   * Время актуальной проверки группы; null у непроверенной группы.
+   * @nullable
+   */
   similarityReviewedAt: string | null;
   /**
-     * Имя проверившего администратора; null у непроверенной группы или после удаления его учётной записи.
-     * @nullable
-     */
+   * Текущее или сохранённое историческое имя проверившего администратора; null у непроверенной группы или старой записи без снимка имени.
+   * @nullable
+   */
   similarityReviewedByName: string | null;
-});
+  /** Учётная запись проверившего администратора была удалена. Для старой записи имя при этом может быть null. */
+  similarityReviewedByDeleted: boolean;
+};
 
 export interface LegacyDriverSimilarityReviewInput {
   /** @minLength 1 */
@@ -514,9 +661,9 @@ export interface LegacyDriverAssignmentResolution {
 
 export interface LegacyDriverAssignmentResolutionInput {
   /**
-     * @minItems 1
-     * @maxItems 200
-     */
+   * @minItems 1
+   * @maxItems 200
+   */
   mappings: LegacyDriverAssignmentResolution[];
 }
 
@@ -534,7 +681,12 @@ export interface LegacyDriverAssignmentResolutionResult {
   totalUpdated: number;
 }
 
+export interface ErrorResponse {
+  error: string;
+}
+
 export interface UpdateUserRoleInput {
+  email?: string;
   name?: string | null;
   phone?: string | null;
   role: UserRole;
@@ -581,13 +733,22 @@ export interface DeliveryUploadCleanupSummary {
   failed: number;
 }
 
-export type DeliveryUploadCleanupHealthStatus = typeof DeliveryUploadCleanupHealthStatus[keyof typeof DeliveryUploadCleanupHealthStatus];
-
+export type DeliveryUploadCleanupHealthStatus =
+  (typeof DeliveryUploadCleanupHealthStatus)[keyof typeof DeliveryUploadCleanupHealthStatus];
 
 export const DeliveryUploadCleanupHealthStatus = {
-  never: 'never',
-  success: 'success',
-  failed: 'failed',
+  never: "never",
+  success: "success",
+  failed: "failed",
+} as const;
+
+export type DeliveryUploadCleanupHealthFailureKind =
+  (typeof DeliveryUploadCleanupHealthFailureKind)[keyof typeof DeliveryUploadCleanupHealthFailureKind];
+
+export const DeliveryUploadCleanupHealthFailureKind = {
+  none: "none",
+  list_timeout: "list_timeout",
+  other: "other",
 } as const;
 
 export interface DeliveryUploadCleanupHealth {
@@ -596,6 +757,10 @@ export interface DeliveryUploadCleanupHealth {
   /** @nullable */
   lastSuccessfulRunAt: string | null;
   status: DeliveryUploadCleanupHealthStatus;
+  failureKind: DeliveryUploadCleanupHealthFailureKind;
+  /** @minimum 0 */
+  consecutiveFailures: number;
+  hasRepeatedFailures: boolean;
   summary: DeliveryUploadCleanupSummary | null;
   staleAfterHours: number;
   isStale: boolean;
@@ -667,9 +832,9 @@ export interface CreateOrderInput {
 export interface UpdateOrderInput {
   note?: string | null;
   /**
-     * Полная замена списка позиций заказа. Нельзя уменьшить количество ниже уже отгруженного по позиции, и нельзя убрать позицию, если по ней уже была отгрузка.
-     * @minItems 1
-     */
+   * Полная замена списка позиций заказа. Нельзя уменьшить количество ниже уже отгруженного по позиции, и нельзя убрать позицию, если по ней уже была отгрузка.
+   * @minItems 1
+   */
   items?: OrderItemInput[];
 }
 
@@ -813,14 +978,14 @@ export interface UpdateInventoryItemInput {
 /**
  * new — новая; approved — одобрена; rejected — отклонена; done — выдана
  */
-export type InventoryRequestStatus = typeof InventoryRequestStatus[keyof typeof InventoryRequestStatus];
-
+export type InventoryRequestStatus =
+  (typeof InventoryRequestStatus)[keyof typeof InventoryRequestStatus];
 
 export const InventoryRequestStatus = {
-  new: 'new',
-  approved: 'approved',
-  rejected: 'rejected',
-  done: 'done',
+  new: "new",
+  approved: "approved",
+  rejected: "rejected",
+  done: "done",
 } as const;
 
 export interface InventoryRequestItem {
@@ -881,7 +1046,9 @@ export interface DeliverySiteLookup {
   address: string;
   branch: string;
   manager: string;
+  managerContact?: string;
   deliveryType: string;
+  features: string;
   client: string;
   driver: string;
   /** @nullable */
@@ -959,100 +1126,117 @@ export interface UploadUrlResponse {
 }
 
 export type ListProductsParams = {
-search?: string;
-categoryId?: string;
-lowStockOnly?: boolean;
+  search?: string;
+  categoryId?: string;
+  lowStockOnly?: boolean;
 };
 
 export type ListSitesParams = {
-search?: string;
+  search?: string;
+};
+
+export type ListSiteChangeRequestsParams = {
+  status?: SiteChangeRequestStatus;
 };
 
 export type ListDeliveriesParams = {
-/**
- * Filter by month, format YYYY-MM
- */
-month?: string;
-/**
- * Filter deliveries with plannedDate >= dateFrom (format YYYY-MM-DD). Takes precedence over month when provided.
- */
-dateFrom?: string;
-/**
- * Filter deliveries with plannedDate <= dateTo (format YYYY-MM-DD). Takes precedence over month when provided.
- */
-dateTo?: string;
-siteId?: string;
-driverUserId?: string;
-status?: DeliveryStatus;
+  /**
+   * Filter by month, format YYYY-MM
+   */
+  month?: string;
+  /**
+   * Filter deliveries with plannedDate >= dateFrom (format YYYY-MM-DD). Takes precedence over month when provided.
+   */
+  dateFrom?: string;
+  /**
+   * Filter deliveries with plannedDate <= dateTo (format YYYY-MM-DD). Takes precedence over month when provided.
+   */
+  dateTo?: string;
+  siteId?: string;
+  driverUserId?: string;
+  status?: DeliveryStatus;
+};
+
+export type DownloadDeliveryActsForPeriodParams = {
+  from: string;
+  to: string;
+};
+
+export type DeleteDelivery404 = {
+  error: string;
+};
+
+export type DeleteDeliveryPhoto404 = {
+  error: string;
 };
 
 export type ListInventoryRequestsParams = {
-status?: InventoryRequestStatus;
-siteId?: string;
+  status?: InventoryRequestStatus;
+  siteId?: string;
 };
 
 export type ListAuditLogParams = {
-/**
- * @minimum 1
- * @maximum 200
- */
-limit?: number;
-/**
- * @minimum 0
- */
-offset?: number;
-entity?: string;
-userId?: string;
+  /**
+   * @minimum 1
+   * @maximum 200
+   */
+  limit?: number;
+  /**
+   * @minimum 0
+   */
+  offset?: number;
+  entity?: string;
+  userId?: string;
 };
 
 export type ListMyDeliveriesParams = {
-/**
- * Date YYYY-MM-DD
- * @pattern ^\d{4}-\d{2}-\d{2}$
- */
-from?: string;
-/**
- * Date YYYY-MM-DD
- * @pattern ^\d{4}-\d{2}-\d{2}$
- */
-to?: string;
-siteId?: string;
-/**
- * Case-insensitive substring of site name or address
- */
-search?: string;
+  /**
+   * Date YYYY-MM-DD
+   * @pattern ^\d{4}-\d{2}-\d{2}$
+   */
+  from?: string;
+  /**
+   * Date YYYY-MM-DD
+   * @pattern ^\d{4}-\d{2}-\d{2}$
+   */
+  to?: string;
+  siteId?: string;
+  /**
+   * Case-insensitive substring of site name or address
+   */
+  search?: string;
 };
 
 export type GetMySitesSummaryParams = {
-/**
- * Date YYYY-MM-DD
- * @pattern ^\d{4}-\d{2}-\d{2}$
- */
-from?: string;
-/**
- * Date YYYY-MM-DD
- * @pattern ^\d{4}-\d{2}-\d{2}$
- */
-to?: string;
+  /**
+   * Date YYYY-MM-DD
+   * @pattern ^\d{4}-\d{2}-\d{2}$
+   */
+  from?: string;
+  /**
+   * Date YYYY-MM-DD
+   * @pattern ^\d{4}-\d{2}-\d{2}$
+   */
+  to?: string;
 };
 
 export type ListClientsParams = {
-search?: string;
+  search?: string;
 };
 
 export type ListOrdersParams = {
-clientId?: string;
-isPaid?: boolean;
+  clientId?: string;
+  isPaid?: boolean;
 };
 
 export type ListShipmentsParams = {
-orderId?: string;
-siteId?: string;
+  orderId?: string;
+  siteId?: string;
 };
 
 export type GetDeliveryDashboardSummaryParams = {
-/**
- * Format YYYY-MM, defaults to current month
- */
-month?: string;
+  /**
+   * Format YYYY-MM, defaults to current month
+   */
+  month?: string;
 };

@@ -7,6 +7,6 @@
  */
 
 export type ListOrdersParams = {
-clientId?: string;
-isPaid?: boolean;
+  clientId?: string;
+  isPaid?: boolean;
 };

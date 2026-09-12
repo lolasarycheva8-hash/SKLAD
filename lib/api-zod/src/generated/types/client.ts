@@ -10,5 +10,7 @@ export interface Client {
   id: string;
   name: string;
   contact: string | null;
+  /** @minimum 0 */
+  siteCount: number;
   createdAt: Date;
 }

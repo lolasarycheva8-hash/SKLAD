@@ -29,6 +29,7 @@ import { toShipmentDto } from "../lib/shipments";
 import { getShippedQuantityMap } from "../lib/orders";
 import { requirePermission, requireAdmin, requireSectionAccess } from "../middlewares/requirePermission";
 import { findInvalidDriverUserIds } from "../lib/drivers";
+import { isPostgresConstraintError } from "../lib/postgres-errors";
 
 const router: IRouter = Router();
 router.use("/shipments", requireSectionAccess("shipments"));
@@ -159,6 +160,15 @@ router.post("/shipments", canEditShipments, async (req, res): Promise<void> => {
   } catch (err) {
     if (validationError) {
       res.status(400).json({ error: validationError });
+      return;
+    }
+    if (
+      isPostgresConstraintError(err, {
+        code: "23503",
+        constraint: "shipments_driver_user_id_app_users_id_fk",
+      })
+    ) {
+      res.status(400).json({ error: "Выбранный пользователь не является водителем" });
       return;
     }
     throw err;
@@ -323,6 +333,15 @@ router.patch("/shipments/:id", canEditShipments, async (req, res): Promise<void>
   } catch (err) {
     if (validationError) {
       res.status(400).json({ error: validationError });
+      return;
+    }
+    if (
+      isPostgresConstraintError(err, {
+        code: "23503",
+        constraint: "shipments_driver_user_id_app_users_id_fk",
+      })
+    ) {
+      res.status(400).json({ error: "Выбранный пользователь не является водителем" });
       return;
     }
     throw err;

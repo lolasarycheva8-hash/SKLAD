@@ -5,7 +5,7 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
-import type { CreateProductInput } from './createProductInput';
+import type { CreateProductInput } from "./createProductInput";
 
 export interface CreateProductsBulkInput {
   items: CreateProductInput[];

@@ -7,7 +7,11 @@ import os from "node:os";
 import path from "node:path";
 
 import { createClerkClient } from "@clerk/express";
-import { pool, type AppUser } from "@workspace/db";
+import {
+  BACKFILL_LEGACY_REVIEW_AUTHOR_NAMES_SQL,
+  pool,
+  type AppUser,
+} from "@workspace/db";
 
 import {
   DELIVERY_UPLOAD_CLEANUP_LOCK_NAME,
@@ -17,7 +21,7 @@ import {
 } from "../lib/delivery-upload-lock";
 import { legacyDriverSimilarityKey } from "../lib/legacy-driver-similarity";
 
-type SmokeRole = "viewer" | "editor" | "admin";
+type SmokeRole = "viewer" | "editor" | "admin" | "driver";
 
 type SmokeUser = {
   clerkUserId?: string;
@@ -41,9 +45,19 @@ type LegacyMappingFixture = {
 
 type LegacyReviewMetadataFixture = {
   reviewedGroup: string;
+  legacyReviewedGroup: string;
+  deletedAuthorGroup: string;
+  unnamedAuthorGroup: string;
+  unnamedAuthorId: string;
   unreviewedGroup: string;
   reviewerName: string;
   siteIds: string[];
+};
+
+type DriverAccessFixture = {
+  siteId: string;
+  roleDriverDeliveryId: string;
+  legacyDriverDeliveryId: string;
 };
 
 type DevToolsPage = {
@@ -61,6 +75,8 @@ type CleanupStatusSnapshot = {
   lastRunAt: Date;
   lastSuccessfulRunAt: Date | null;
   status: string;
+  failureKind: "none" | "list_timeout" | "other";
+  consecutiveFailures: number;
   scanned: number;
   candidates: number;
   deleted: number;
@@ -72,7 +88,9 @@ type CleanupStatusSnapshot = {
 
 const secretKey = process.env.CLERK_SECRET_KEY;
 if (!secretKey) {
-  throw new Error("CLERK_SECRET_KEY is required for the role release smoke test");
+  throw new Error(
+    "CLERK_SECRET_KEY is required for the role release smoke test",
+  );
 }
 if (!secretKey.startsWith("sk_test_")) {
   throw new Error(
@@ -87,7 +105,9 @@ if (process.env.ROLE_SMOKE_ALLOW_DEVELOPMENT_MUTATIONS !== "1") {
 
 const developmentDomain = process.env.REPLIT_DEV_DOMAIN;
 if (!developmentDomain) {
-  throw new Error("REPLIT_DEV_DOMAIN is required to identify the development app");
+  throw new Error(
+    "REPLIT_DEV_DOMAIN is required to identify the development app",
+  );
 }
 
 if (!process.env.DATABASE_URL) {
@@ -95,8 +115,7 @@ if (!process.env.DATABASE_URL) {
 }
 
 const configuredBaseUrl =
-  process.env.ROLE_SMOKE_BASE_URL ??
-  `https://${developmentDomain}`;
+  process.env.ROLE_SMOKE_BASE_URL ?? `https://${developmentDomain}`;
 const baseUrl = configuredBaseUrl.replace(/\/+$/, "");
 if (new URL(baseUrl).hostname !== developmentDomain) {
   throw new Error(
@@ -170,9 +189,7 @@ async function stopChromium(
     if (!exited && chromium.exitCode === null) {
       chromium.kill("SIGKILL");
       await Promise.race([
-        new Promise<void>((resolve) =>
-          chromium.once("exit", () => resolve()),
-        ),
+        new Promise<void>((resolve) => chromium.once("exit", () => resolve())),
         delay(2_000),
       ]);
     }
@@ -354,9 +371,11 @@ class BrowserSession {
     const response = new Promise<any>((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
     });
-    return withTimeout(response, timeoutMs, `CDP command ${method}`).finally(() => {
-      this.pending.delete(id);
-    });
+    return withTimeout(response, timeoutMs, `CDP command ${method}`).finally(
+      () => {
+        this.pending.delete(id);
+      },
+    );
   }
 
   async evaluate<T>(expression: string): Promise<T> {
@@ -395,7 +414,9 @@ class BrowserSession {
     const state = await this.evaluate(
       "({ href: location.href, body: document.body.innerText.slice(0, 500) })",
     );
-    throw new Error(`Timed out waiting for ${description}: ${JSON.stringify(state)}`);
+    throw new Error(
+      `Timed out waiting for ${description}: ${JSON.stringify(state)}`,
+    );
   }
 
   async signIn(userId: string) {
@@ -459,6 +480,16 @@ class BrowserSession {
         }
       });
       return response.status;
+    })()`);
+  }
+
+  async apiJson<T>(endpoint: string) {
+    return this.evaluate<{ status: number; body: T }>(`(async () => {
+      const response = await fetch(${JSON.stringify(endpoint)}, {
+        credentials: "include",
+        headers: { "content-type": "application/json" }
+      });
+      return { status: response.status, body: await response.json() };
     })()`);
   }
 
@@ -571,6 +602,108 @@ async function createSmokeUser(
   return { clerkUserId, appUserId, name };
 }
 
+async function createDriverAccessFixture(
+  roleDriver: CreatedSmokeUser,
+  legacyDriver: CreatedSmokeUser,
+): Promise<DriverAccessFixture> {
+  return withBoundedDatabaseClient(
+    "create driver access fixture",
+    async (client) => {
+      const clientResult = (await client.query(
+        "SELECT id, name FROM clients ORDER BY id LIMIT 1",
+      )) as { rows: Array<{ id: string; name: string }> };
+      const clientId = clientResult.rows[0]?.id;
+      const clientName = clientResult.rows[0]?.name;
+      assert(clientId, "Driver access smoke requires an existing client");
+      assert(clientName, "Driver access smoke requires a named client");
+
+      const siteResult = (await client.query(
+        `INSERT INTO sites
+          (name, address, branch, client, client_id, manager, director, project)
+         VALUES
+          ($1, 'Smoke driver address', 'Smoke branch', $2, $3, 'Smoke manager', 'Smoke director', 'Smoke project')
+         RETURNING id`,
+        [`Smoke driver access site ${randomUUID()}`, clientName, clientId],
+      )) as { rows: Array<{ id: string }> };
+      const siteId = siteResult.rows[0]?.id;
+      assert(siteId, "Driver access smoke site insert did not return an id");
+
+      const deliveryResult = (await client.query(
+        `INSERT INTO deliveries
+          (site_id, driver_user_id, planned_date, schedule_month)
+         VALUES
+          ($1, $2, '2098-01-10', '2098-01'),
+          ($1, $3, '2098-01-11', '2098-01')
+         RETURNING id, driver_user_id AS "driverUserId"`,
+        [siteId, roleDriver.appUserId, legacyDriver.appUserId],
+      )) as { rows: Array<{ id: string; driverUserId: string }> };
+      const roleDriverDeliveryId = deliveryResult.rows.find(
+        (row) => row.driverUserId === roleDriver.appUserId,
+      )?.id;
+      const legacyDriverDeliveryId = deliveryResult.rows.find(
+        (row) => row.driverUserId === legacyDriver.appUserId,
+      )?.id;
+      assert(roleDriverDeliveryId, "Role driver delivery was not created");
+      assert(legacyDriverDeliveryId, "Legacy driver delivery was not created");
+
+      return {
+        siteId,
+        roleDriverDeliveryId,
+        legacyDriverDeliveryId,
+      };
+    },
+  ) as Promise<DriverAccessFixture>;
+}
+
+async function cleanupDriverAccessFixture(
+  fixture: DriverAccessFixture | undefined,
+) {
+  if (!fixture) return;
+  await withBoundedDatabaseClient(
+    "delete driver access fixture",
+    async (client) => {
+      await client.query("DELETE FROM sites WHERE id = $1", [fixture.siteId]);
+      const remaining = (await client.query(
+        `SELECT count(*)::int AS count
+           FROM deliveries
+          WHERE id = ANY($1::uuid[])`,
+        [[fixture.roleDriverDeliveryId, fixture.legacyDriverDeliveryId]],
+      )) as { rows: Array<{ count: number }> };
+      assert.deepEqual(remaining.rows, [{ count: 0 }]);
+    },
+  );
+}
+
+async function assertDriverRouteAccess(
+  user: CreatedSmokeUser,
+  ownDeliveryId: string,
+  foreignDeliveryId: string,
+) {
+  await withBrowser(async (browser) => {
+    await browser.signIn(user.clerkUserId);
+    const ownDeliveries = await browser.apiJson<Array<{ id: string }>>(
+      "/api/my/deliveries",
+    );
+    assert.equal(ownDeliveries.status, 200);
+    assert.equal(
+      ownDeliveries.body.some((delivery) => delivery.id === ownDeliveryId),
+      true,
+    );
+    assert.equal(
+      ownDeliveries.body.some((delivery) => delivery.id === foreignDeliveryId),
+      false,
+    );
+    assert.equal(
+      await browser.apiStatus(`/api/deliveries/${ownDeliveryId}/photos`),
+      200,
+    );
+    assert.equal(
+      await browser.apiStatus(`/api/deliveries/${foreignDeliveryId}/photos`),
+      403,
+    );
+  });
+}
+
 async function createLegacyMappingFixture(): Promise<LegacyMappingFixture> {
   const legacyName = `Smoke legacy ${randomUUID()}`;
   const duplicateSuffix = randomUUID();
@@ -581,14 +714,21 @@ async function createLegacyMappingFixture(): Promise<LegacyMappingFixture> {
   const result = (await withBoundedDatabaseClient(
     "create legacy driver mapping fixture",
     async (client) => {
+      const clientResult = (await client.query(
+        "SELECT id, name FROM clients ORDER BY id LIMIT 1",
+      )) as { rows: Array<{ id: string; name: string }> };
+      const clientId = clientResult.rows[0]?.id;
+      const clientName = clientResult.rows[0]?.name;
+      assert(clientId, "Legacy mapping smoke requires an existing client");
+      assert(clientName, "Legacy mapping smoke requires a named client");
       const sites = (await client.query(
         `INSERT INTO sites
-          (name, address, branch, client, manager, director, project, driver)
+          (name, address, branch, client, client_id, manager, director, project, driver)
          VALUES
-          ($1, 'Smoke address 1', 'Smoke branch', 'Smoke client', 'Smoke manager', 'Smoke director', 'Smoke project', $5),
-          ($2, 'Smoke address 2', 'Smoke branch', 'Smoke client', 'Smoke manager', 'Smoke director', 'Smoke project', $5),
-          ($3, 'Smoke duplicate address 1', 'Smoke branch', 'Smoke client', 'Smoke manager', 'Smoke director', 'Smoke project', $6),
-          ($4, 'Smoke duplicate address 2', 'Smoke branch', 'Smoke client', 'Smoke manager', 'Smoke director', 'Smoke project', $7)
+          ($1, 'Smoke address 1', 'Smoke branch', $9, $8, 'Smoke manager', 'Smoke director', 'Smoke project', $5),
+          ($2, 'Smoke address 2', 'Smoke branch', $9, $8, 'Smoke manager', 'Smoke director', 'Smoke project', $5),
+          ($3, 'Smoke duplicate address 1', 'Smoke branch', $9, $8, 'Smoke manager', 'Smoke director', 'Smoke project', $6),
+          ($4, 'Smoke duplicate address 2', 'Smoke branch', $9, $8, 'Smoke manager', 'Smoke director', 'Smoke project', $7)
          RETURNING id`,
         [
           `Smoke legacy site ${randomUUID()}`,
@@ -597,6 +737,8 @@ async function createLegacyMappingFixture(): Promise<LegacyMappingFixture> {
           `Smoke duplicate site ${randomUUID()}`,
           legacyName,
           ...similarLegacyNames,
+          clientId,
+          clientName,
         ],
       )) as { rows: Array<{ id: string }> };
       assert.equal(sites.rows.length, 4);
@@ -616,7 +758,9 @@ async function createLegacyMappingFixture(): Promise<LegacyMappingFixture> {
   };
 }
 
-async function cleanupLegacyMappingFixture(fixture: LegacyMappingFixture | undefined) {
+async function cleanupLegacyMappingFixture(
+  fixture: LegacyMappingFixture | undefined,
+) {
   if (!fixture) return;
   await withBoundedDatabaseClient(
     "delete legacy driver mapping fixture",
@@ -654,21 +798,44 @@ async function createLegacyReviewMetadataFixture(
     `Smoke Pending ${suffix}`,
     `Smoke.Pending ${suffix}`,
   ];
+  const legacyReviewedNames = [
+    `Smoke Legacy ${suffix}`,
+    `Smoke.Legacy ${suffix}`,
+  ].sort((left, right) => left.localeCompare(right, "ru"));
+  const deletedAuthorNames = [
+    `Smoke Deleted ${suffix}`,
+    `Smoke.Deleted ${suffix}`,
+  ].sort((left, right) => left.localeCompare(right, "ru"));
   const reviewedGroup = legacyDriverSimilarityKey(reviewedNames[0]);
+  const legacyReviewedGroup = legacyDriverSimilarityKey(legacyReviewedNames[0]);
+  const deletedAuthorGroup = legacyDriverSimilarityKey(deletedAuthorNames[0]);
+  const unnamedAuthorGroup = `unnamed-review-author-${randomUUID()}`;
+  const unnamedAuthorId = randomUUID();
   const unreviewedGroup = legacyDriverSimilarityKey(unreviewedNames[0]);
   const reviewerName = reviewer.name;
 
   const siteIds = (await withBoundedDatabaseClient(
     "create legacy review metadata fixture",
     async (client) => {
+      const clientResult = (await client.query(
+        "SELECT id, name FROM clients ORDER BY id LIMIT 1",
+      )) as { rows: Array<{ id: string; name: string }> };
+      const clientId = clientResult.rows[0]?.id;
+      const clientName = clientResult.rows[0]?.name;
+      assert(clientId, "Legacy review smoke requires an existing client");
+      assert(clientName, "Legacy review smoke requires a named client");
       const sites = (await client.query(
         `INSERT INTO sites
-          (name, address, branch, client, manager, director, project, driver)
+          (name, address, branch, client, client_id, manager, director, project, driver)
          VALUES
-          ($1, 'Smoke address', 'Smoke branch', 'Smoke client', 'Smoke manager', 'Smoke director', 'Smoke project', $2),
-          ($3, 'Smoke address', 'Smoke branch', 'Smoke client', 'Smoke manager', 'Smoke director', 'Smoke project', $4),
-          ($5, 'Smoke address', 'Smoke branch', 'Smoke client', 'Smoke manager', 'Smoke director', 'Smoke project', $6),
-          ($7, 'Smoke address', 'Smoke branch', 'Smoke client', 'Smoke manager', 'Smoke director', 'Smoke project', $8)
+          ($1, 'Smoke address', 'Smoke branch', $18, $17, 'Smoke manager', 'Smoke director', 'Smoke project', $2),
+          ($3, 'Smoke address', 'Smoke branch', $18, $17, 'Smoke manager', 'Smoke director', 'Smoke project', $4),
+          ($5, 'Smoke address', 'Smoke branch', $18, $17, 'Smoke manager', 'Smoke director', 'Smoke project', $6),
+           ($7, 'Smoke address', 'Smoke branch', $18, $17, 'Smoke manager', 'Smoke director', 'Smoke project', $8),
+           ($9, 'Smoke address', 'Smoke branch', $18, $17, 'Smoke manager', 'Smoke director', 'Smoke project', $10),
+           ($11, 'Smoke address', 'Smoke branch', $18, $17, 'Smoke manager', 'Smoke director', 'Smoke project', $12),
+           ($13, 'Smoke address', 'Smoke branch', $18, $17, 'Smoke manager', 'Smoke director', 'Smoke project', $14),
+           ($15, 'Smoke address', 'Smoke branch', $18, $17, 'Smoke manager', 'Smoke director', 'Smoke project', $16)
          RETURNING id`,
         [
           `Smoke reviewed site ${randomUUID()}`,
@@ -679,21 +846,75 @@ async function createLegacyReviewMetadataFixture(
           unreviewedNames[0],
           `Smoke unreviewed site ${randomUUID()}`,
           unreviewedNames[1],
+          `Smoke legacy reviewed site ${randomUUID()}`,
+          legacyReviewedNames[0],
+          `Smoke legacy reviewed site ${randomUUID()}`,
+          legacyReviewedNames[1],
+          `Smoke deleted-author site ${randomUUID()}`,
+          deletedAuthorNames[0],
+          `Smoke deleted-author site ${randomUUID()}`,
+          deletedAuthorNames[1],
+          clientId,
+          clientName,
         ],
       )) as { rows: Array<{ id: string }> };
-      assert.equal(sites.rows.length, 4);
+      assert.equal(sites.rows.length, 8);
+      const deletedAuthor = (await client.query(
+        `INSERT INTO app_users
+           (clerk_user_id, email, name, role, editable_sections)
+         VALUES ($1, $2, $3, 'admin'::user_role, ARRAY[]::text[])
+         RETURNING id`,
+        [
+          `deleted-review-author-${randomUUID()}`,
+          `deleted-review-author-${randomUUID()}@example.com`,
+          `Deleted review author ${suffix}`,
+        ],
+      )) as { rows: Array<{ id: string }> };
+      await client.query(
+        `INSERT INTO app_users
+           (id, clerk_user_id, email, name, role, editable_sections)
+         VALUES ($1, $2, $3, NULL, 'admin'::user_role, ARRAY[]::text[])`,
+        [
+          unnamedAuthorId,
+          `unnamed-review-author-${randomUUID()}`,
+          `unnamed-review-author-${randomUUID()}@example.com`,
+        ],
+      );
       await client.query(
         `INSERT INTO legacy_driver_similarity_reviews
-          (similarity_group, legacy_names, reviewed_by)
-         VALUES ($1, $2::text[], $3)`,
-        [reviewedGroup, reviewedNames, reviewer.appUserId],
+           (similarity_group, legacy_names, reviewed_by, reviewed_by_name_snapshot)
+          VALUES
+           ($1, $2::text[], $3, $4),
+            ($5, $6::text[], $3, NULL),
+             ($7, $8::text[], $9, NULL),
+             ($10, ARRAY['unnamed author'], $11, NULL)`,
+        [
+          reviewedGroup,
+          reviewedNames,
+          reviewer.appUserId,
+          reviewerName,
+          legacyReviewedGroup,
+          legacyReviewedNames,
+          deletedAuthorGroup,
+          deletedAuthorNames,
+          deletedAuthor.rows[0]?.id,
+          unnamedAuthorGroup,
+          unnamedAuthorId,
+        ],
       );
+      await client.query("DELETE FROM app_users WHERE id = $1", [
+        deletedAuthor.rows[0]?.id,
+      ]);
       return sites.rows.map((site) => site.id);
     },
   )) as string[];
 
   return {
     reviewedGroup,
+    legacyReviewedGroup,
+    deletedAuthorGroup,
+    unnamedAuthorGroup,
+    unnamedAuthorId,
     unreviewedGroup,
     reviewerName,
     siteIds,
@@ -717,8 +938,72 @@ async function cleanupLegacyReviewMetadataFixture(
         fixture.siteIds,
       ]);
       await client.query(
-        "DELETE FROM legacy_driver_similarity_reviews WHERE similarity_group = $1",
-        [fixture.reviewedGroup],
+        "DELETE FROM legacy_driver_similarity_reviews WHERE similarity_group = ANY($1::text[])",
+        [
+          [
+            fixture.reviewedGroup,
+            fixture.legacyReviewedGroup,
+            fixture.deletedAuthorGroup,
+            fixture.unnamedAuthorGroup,
+          ],
+        ],
+      );
+      await client.query("DELETE FROM app_users WHERE id = $1", [
+        fixture.unnamedAuthorId,
+      ]);
+    },
+  );
+}
+
+async function backfillAndAssertLegacyReviewAuthorNames(
+  fixture: LegacyReviewMetadataFixture,
+) {
+  await withBoundedDatabaseClient(
+    "backfill legacy review author names twice",
+    async (client) => {
+      const firstBackfill = (await client.query(
+        BACKFILL_LEGACY_REVIEW_AUTHOR_NAMES_SQL,
+      )) as { rowCount?: number | null };
+      assert.equal(firstBackfill.rowCount, 1);
+
+      const secondBackfill = (await client.query(
+        BACKFILL_LEGACY_REVIEW_AUTHOR_NAMES_SQL,
+      )) as { rowCount?: number | null };
+      assert.equal(secondBackfill.rowCount, 0);
+
+      const snapshots = (await client.query(
+        `SELECT similarity_group AS "similarityGroup",
+                reviewed_by_name_snapshot AS "reviewedByNameSnapshot"
+           FROM legacy_driver_similarity_reviews
+          WHERE similarity_group = ANY($1::text[])
+          ORDER BY similarity_group`,
+        [
+          [
+            fixture.reviewedGroup,
+            fixture.legacyReviewedGroup,
+            fixture.deletedAuthorGroup,
+            fixture.unnamedAuthorGroup,
+          ],
+        ],
+      )) as {
+        rows: Array<{
+          similarityGroup: string;
+          reviewedByNameSnapshot: string | null;
+        }>;
+      };
+      assert.deepEqual(
+        new Map(
+          snapshots.rows.map((row) => [
+            row.similarityGroup,
+            row.reviewedByNameSnapshot,
+          ]),
+        ),
+        new Map([
+          [fixture.reviewedGroup, fixture.reviewerName],
+          [fixture.legacyReviewedGroup, fixture.reviewerName],
+          [fixture.deletedAuthorGroup, null],
+          [fixture.unnamedAuthorGroup, null],
+        ]),
       );
     },
   );
@@ -753,8 +1038,7 @@ async function discoverUnknownClerkUsers(emails: string[]) {
   );
 
   const unresolvedEmails = emails.filter(
-    (email) =>
-      !createdUsers.find((user) => user.email === email)?.clerkUserId,
+    (email) => !createdUsers.find((user) => user.email === email)?.clerkUserId,
   );
   for (const email of unresolvedEmails) {
     let lastError: unknown;
@@ -847,7 +1131,9 @@ async function withBoundedDatabaseClient<T>(
   try {
     client = await withTimeout(connect, 5_000, `connect to ${description}`);
   } catch (error) {
-    void connect.then((lateClient) => lateClient.release()).catch(() => undefined);
+    void connect
+      .then((lateClient) => lateClient.release())
+      .catch(() => undefined);
     throw error;
   }
 
@@ -863,11 +1149,7 @@ async function withBoundedDatabaseClient<T>(
       5_000,
       `set ${description} lock timeout`,
     );
-    return await withTimeout(
-      operation(client),
-      12_000,
-      description,
-    );
+    return await withTimeout(operation(client), 12_000, description);
   } catch (error) {
     destroyClient = true;
     throw error;
@@ -880,10 +1162,12 @@ async function readAutomaticCleanupStatus(
   client: DatabaseClient,
 ): Promise<CleanupStatusSnapshot | null> {
   const result = (await client.query(
-      `SELECT
+    `SELECT
          last_run_at AS "lastRunAt",
          last_successful_run_at AS "lastSuccessfulRunAt",
          status,
+         failure_kind AS "failureKind",
+         consecutive_failures AS "consecutiveFailures",
          scanned,
          candidates,
          deleted,
@@ -904,12 +1188,14 @@ async function writeAutomaticCleanupStatus(
 ): Promise<void> {
   await client.query(
     `INSERT INTO delivery_upload_cleanup_status
-         (key, last_run_at, last_successful_run_at, status, scanned, candidates, deleted, resumed_photo_deletions, resumed_delivery_deletions, failed, updated_at)
-       VALUES ('automatic', $1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+         (key, last_run_at, last_successful_run_at, status, failure_kind, consecutive_failures, scanned, candidates, deleted, resumed_photo_deletions, resumed_delivery_deletions, failed, updated_at)
+       VALUES ('automatic', $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
        ON CONFLICT (key) DO UPDATE SET
          last_run_at = EXCLUDED.last_run_at,
          last_successful_run_at = EXCLUDED.last_successful_run_at,
          status = EXCLUDED.status,
+          failure_kind = EXCLUDED.failure_kind,
+          consecutive_failures = EXCLUDED.consecutive_failures,
          scanned = EXCLUDED.scanned,
          candidates = EXCLUDED.candidates,
          deleted = EXCLUDED.deleted,
@@ -917,18 +1203,20 @@ async function writeAutomaticCleanupStatus(
          resumed_delivery_deletions = EXCLUDED.resumed_delivery_deletions,
          failed = EXCLUDED.failed,
          updated_at = EXCLUDED.updated_at`,
-      [
-        status.lastRunAt,
-        status.lastSuccessfulRunAt,
-        status.status,
-        status.scanned,
-        status.candidates,
-        status.deleted,
-        status.resumedPhotoDeletions,
-        status.resumedDeliveryDeletions,
-        status.failed,
-        status.updatedAt,
-      ],
+    [
+      status.lastRunAt,
+      status.lastSuccessfulRunAt,
+      status.status,
+      status.failureKind,
+      status.consecutiveFailures,
+      status.scanned,
+      status.candidates,
+      status.deleted,
+      status.resumedPhotoDeletions,
+      status.resumedDeliveryDeletions,
+      status.failed,
+      status.updatedAt,
+    ],
   );
 }
 
@@ -959,7 +1247,9 @@ async function withAutomaticCleanupStatusFixture(
       "connect to cleanup status fixture",
     );
   } catch (error) {
-    void connect.then((lateClient) => lateClient.release()).catch(() => undefined);
+    void connect
+      .then((lateClient) => lateClient.release())
+      .catch(() => undefined);
     throw error;
   }
 
@@ -1073,10 +1363,12 @@ async function boundedDatabaseDelete(
   table: "app_users" | "user_invites",
   emails: string[],
 ) {
-  await withBoundedDatabaseClient(`delete temporary ${table} records`, (client) =>
-    client.query(`DELETE FROM ${table} WHERE email = ANY($1::text[])`, [
-      emails,
-    ]),
+  await withBoundedDatabaseClient(
+    `delete temporary ${table} records`,
+    (client) =>
+      client.query(`DELETE FROM ${table} WHERE email = ANY($1::text[])`, [
+        emails,
+      ]),
   );
 }
 
@@ -1121,6 +1413,7 @@ async function main() {
   let primaryError: unknown;
   let mappingFixture: LegacyMappingFixture | undefined;
   let reviewMetadataFixture: LegacyReviewMetadataFixture | undefined;
+  let driverAccessFixture: DriverAccessFixture | undefined;
   try {
     await waitForApp();
 
@@ -1170,7 +1463,7 @@ async function main() {
           method: "POST",
           body: {},
         }),
-        400,
+        403,
       );
       await browser.navigate(`${baseUrl}/deliveries/run`);
       await browser.waitUntil(
@@ -1194,11 +1487,39 @@ async function main() {
     console.log("✓ legacy editor with deliveries access reaches delivery run");
 
     const admin = await createSmokeUser("admin", []);
+    const roleDriver = await createSmokeUser("driver", []);
     const driver = await createSmokeUser("viewer", [], { isDriver: true });
+    const ordinaryUser = await createSmokeUser("viewer", []);
+    driverAccessFixture = await createDriverAccessFixture(roleDriver, driver);
+    const activeDriverAccessFixture = driverAccessFixture;
+    await assertDriverRouteAccess(
+      roleDriver,
+      activeDriverAccessFixture.roleDriverDeliveryId,
+      activeDriverAccessFixture.legacyDriverDeliveryId,
+    );
+    await assertDriverRouteAccess(
+      driver,
+      activeDriverAccessFixture.legacyDriverDeliveryId,
+      activeDriverAccessFixture.roleDriverDeliveryId,
+    );
+    await withBrowser(async (browser) => {
+      await browser.signIn(ordinaryUser.clerkUserId);
+      assert.equal(await browser.apiStatus("/api/my/deliveries"), 403);
+      assert.equal(
+        await browser.apiStatus(
+          `/api/deliveries/${activeDriverAccessFixture.roleDriverDeliveryId}/photos`,
+        ),
+        403,
+      );
+    });
+    console.log(
+      "✓ role driver and legacy isDriver share own-route and act access while an ordinary user is denied",
+    );
     const reviewAuthor = await createSmokeUser("admin", []);
     mappingFixture = await createLegacyMappingFixture();
     reviewMetadataFixture =
       await createLegacyReviewMetadataFixture(reviewAuthor);
+    await backfillAndAssertLegacyReviewAuthorNames(reviewMetadataFixture);
     const activeMappingFixture = mappingFixture;
     const activeReviewMetadataFixture = reviewMetadataFixture;
     await withAutomaticCleanupStatusFixture(async (writeStatus) => {
@@ -1207,6 +1528,8 @@ async function main() {
         lastRunAt: staleRunAt,
         lastSuccessfulRunAt: null,
         status: "failed",
+        failureKind: "other",
+        consecutiveFailures: 1,
         scanned: 7,
         candidates: 3,
         deleted: 2,
@@ -1251,6 +1574,8 @@ async function main() {
           "isolated legacy mapping row",
         );
         const reviewMetaTestId = `similarity-review-meta-${activeReviewMetadataFixture.reviewedGroup}`;
+        const legacyReviewMetaTestId = `similarity-review-meta-${activeReviewMetadataFixture.legacyReviewedGroup}`;
+        const deletedAuthorReviewMetaTestId = `similarity-review-meta-${activeReviewMetadataFixture.deletedAuthorGroup}`;
         await browser.waitUntil(
           `Boolean(document.querySelector(
             '[data-testid=' + JSON.stringify(${JSON.stringify(reviewMetaTestId)}) + ']'
@@ -1259,12 +1584,23 @@ async function main() {
         );
         const reviewMetaBeforeAuthorDeletion =
           await browser.text(reviewMetaTestId);
+        const legacyReviewMetaBeforeAuthorDeletion = await browser.text(
+          legacyReviewMetaTestId,
+        );
         assert.match(
           reviewMetaBeforeAuthorDeletion,
           new RegExp(
             `${activeReviewMetadataFixture.reviewerName},\\s+\\d{1,2}\\s+\\p{L}+\\.?\\s+\\d{4}\\s+г\\.,\\s+\\d{2}:\\d{2}`,
             "u",
           ),
+        );
+        assert.match(
+          legacyReviewMetaBeforeAuthorDeletion,
+          new RegExp(activeReviewMetadataFixture.reviewerName),
+        );
+        assert.match(
+          await browser.text(deletedAuthorReviewMetaTestId),
+          /администратор удалён, /,
         );
         assert.equal(
           await browser.evaluate(
@@ -1296,24 +1632,36 @@ async function main() {
             );
             return Boolean(
               element &&
-              !element.textContent?.includes(
-                ${JSON.stringify(activeReviewMetadataFixture.reviewerName)}
-              )
+               element.textContent?.includes(
+                 ${JSON.stringify(`${activeReviewMetadataFixture.reviewerName} (учётная запись удалена)`)}
+               )
             );
           })()`,
           "historical review metadata after author deletion",
         );
         const reviewMetaAfterAuthorDeletion =
           await browser.text(reviewMetaTestId);
-        assert.doesNotMatch(
+        assert.match(
           reviewMetaAfterAuthorDeletion,
-          new RegExp(activeReviewMetadataFixture.reviewerName),
+          new RegExp(
+            `${activeReviewMetadataFixture.reviewerName} \\(учётная запись удалена\\)`,
+          ),
         );
         assert.equal(
           reviewMetaAfterAuthorDeletion,
           reviewMetaBeforeAuthorDeletion.replace(
             `${activeReviewMetadataFixture.reviewerName}, `,
-            "",
+            `${activeReviewMetadataFixture.reviewerName} (учётная запись удалена), `,
+          ),
+        );
+        const legacyReviewMetaAfterAuthorDeletion = await browser.text(
+          legacyReviewMetaTestId,
+        );
+        assert.equal(
+          legacyReviewMetaAfterAuthorDeletion,
+          legacyReviewMetaBeforeAuthorDeletion.replace(
+            `${activeReviewMetadataFixture.reviewerName}, `,
+            `${activeReviewMetadataFixture.reviewerName} (учётная запись удалена), `,
           ),
         );
         assert.match(
@@ -1378,7 +1726,9 @@ async function main() {
           "isolated legacy mapping row after disabling duplicate filter",
         );
         assert.doesNotMatch(
-          await browser.text(`select-driver-${activeMappingFixture.legacyName}`),
+          await browser.text(
+            `select-driver-${activeMappingFixture.legacyName}`,
+          ),
           /Выберите водителя/,
         );
 
@@ -1400,7 +1750,10 @@ async function main() {
           await browser.text("mapping-success-result"),
           /Обновлено объектов: 2.*Обновлено доставок: 3.*Всего назначений: 5/s,
         );
-        await assertLegacyMappingApplied(activeMappingFixture, driver.appUserId);
+        await assertLegacyMappingApplied(
+          activeMappingFixture,
+          driver.appUserId,
+        );
         await browser.click("button-close-mapping");
         await browser.waitUntil(
           `!document.querySelector('[data-testid="dialog-legacy-mapping"]')`,
@@ -1473,6 +1826,8 @@ async function main() {
           lastRunAt: freshRunAt,
           lastSuccessfulRunAt: freshRunAt,
           status: "success",
+          failureKind: "none",
+          consecutiveFailures: 0,
           scanned: 8,
           candidates: 0,
           deleted: 0,
@@ -1496,11 +1851,18 @@ async function main() {
     console.log(
       "✓ admin filters grouped legacy duplicates without losing manual selections",
     );
-    console.log("✓ admin maps an isolated legacy assignment through the rendered UI");
+    console.log(
+      "✓ admin maps an isolated legacy assignment through the rendered UI",
+    );
     console.log(
       "✓ legacy review metadata survives author deletion in the rendered UI",
     );
-    console.log("✓ cleanup warning appears when stale and disappears after success");
+    console.log(
+      "✓ legacy review author backfill is idempotent and leaves deleted authors neutral",
+    );
+    console.log(
+      "✓ cleanup warning appears when stale and disappears after success",
+    );
   } catch (error) {
     primaryError = error;
     throw error;
@@ -1509,7 +1871,10 @@ async function main() {
       const cleanupResults = await Promise.allSettled([
         cleanupLegacyReviewMetadataFixture(reviewMetadataFixture),
         cleanupLegacyMappingFixture(mappingFixture),
-        cleanupOnce(),
+        (async () => {
+          await cleanupDriverAccessFixture(driverAccessFixture);
+          await cleanupOnce();
+        })(),
       ]);
       const cleanupErrors = cleanupResults
         .filter(

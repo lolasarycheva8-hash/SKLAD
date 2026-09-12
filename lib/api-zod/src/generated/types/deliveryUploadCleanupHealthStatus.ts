@@ -6,11 +6,11 @@
  * OpenAPI spec version: 0.1.0
  */
 
-export type DeliveryUploadCleanupHealthStatus = typeof DeliveryUploadCleanupHealthStatus[keyof typeof DeliveryUploadCleanupHealthStatus];
-
+export type DeliveryUploadCleanupHealthStatus =
+  (typeof DeliveryUploadCleanupHealthStatus)[keyof typeof DeliveryUploadCleanupHealthStatus];
 
 export const DeliveryUploadCleanupHealthStatus = {
-  never: 'never',
-  success: 'success',
-  failed: 'failed',
+  never: "never",
+  success: "success",
+  failed: "failed",
 } as const;

@@ -1,5 +1,6 @@
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
+import type { PoolClient } from "pg";
 import * as schema from "./schema";
 
 const { Pool } = pg;
@@ -35,4 +36,9 @@ pool.on("error", (err) => {
 
 export const db = drizzle(pool, { schema });
 
+export function databaseForClient(client: PoolClient) {
+  return drizzle(client, { schema });
+}
+
+export type { PoolClient };
 export * from "./schema";

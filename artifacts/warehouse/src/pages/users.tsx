@@ -1,11 +1,11 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   useListUsers,
   useUpdateUserRole,
   useCreateUser,
   useClearAllData,
-  useListSites,
+  useCreateUserImpersonationToken,
   getListUsersQueryKey,
   getListDriversQueryKey,
   getGetCurrentUserQueryKey,
@@ -38,26 +38,22 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
-import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
-  Building2,
   Eye,
   EyeOff,
   MoreHorizontal,
+  LogIn,
   Pencil,
   Trash2,
   UserPlus,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { queueSessionSwitch } from "@/lib/session-switch";
 import { usePermissions } from "@/hooks/use-permissions";
 
 const ROLE_LABELS: Record<UserRole, string> = {
@@ -89,6 +85,8 @@ const SECTIONS: Section[] = [
   "shipments",
 ];
 
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 function compareUsersByName(a: AppUser, b: AppUser) {
   if (a.name && !b.name) return -1;
   if (!a.name && b.name) return 1;
@@ -108,11 +106,9 @@ function compareUsersByName(a: AppUser, b: AppUser) {
 function UserRow({
   user,
   currentUserId,
-  sites,
 }: {
   user: AppUser;
   currentUserId: string | undefined;
-  sites: { id: string; name: string }[];
 }) {
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -121,31 +117,67 @@ function UserRow({
     user.editableSections,
   );
   const [editingInfo, setEditingInfo] = useState(false);
-  const [assignedSitesOpen, setAssignedSitesOpen] = useState(false);
+  const [impersonationOpen, setImpersonationOpen] = useState(false);
   const [nameInput, setNameInput] = useState(user.name ?? "");
   const [phoneInput, setPhoneInput] = useState(user.phone ?? "");
+  const [emailInput, setEmailInput] = useState(user.email);
 
   const isSelf = user.id === currentUserId;
 
+  function syncLocalState(nextUser: AppUser) {
+    setRole(nextUser.role);
+    setEditableSections(nextUser.editableSections);
+    setNameInput(nextUser.name ?? "");
+    setPhoneInput(nextUser.phone ?? "");
+    setEmailInput(nextUser.email);
+  }
+
+  useEffect(() => {
+    syncLocalState(user);
+  }, [user]);
+
   const updateUserRole = useUpdateUserRole({
     mutation: {
-      onSuccess: () => {
+      onSuccess: (updatedUser) => {
+        syncLocalState(updatedUser);
         queryClient.invalidateQueries({ queryKey: getListUsersQueryKey() });
         queryClient.invalidateQueries({ queryKey: getListDriversQueryKey() });
         queryClient.invalidateQueries({
           queryKey: getGetCurrentUserQueryKey(),
         });
-        toast({ title: "Права обновлены" });
+        toast({ title: "Пользователь обновлён" });
       },
-      onError: (error) => {
+      onError: (error: any) => {
+        syncLocalState(user);
+        queryClient.invalidateQueries({ queryKey: getListUsersQueryKey() });
         toast({
           title: "Ошибка",
-          description: error.message,
+          description:
+            error?.data?.error ?? error?.response?.data?.error ?? error.message,
           variant: "destructive",
         });
       },
     },
   });
+
+  const createImpersonationToken = useCreateUserImpersonationToken();
+
+  async function startImpersonation() {
+    try {
+      const { token } = await createImpersonationToken.mutateAsync({
+        id: user.id,
+      });
+      setImpersonationOpen(false);
+      queueSessionSwitch(token);
+    } catch (error) {
+      toast({
+        title: "Не удалось войти как пользователь",
+        description:
+          error instanceof Error ? error.message : "Повторите попытку",
+        variant: "destructive",
+      });
+    }
+  }
 
   function save(nextRole: UserRole, nextSections: Section[]) {
     updateUserRole.mutate({
@@ -174,29 +206,22 @@ function UserRow({
     save(role, next);
   }
 
-  function toggleAssignedSite(siteId: string, checked: boolean) {
-    const current = user.assignedSiteIds ?? [];
-    const next = checked
-      ? [...current, siteId]
-      : current.filter((id) => id !== siteId);
-    updateUserRole.mutate({
-      id: user.id,
-      data: {
-        role,
-        editableSections:
-          role === "logistician" || role === "manager"
-            ? editableSections
-            : [],
-        assignedSiteIds: next,
-      },
-    });
-  }
-
   function saveInfo() {
+    const email = emailInput.trim().toLowerCase();
+    if (!EMAIL_PATTERN.test(email)) {
+      toast({
+        title: "Проверьте email",
+        description: "Введите корректный адрес электронной почты",
+        variant: "destructive",
+      });
+      return;
+    }
+
     updateUserRole.mutate(
       {
         id: user.id,
         data: {
+          email,
           name: nameInput.trim() || null,
           phone: phoneInput.trim() || null,
           role,
@@ -213,12 +238,14 @@ function UserRow({
   function cancelInfo() {
     setNameInput(user.name ?? "");
     setPhoneInput(user.phone ?? "");
+    setEmailInput(user.email);
     setEditingInfo(false);
   }
 
   function openEditor() {
     setNameInput(user.name ?? "");
     setPhoneInput(user.phone ?? "");
+    setEmailInput(user.email);
     setEditingInfo(true);
   }
 
@@ -235,7 +262,11 @@ function UserRow({
         <span data-testid={`text-phone-${user.id}`}>{user.phone || "—"}</span>
       </TableCell>
       <TableCell className="py-2">
-        <Select value={role} onValueChange={handleRoleChange} disabled={isSelf}>
+        <Select
+          value={role}
+          onValueChange={handleRoleChange}
+          disabled={isSelf || updateUserRole.isPending}
+        >
           <SelectTrigger
             className="w-40"
             data-testid={`select-role-${user.id}`}
@@ -266,7 +297,7 @@ function UserRow({
               >
                 <Checkbox
                   checked={editableSections.includes(section)}
-                  disabled={isSelf}
+                  disabled={isSelf || updateUserRole.isPending}
                   onCheckedChange={(checked) =>
                     toggleSection(section, checked === true)
                   }
@@ -283,45 +314,6 @@ function UserRow({
               : "Полевой доступ: свои доставки и инвентарь"}
           </span>
         )}
-      </TableCell>
-      <TableCell className="py-2">
-        <Popover open={assignedSitesOpen} onOpenChange={setAssignedSitesOpen}>
-          <PopoverTrigger asChild>
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-8 text-xs"
-              data-testid={`button-assigned-sites-${user.id}`}
-            >
-              {(user.assignedSiteIds?.length ?? 0) > 0
-                ? `Объектов: ${user.assignedSiteIds!.length}`
-                : "Не закреплены"}
-            </Button>
-          </PopoverTrigger>
-          <PopoverContent className="w-80 max-h-80 overflow-y-auto" align="start">
-            {sites.length === 0 ? (
-              <p className="text-sm text-muted-foreground">Объектов пока нет</p>
-            ) : (
-              <div className="space-y-1.5">
-                {sites.map((site) => (
-                  <label
-                    key={site.id}
-                    className="flex items-center gap-2 text-sm"
-                  >
-                    <Checkbox
-                      checked={(user.assignedSiteIds ?? []).includes(site.id)}
-                      onCheckedChange={(checked) =>
-                        toggleAssignedSite(site.id, checked === true)
-                      }
-                      data-testid={`checkbox-site-${user.id}-${site.id}`}
-                    />
-                    {site.name}
-                  </label>
-                ))}
-              </div>
-            )}
-          </PopoverContent>
-        </Popover>
       </TableCell>
       <TableCell className="w-16 py-2 text-right">
         <DropdownMenu>
@@ -345,11 +337,12 @@ function UserRow({
               Редактировать
             </DropdownMenuItem>
             <DropdownMenuItem
-              onSelect={() => setAssignedSitesOpen(true)}
-              data-testid={`action-assign-sites-${user.id}`}
+              onSelect={() => setImpersonationOpen(true)}
+              disabled={isSelf}
+              data-testid={`action-impersonate-user-${user.id}`}
             >
-              <Building2 />
-              Назначить объекты
+              <LogIn />
+              Войти как пользователь
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
@@ -390,10 +383,17 @@ function UserRow({
               />
             </div>
             <div className="space-y-2">
-              <Label>Email</Label>
-              <Input value={user.email} disabled />
+              <Label htmlFor={`edit-email-${user.id}`}>Email</Label>
+              <Input
+                id={`edit-email-${user.id}`}
+                type="email"
+                value={emailInput}
+                onChange={(event) => setEmailInput(event.target.value)}
+                data-testid={`input-email-${user.id}`}
+              />
               <p className="text-xs text-muted-foreground">
-                Email используется для входа и в этом окне не изменяется.
+                Email используется для входа. После сохранения пользователь
+                будет входить по новому адресу.
               </p>
             </div>
           </div>
@@ -411,6 +411,39 @@ function UserRow({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <Dialog open={impersonationOpen} onOpenChange={setImpersonationOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Войти как пользователь?</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            Вы временно войдёте в учётную запись{" "}
+            <span className="font-medium text-foreground">
+              {user.name || user.email}
+            </span>{" "}
+            и увидите приложение с её правами доступа. Пароль пользователя не
+            требуется.
+          </p>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setImpersonationOpen(false)}
+            >
+              Отмена
+            </Button>
+            <Button
+              onClick={startImpersonation}
+              disabled={createImpersonationToken.isPending}
+              data-testid={`button-confirm-impersonate-${user.id}`}
+            >
+              {createImpersonationToken.isPending
+                ? "Выполняется вход..."
+                : "Войти"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }
@@ -418,11 +451,7 @@ function UserRow({
 export default function Users() {
   const { data: users, isLoading } = useListUsers();
   const { user: currentUser } = usePermissions();
-  const { data: allSites } = useListSites();
 
-  const siteOptions = (allSites ?? [])
-    .map((s) => ({ id: s.id, name: s.name }))
-    .sort((a, b) => a.name.localeCompare(b.name, "ru"));
   const sortedUsers = [...(users ?? [])].sort(compareUsersByName);
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -502,7 +531,7 @@ export default function Users() {
   });
 
   return (
-    <div className="space-y-6">
+    <div className="flex h-[calc(100vh-2rem)] min-h-0 flex-col gap-6">
       <h1
         className="text-2xl font-bold text-blue-900 bg-[#f5ecd9] rounded-md px-4 py-2 block w-full"
         data-testid="text-page-title"
@@ -524,10 +553,10 @@ export default function Users() {
         </Button>
       </div>
 
-      <div className="border rounded-md overflow-hidden">
+      <div className="min-h-0 flex-1 border rounded-md overflow-hidden">
         <Table
           className="text-xs"
-          containerClassName="max-h-[calc(100vh-18rem)]"
+          containerClassName="h-full"
         >
           <TableHeader className="sticky top-0 z-10 bg-background shadow-sm">
             <TableRow>
@@ -536,7 +565,6 @@ export default function Users() {
               <TableHead>Телефон</TableHead>
               <TableHead>Роль</TableHead>
               <TableHead>Доступные разделы</TableHead>
-              <TableHead>Объекты</TableHead>
               <TableHead className="w-16 text-right">Действия</TableHead>
             </TableRow>
           </TableHeader>
@@ -544,7 +572,7 @@ export default function Users() {
             {isLoading ? (
               <TableRow>
                 <TableCell
-                  colSpan={7}
+                  colSpan={6}
                   className="text-center text-muted-foreground py-8"
                 >
                   Загрузка...
@@ -556,13 +584,12 @@ export default function Users() {
                   key={user.id}
                   user={user}
                   currentUserId={currentUser?.id}
-                  sites={siteOptions}
                 />
               ))
             ) : (
               <TableRow>
                 <TableCell
-                  colSpan={7}
+                  colSpan={6}
                   className="text-center text-muted-foreground py-8"
                 >
                   Пользователи не найдены

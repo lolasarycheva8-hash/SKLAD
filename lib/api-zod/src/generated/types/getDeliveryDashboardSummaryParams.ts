@@ -7,8 +7,8 @@
  */
 
 export type GetDeliveryDashboardSummaryParams = {
-/**
- * Format YYYY-MM, defaults to current month
- */
-month?: string;
+  /**
+   * Format YYYY-MM, defaults to current month
+   */
+  month?: string;
 };

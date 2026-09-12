@@ -148,12 +148,10 @@ function truncate(text: string, maxLength = 300): string {
   return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
 }
 
-function buildErrorMessage(response: Response, data: unknown): string {
-  const prefix = `HTTP ${response.status} ${response.statusText}`;
-
+function getErrorPayloadMessage(data: unknown): string | undefined {
   if (typeof data === "string") {
     const text = data.trim();
-    return text ? `${prefix}: ${truncate(text)}` : prefix;
+    return text ? truncate(text) : undefined;
   }
 
   const title = getStringField(data, "title");
@@ -163,12 +161,14 @@ function buildErrorMessage(response: Response, data: unknown): string {
     getStringField(data, "error_description") ??
     getStringField(data, "error");
 
-  if (title && detail) return `${prefix}: ${title} — ${detail}`;
-  if (detail) return `${prefix}: ${detail}`;
-  if (message) return `${prefix}: ${message}`;
-  if (title) return `${prefix}: ${title}`;
+  if (title && detail) return `${title} — ${detail}`;
+  return detail ?? message ?? title;
+}
 
-  return prefix;
+function buildErrorMessage(response: Response, data: unknown): string {
+  const prefix = `HTTP ${response.status} ${response.statusText}`;
+  const message = getErrorPayloadMessage(data);
+  return message ? `${prefix}: ${message}` : prefix;
 }
 
 export class ApiError<T = unknown> extends Error {
@@ -197,6 +197,39 @@ export class ApiError<T = unknown> extends Error {
     this.method = requestInfo.method;
     this.url = response.url || requestInfo.url;
   }
+}
+
+export function isApiError<T = unknown>(error: unknown): error is ApiError<T> {
+  if (typeof error !== "object" || error === null) return false;
+
+  const candidate = error as Record<string, unknown>;
+  return (
+    candidate.name === "ApiError" &&
+    typeof candidate.message === "string" &&
+    typeof candidate.status === "number" &&
+    Number.isInteger(candidate.status) &&
+    candidate.status >= 100 &&
+    candidate.status <= 599 &&
+    "data" in candidate
+  );
+}
+
+export type ApiErrorDetails<T = unknown> = {
+  status: number;
+  message: string;
+  data: T | null;
+};
+
+export function extractApiError<T = unknown>(
+  error: unknown,
+): ApiErrorDetails<T> | null {
+  if (!isApiError<T>(error)) return null;
+
+  return {
+    status: error.status,
+    message: getErrorPayloadMessage(error.data) ?? error.message,
+    data: error.data,
+  };
 }
 
 export class ResponseParseError extends Error {

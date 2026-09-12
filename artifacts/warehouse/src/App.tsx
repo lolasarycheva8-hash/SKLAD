@@ -8,6 +8,7 @@ import { ruRU } from "@clerk/localizations";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Layout } from "@/components/layout";
+import { NoAccessibleSections } from "@/components/no-accessible-sections";
 import NotFound from "@/pages/not-found";
 import Dashboard from "@/pages/dashboard";
 import Products from "@/pages/products";
@@ -28,6 +29,7 @@ import ShipmentDetail from "@/pages/shipment-detail";
 import ShipmentPrint from "@/pages/shipment-print";
 import OrderPrint from "@/pages/order-print";
 import Users from "@/pages/users";
+import SessionSwitchPage from "@/pages/session-switch";
 import Audit from "@/pages/audit";
 import MyDeliveries from "@/pages/my-deliveries";
 import MySites from "@/pages/my-sites";
@@ -142,16 +144,21 @@ function SignInPage() {
 
   return (
     <div className="flex min-h-[100dvh] flex-col items-center justify-center bg-background px-4">
+      <div className="mb-4 text-2xl font-bold text-foreground">ЛексиТД</div>
       <SignIn
         routing="path"
         path={`${basePath}/sign-in`}
+        appearance={{
+          elements: {
+            headerTitle: "hidden",
+            ...(!bootstrapRegistrationAllowed
+              ? { footerAction: "hidden" }
+              : {}),
+          },
+        }}
         {...(bootstrapRegistrationAllowed
           ? { signUpUrl: `${basePath}/sign-up` }
-          : {
-              appearance: {
-                elements: { footerAction: "hidden" },
-              },
-            })}
+          : {})}
       />
     </div>
   );
@@ -188,9 +195,11 @@ function SignUpPage() {
 
   return (
     <div className="flex min-h-[100dvh] flex-col items-center justify-center bg-background px-4">
+      <div className="mb-4 text-2xl font-bold text-foreground">ЛексиТД</div>
       <SignUp
         routing="path"
         path={`${basePath}/sign-up`}
+        appearance={{ elements: { headerTitle: "hidden" } }}
         signInUrl={`${basePath}/sign-in`}
       />
     </div>
@@ -236,7 +245,7 @@ function HomeRoute() {
         ["products", "/products"],
       ] as const
     ).find(([section]) => canView(section));
-    return first ? <Redirect to={first[1]} /> : <NotFound />;
+    return first ? <Redirect to={first[1]} /> : <NoAccessibleSections />;
   }
   return <Dashboard />;
 }
@@ -315,7 +324,7 @@ function AuthenticatedApp() {
           <Route path="/receipts"><SectionOnly section="receipts" component={GoodsReceipts} /></Route>
           <Route path="/receipts/:id"><SectionOnly section="receipts" component={GoodsReceiptDetail} /></Route>
           <Route path="/sites"><SectionOnly section="sites" component={Sites} /></Route>
-          <Route path="/delivery-types"><SectionOnly section="sites" component={DeliveryTypes} /></Route>
+          <Route path="/delivery-types"><AdminOnly component={DeliveryTypes} /></Route>
           <Route path="/sites/:id"><SectionOnly section="sites" component={SiteDetail} /></Route>
           <Route path="/deliveries"><SectionOnly section="deliveries" component={Deliveries} /></Route>
           <Route path="/deliveries/run">
@@ -386,7 +395,7 @@ function ClerkProviderWithRoutes() {
           ...ruRU.signIn,
           start: {
             ...ruRU.signIn?.start,
-            title: 'ООО ТД "Альянс"',
+            title: "ЛексиТД",
             subtitle: "Войдите, чтобы продолжить работу",
           },
         },
@@ -394,7 +403,7 @@ function ClerkProviderWithRoutes() {
           ...ruRU.signUp,
           start: {
             ...ruRU.signUp?.start,
-            title: 'ООО ТД "Альянс"',
+            title: "ЛексиТД",
             subtitle: "Создайте аккаунт сотрудника",
           },
         },
@@ -416,6 +425,7 @@ function ClerkProviderWithRoutes() {
           </Route>
           <Route path="/sign-in/*?" component={SignInPage} />
           <Route path="/sign-up/*?" component={SignUpPage} />
+          <Route path="/session-switch" component={SessionSwitchPage} />
           <Route>
             <MainRouter />
           </Route>

@@ -13,9 +13,12 @@ import {
   readSheetHeaders,
   validateTemplateHeaders,
   exportRowsToExcel,
-  str,
-  excelSerialToIsoDate,
 } from "@/lib/excel-import";
+import {
+  buildDeliveryFactUpdates,
+  deliveryFactExportRows,
+  DELIVERY_FACT_HEADERS,
+} from "@/lib/delivery-fact-import";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -35,24 +38,9 @@ import { usePermissions } from "@/hooks/use-permissions";
 
 const ALL_DRIVERS = "__all__";
 
-const FACT_HEADERS = ["Объект", "Водитель", "Плановая дата", "Дата факта"];
-
 function formatRuDate(iso: string | null): string {
   if (!iso) return "";
   return iso.slice(0, 10).split("-").reverse().join(".");
-}
-
-function parseRuOrIsoDate(value: unknown): string {
-  if (typeof value === "number") return excelSerialToIsoDate(value);
-  const s = str(value);
-  if (!s) return "";
-  const ruMatch = s.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
-  if (ruMatch) {
-    return `${ruMatch[3]}-${ruMatch[2]!.padStart(2, "0")}-${ruMatch[1]!.padStart(2, "0")}`;
-  }
-  const isoMatch = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if (isoMatch) return `${isoMatch[1]}-${isoMatch[2]}-${isoMatch[3]}`;
-  return excelSerialToIsoDate(s);
 }
 
 function todayValue(): string {
@@ -139,13 +127,11 @@ export default function DeliveryRun() {
   const [importing, setImporting] = useState(false);
 
   function handleExportPlan() {
-    const exportRows = rows.map((d) => ({
-      "Объект": d.siteName,
-      "Водитель": d.driver,
-      "Плановая дата": formatRuDate(d.plannedDate),
-      "Дата факта": d.actualDate ? formatRuDate(d.actualDate) : "",
-    }));
-    exportRowsToExcel(exportRows, FACT_HEADERS, `план-развоза-${date}.xlsx`);
+    exportRowsToExcel(
+      deliveryFactExportRows(rows),
+      DELIVERY_FACT_HEADERS,
+      `план-развоза-${date}.xlsx`,
+    );
   }
 
   async function handleImportFile(e: React.ChangeEvent<HTMLInputElement>) {
@@ -163,7 +149,7 @@ export default function DeliveryRun() {
 
     try {
       const headers = await readSheetHeaders(file);
-      const missing = validateTemplateHeaders(headers, FACT_HEADERS);
+      const missing = validateTemplateHeaders(headers, DELIVERY_FACT_HEADERS);
       if (missing.length > 0) {
         toast({
           title: "Неверный формат файла",
@@ -174,33 +160,11 @@ export default function DeliveryRun() {
       }
 
       const fileRows = await parseExcelFile(file);
-      const byKey = new Map(
-        (deliveries ?? [])
-          .filter((d) => d.plannedDate)
-          .map((d) => [
-            `${d.siteName.trim().toLowerCase()}|${d.plannedDate!.slice(0, 10)}`,
-            d,
-          ]),
+      const { updates, unmatched } = buildDeliveryFactUpdates(
+        fileRows,
+        deliveries ?? [],
+        date,
       );
-
-      const updates: { id: string; actualDate: string }[] = [];
-      const unmatched: string[] = [];
-      for (const row of fileRows) {
-        const siteName = str(row["Объект"]);
-        if (!siteName) continue;
-        const factRaw = row["Дата факта"];
-        const factIso = parseRuOrIsoDate(factRaw);
-        if (!factIso) continue;
-        const plannedIso = parseRuOrIsoDate(row["Плановая дата"]) || date;
-        const match = byKey.get(`${siteName.trim().toLowerCase()}|${plannedIso}`);
-        if (!match) {
-          unmatched.push(siteName);
-          continue;
-        }
-        if (match.actualDate?.slice(0, 10) !== factIso) {
-          updates.push({ id: match.id, actualDate: factIso });
-        }
-      }
 
       if (updates.length === 0) {
         toast({

@@ -5,7 +5,7 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
-import type { ShipmentItemInput } from './shipmentItemInput';
+import type { ShipmentItemInput } from "./shipmentItemInput";
 
 export interface UpdateShipmentInput {
   siteId?: string;

@@ -19,7 +19,9 @@ function todayISO(): string {
 }
 
 function daysBetween(from: string, to: string): number {
-  return Math.round((new Date(to).getTime() - new Date(from).getTime()) / (1000 * 60 * 60 * 24));
+  return Math.round(
+    (new Date(to).getTime() - new Date(from).getTime()) / (1000 * 60 * 60 * 24),
+  );
 }
 
 export function computeStatus(
@@ -47,6 +49,7 @@ export function toDeliveryDto(
   siteAddress: string,
   photosCount = 0,
   driver = "Не назначен",
+  managerContact: string | null = null,
 ) {
   const { status, lagDays } = computeStatus(row.plannedDate, row.actualDate);
   return {
@@ -54,21 +57,25 @@ export function toDeliveryDto(
     siteId: row.siteId,
     siteName,
     siteAddress,
+    ...(managerContact ? { managerContact } : {}),
     driverUserId: row.driverUserId,
     driver,
     plannedDate: row.plannedDate,
+    correctedPlannedDate: row.correctedPlannedDate,
+    deliveryType: row.deliveryType,
     scheduleMonth: row.scheduleMonth,
     actualDate: row.actualDate,
     actApprovedAt: row.actApprovedAt,
     actApprovedBy: row.actApprovedBy,
     workflowStatus: !row.plannedDate
-      ? "planned" as const
+      ? ("planned" as const)
       : row.actApprovedAt
-        ? "closed" as const
+        ? ("closed" as const)
         : row.actualDate
-          ? "done" as const
-          : "planned" as const,
+          ? ("done" as const)
+          : ("planned" as const),
     note: row.note,
+    logisticianNote: row.logisticianNote,
     status,
     lagDays,
     rescheduledFromDate: row.rescheduledFromDate,
@@ -79,7 +86,9 @@ export function toDeliveryDto(
   };
 }
 
-export async function photosCountMap(deliveryIds: string[]): Promise<Map<string, number>> {
+export async function photosCountMap(
+  deliveryIds: string[],
+): Promise<Map<string, number>> {
   if (deliveryIds.length === 0) return new Map();
   const rows = await db
     .select({ deliveryId: deliveryPhotosTable.deliveryId, cnt: count() })

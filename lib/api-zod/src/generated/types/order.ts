@@ -5,7 +5,7 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
-import type { OrderItem } from './orderItem';
+import type { OrderItem } from "./orderItem";
 
 export interface Order {
   id: string;

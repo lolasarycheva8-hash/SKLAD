@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
+import { Writable } from "node:stream";
 import test from "node:test";
 
 import {
+  createProductionDeliveryUploadCleanupDependencies,
+  DeliveryUploadStorageFinalizationTimeoutError,
+  DeliveryUploadStorageListTimeoutError,
+  finalizeDeliveryUploadStorageObject,
   getDeliveryUploadCleanupConfig,
   createDeliveryUploadCleanupCoordinator,
   runLiveDeliveryUploadCleanup,
@@ -24,6 +29,34 @@ const logger: CleanupLogger = {
   debug: (bindings) => loggerEvents.push({ level: "debug", bindings }),
   error: (bindings) => loggerEvents.push({ level: "error", bindings }),
 };
+
+function createGlobalCleanupLockHarness(
+  query: (
+    text: string,
+  ) => Promise<{ rows: Array<{ acquired?: boolean; released?: boolean }> }>,
+) {
+  const releases: Array<Error | boolean | undefined> = [];
+  const client = {
+    query: (text: string) => query(text),
+    release: (error?: Error | boolean) => {
+      releases.push(error);
+    },
+  };
+  const dependencies = createProductionDeliveryUploadCleanupDependencies(
+    {
+      transaction: async (callback) => callback({}),
+      $client: { connect: async () => client },
+    },
+    {},
+    {},
+    {
+      listPrivateUploadObjects: async () => [],
+      deleteObjectEntity: async () => true,
+    },
+    logger,
+  );
+  return { runWithGlobalCleanupLock: dependencies.runWithGlobalCleanupLock, releases };
+}
 
 test("cleanup configuration has safe defaults and rejects invalid explicit values", () => {
   assert.deepEqual(getDeliveryUploadCleanupConfig({}), {
@@ -177,6 +210,236 @@ test("live cleanup skips deletion when the global advisory lock is unavailable",
   assert.equal(deleted, false);
 });
 
+test("global cleanup lock releases a healthy client exactly once", async () => {
+  const queries: string[] = [];
+  const harness = createGlobalCleanupLockHarness(async (text) => {
+    queries.push(text);
+    return text.includes("pg_try_advisory_lock")
+      ? { rows: [{ acquired: true }] }
+      : { rows: [{ released: true }] };
+  });
+
+  assert.equal(await harness.runWithGlobalCleanupLock(async () => "done"), "done");
+  assert.equal(queries.length, 2);
+  assert.deepEqual(harness.releases, [undefined]);
+});
+
+test("global cleanup lock releases a client exactly once when try-lock loses", async () => {
+  const harness = createGlobalCleanupLockHarness(async () => ({
+    rows: [{ acquired: false }],
+  }));
+
+  assert.equal(await harness.runWithGlobalCleanupLock(async () => "unreachable"), null);
+  assert.deepEqual(harness.releases, [undefined]);
+});
+
+test("global cleanup lock still unlocks and releases once after a callback error", async () => {
+  const callbackError = new Error("cleanup callback failed");
+  let unlockCalls = 0;
+  const harness = createGlobalCleanupLockHarness(async (text) => {
+    if (text.includes("pg_advisory_unlock")) unlockCalls += 1;
+    return text.includes("pg_try_advisory_lock")
+      ? { rows: [{ acquired: true }] }
+      : { rows: [{ released: true }] };
+  });
+
+  await assert.rejects(
+    harness.runWithGlobalCleanupLock(async () => {
+      throw callbackError;
+    }),
+    (error) => error === callbackError,
+  );
+  assert.equal(unlockCalls, 1);
+  assert.deepEqual(harness.releases, [undefined]);
+});
+
+test("storage listing timeout aborts the request, records failure, releases the lock, and retries", async () => {
+  let lockHeld = false;
+  let unlockCalls = 0;
+  let releaseCalls = 0;
+  let listCalls = 0;
+  let referenceListCalls = 0;
+  let deleteCalls = 0;
+  let firstListSignal: AbortSignal | undefined;
+  const client = {
+    query: async (text: string) => {
+      if (text.includes("pg_try_advisory_lock")) {
+        assert.equal(lockHeld, false);
+        lockHeld = true;
+        return { rows: [{ acquired: true }] };
+      }
+      assert.match(text, /pg_advisory_unlock/);
+      assert.equal(lockHeld, true);
+      lockHeld = false;
+      unlockCalls += 1;
+      return { rows: [{ released: true }] };
+    },
+    release: () => {
+      releaseCalls += 1;
+    },
+  };
+  const dependencies = createProductionDeliveryUploadCleanupDependencies(
+    {
+      transaction: async (callback) => callback({}),
+      $client: { connect: async () => client },
+    },
+    {},
+    {},
+    {
+      listPrivateUploadObjects: (signal) => {
+        listCalls += 1;
+        if (listCalls <= 2) {
+          if (listCalls === 1) firstListSignal = signal;
+          return new Promise((_resolve, reject) => {
+            signal?.addEventListener("abort", () => {
+              reject(new DOMException("Storage listing aborted", "AbortError"));
+            }, { once: true });
+          });
+        }
+        return Promise.resolve([]);
+      },
+      deleteObjectEntity: async () => {
+        deleteCalls += 1;
+        return true;
+      },
+    },
+    logger,
+    30_000,
+    5,
+  );
+  dependencies.resumePendingDeletions = undefined;
+  dependencies.listReferencedObjectPaths = async () => {
+    referenceListCalls += 1;
+    return [];
+  };
+
+  const writes: AutomaticCleanupStatusWrite[] = [];
+  let consecutiveFailures = 0;
+  let hasPersistedStatus = false;
+  const writeStatus = createAutomaticCleanupStatusWriter(async (upsert) => {
+    if (!hasPersistedStatus) {
+      consecutiveFailures = upsert.insert.consecutiveFailures;
+      hasPersistedStatus = true;
+      return;
+    }
+    consecutiveFailures =
+      typeof upsert.update.consecutiveFailures === "number"
+        ? upsert.update.consecutiveFailures
+        : consecutiveFailures + 1;
+  });
+  const recordRun = createAutomaticCleanupRunRecorder({
+    runCleanup: () => runLiveDeliveryUploadCleanup(dependencies),
+    writeStatus: async (write) => {
+      writes.push(write);
+      await writeStatus(write);
+    },
+  });
+
+  await assert.rejects(
+    recordRun(),
+    (error) => error instanceof DeliveryUploadStorageListTimeoutError,
+  );
+  assert.equal(lockHeld, false);
+  assert.equal(unlockCalls, 1);
+  assert.equal(releaseCalls, 1);
+  assert.equal(writes[0]?.status, "failed");
+  assert.equal(writes[0]?.failureKind, "list_timeout");
+  assert.equal(consecutiveFailures, 1);
+  assert.equal(writes[0]?.summary.failed, 1);
+  assert.equal(referenceListCalls, 0);
+  assert.equal(deleteCalls, 0);
+  assert.equal(firstListSignal?.aborted, true);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(referenceListCalls, 0);
+  assert.equal(deleteCalls, 0);
+
+  await assert.rejects(
+    recordRun(),
+    (error) => error instanceof DeliveryUploadStorageListTimeoutError,
+  );
+  assert.equal(writes[1]?.failureKind, "list_timeout");
+  assert.equal(consecutiveFailures, 2);
+  assert.equal(listCalls, 2);
+  assert.equal(lockHeld, false);
+  assert.equal(unlockCalls, 2);
+  assert.equal(releaseCalls, 2);
+
+  await recordRun();
+  assert.equal(listCalls, 3);
+  assert.equal(lockHeld, false);
+  assert.equal(unlockCalls, 3);
+  assert.equal(releaseCalls, 3);
+  assert.equal(writes[2]?.status, "success");
+  assert.equal(writes[2]?.failureKind, "none");
+  assert.equal(consecutiveFailures, 0);
+});
+
+test("storage finalization timeout aborts deletion safely and allows a clean retry", async () => {
+  const privateObjectPath =
+    "/objects/uploads/customer-secret-finalization-document.pdf";
+  let calls = 0;
+  let firstSignal: AbortSignal | undefined;
+  let firstRequestSettled = false;
+  const deleteObject = (
+    objectPath: string,
+    signal?: AbortSignal,
+  ): Promise<boolean> => {
+    calls += 1;
+    assert.equal(objectPath, privateObjectPath);
+    if (calls === 2) return Promise.resolve(true);
+    firstSignal = signal;
+    return new Promise((_resolve, reject) => {
+      signal?.addEventListener("abort", () => {
+        firstRequestSettled = true;
+        reject(new DOMException("Storage deletion aborted", "AbortError"));
+      }, { once: true });
+    });
+  };
+
+  await assert.rejects(
+    finalizeDeliveryUploadStorageObject(
+      deleteObject,
+      privateObjectPath,
+      5,
+    ),
+    (error) => {
+      assert.ok(
+        error instanceof DeliveryUploadStorageFinalizationTimeoutError,
+      );
+      assert.doesNotMatch(error.message, /customer-secret|objects\/uploads/);
+      return true;
+    },
+  );
+  assert.equal(firstSignal?.aborted, true);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(firstRequestSettled, true);
+
+  assert.equal(
+    await finalizeDeliveryUploadStorageObject(
+      deleteObject,
+      privateObjectPath,
+      50,
+    ),
+    true,
+  );
+  assert.equal(calls, 2);
+});
+
+test("global cleanup lock destroys the client when PostgreSQL does not confirm unlock", async () => {
+  const harness = createGlobalCleanupLockHarness(async (text) =>
+    text.includes("pg_try_advisory_lock")
+      ? { rows: [{ acquired: true }] }
+      : { rows: [{ released: false }] },
+  );
+
+  await assert.rejects(
+    harness.runWithGlobalCleanupLock(async () => "done"),
+    /session lock was not held/,
+  );
+  assert.equal(harness.releases.length, 1);
+  assert.ok(harness.releases[0] instanceof Error);
+});
+
 test("live cleanup is automatic delete mode and continues after an object failure", async () => {
   const deleted: string[] = [];
   let executions = 0;
@@ -216,6 +479,139 @@ test("live cleanup is automatic delete mode and continues after an object failur
   assert.equal(summary?.deleted, 1);
   assert.deepEqual(deleted, ["/objects/uploads/works"]);
   assert.ok(loggerEvents.some((event) => event.level === "error"));
+});
+
+test("live cleanup production logs keep storage failure reasons without private paths", async () => {
+  const previousNodeEnvironment = process.env.NODE_ENV;
+  process.env.NODE_ENV = "production";
+  const { createLogger } = await import("./logger.ts");
+  process.env.NODE_ENV = previousNodeEnvironment;
+  const lines: string[] = [];
+  const destination = new Writable({
+    write(chunk, _encoding, callback) {
+      lines.push(String(chunk));
+      callback();
+    },
+  });
+  const actualLogger = createLogger(
+    {
+      NODE_ENV: "production",
+      LOG_LEVEL: "debug",
+      PRIVATE_OBJECT_DIR: "/private-bucket/customer-files",
+    },
+    destination,
+  );
+  const privateObjectPath =
+    "/objects/uploads/customer's report: final (signed).pdf";
+  let executions = 0;
+  const previousPrivateObjectDir = process.env.PRIVATE_OBJECT_DIR;
+  process.env.PRIVATE_OBJECT_DIR = "/private-bucket/customer-files";
+
+  const summary = await runLiveDeliveryUploadCleanup({
+      db: {
+        transaction: async (callback) =>
+          callback({
+            execute: async () => {
+              executions += 1;
+              return executions === 1
+                ? { rows: [{ acquired: true }] }
+                : { rows: [] };
+            },
+          }),
+      },
+      runWithGlobalCleanupLock: async (callback) =>
+        callback({
+          transaction: async (
+            transactionCallback: (transaction: any) => Promise<unknown>,
+          ) =>
+            transactionCallback({
+              execute: async () => {
+                executions += 1;
+                return { rows: [] };
+              },
+            }),
+        }),
+      listUploads: async () => [
+        { objectPath: privateObjectPath, createdAt: new Date(0) },
+      ],
+      listReferencedObjectPaths: async () => [],
+      isObjectPathReferenced: async () => false,
+      deleteObject: async () => {
+        throw new Error(
+        `access denied while deleting https://storage.googleapis.com/private-bucket/customer-files/uploads/customer's report: final (signed).pdf`,
+        );
+      },
+      logger: actualLogger,
+    }).finally(() => {
+      if (previousPrivateObjectDir === undefined) {
+        delete process.env.PRIVATE_OBJECT_DIR;
+      } else {
+        process.env.PRIVATE_OBJECT_DIR = previousPrivateObjectDir;
+      }
+    });
+
+  assert.equal(summary?.failed, 1);
+  const output = lines.join("");
+  assert.match(output, /access denied while deleting/);
+  assert.match(output, /\[PRIVATE_OBJECT_PATH\]/);
+  assert.doesNotMatch(
+    output,
+    /customer's|final \(signed\)|private-bucket|customer-files/,
+  );
+});
+
+test("production logs redact percent-encoded private upload paths without hiding the Storage error", async () => {
+  const previousNodeEnvironment = process.env.NODE_ENV;
+  process.env.NODE_ENV = "production";
+  const { createLogger } = await import("./logger.ts");
+  process.env.NODE_ENV = previousNodeEnvironment;
+  const lines: string[] = [];
+  const destination = new Writable({
+    write(chunk, _encoding, callback) {
+      lines.push(String(chunk));
+      callback();
+    },
+  });
+  const actualLogger = createLogger(
+    {
+      NODE_ENV: "production",
+      LOG_LEVEL: "error",
+      PRIVATE_OBJECT_DIR: "/private-bucket/customer-files",
+    },
+    destination,
+  );
+  const encodedPrivatePaths = [
+    "https://storage.googleapis.com/private-bucket/customer-files/uploads%2Fcustomer-secret-contract.pdf",
+    "https://storage.googleapis.com/private-bucket/customer-files%2Fuploads%2Fcustomer-secret-contract.pdf",
+    "/objects%2Fuploads%2Fcustomer-secret-contract.pdf",
+    "%2Fobjects%2Fuploads%2Fcustomer-secret-contract.pdf",
+    "/objects%2fuploads%2fcustomer-secret-contract.pdf",
+  ];
+
+  encodedPrivatePaths.forEach((encodedPrivatePath, index) => {
+    actualLogger.error(
+      {
+        err: new Error(
+          `StorageError code 403 case ${index + 1}: access denied while deleting ${encodedPrivatePath}`,
+        ),
+      },
+      "Delivery upload cleanup failed",
+    );
+  });
+
+  assert.equal(lines.length, encodedPrivatePaths.length);
+  lines.forEach((output, index) => {
+    const entry = JSON.parse(output);
+    assert.equal(
+      entry.err.message,
+      `StorageError code 403 case ${index + 1}: access denied while deleting [PRIVATE_OBJECT_PATH]`,
+    );
+    assert.match(entry.err.stack, /\[PRIVATE_OBJECT_PATH\]/);
+    assert.doesNotMatch(
+      output,
+      /customer-secret-contract|private-bucket|customer-files|uploads%2f/i,
+    );
+  });
 });
 
 test("live cleanup never deletes an old object referenced during its exact recheck", async () => {
@@ -258,6 +654,8 @@ test("automatic cleanup lock skip does not overwrite the previous status", async
     lastRunAt: previousSuccessfulRunAt,
     lastSuccessfulRunAt: previousSuccessfulRunAt,
     status: "success",
+    failureKind: "none",
+    consecutiveFailures: 0,
     scanned: 12,
     candidates: 2,
     deleted: 2,
@@ -339,9 +737,19 @@ test("automatic cleanup status keeps the last success after partial and total fa
   let persisted: AutomaticCleanupStatusRow | undefined;
   const writeStatus = createAutomaticCleanupStatusWriter(async (upsert) => {
     upserts.push(upsert);
-    persisted = persisted
-      ? { ...persisted, ...upsert.update }
-      : upsert.insert;
+    if (persisted) {
+      const previousConsecutiveFailures = persisted.consecutiveFailures;
+      persisted = {
+        ...persisted,
+        ...upsert.update,
+        consecutiveFailures:
+          typeof upsert.update.consecutiveFailures === "number"
+            ? upsert.update.consecutiveFailures
+            : previousConsecutiveFailures + 1,
+      };
+    } else {
+      persisted = upsert.insert;
+    }
   });
 
   const recordRun = createAutomaticCleanupRunRecorder({
@@ -364,6 +772,8 @@ test("automatic cleanup status keeps the last success after partial and total fa
     lastRunAt: successfulRunAt,
     lastSuccessfulRunAt: successfulRunAt,
     status: "success",
+    failureKind: "none",
+    consecutiveFailures: 0,
     scanned: 8,
     candidates: 3,
     deleted: 3,
@@ -379,6 +789,8 @@ test("automatic cleanup status keeps the last success after partial and total fa
     lastRunAt: partialFailureRunAt,
     lastSuccessfulRunAt: successfulRunAt,
     status: "failed",
+    failureKind: "other",
+    consecutiveFailures: 1,
     scanned: 7,
     candidates: 3,
     deleted: 2,
@@ -394,6 +806,8 @@ test("automatic cleanup status keeps the last success after partial and total fa
     lastRunAt: totalFailureRunAt,
     lastSuccessfulRunAt: successfulRunAt,
     status: "failed",
+    failureKind: "other",
+    consecutiveFailures: 2,
     scanned: 0,
     candidates: 0,
     deleted: 0,
@@ -436,92 +850,20 @@ test("automatic cleanup status keeps the last success after partial and total fa
   assert.doesNotMatch(persistedJson, /objects\/uploads/);
   assert.doesNotMatch(persistedJson, /storage rejected|storage listing failed/);
   assert.deepEqual(
-    upserts.map(({ insert, update }) => ({
-      insert: Object.keys(insert).sort(),
-      update: Object.keys(update).sort(),
-    })),
+    writes.map(({ status, failureKind }) => ({ status, failureKind })),
     [
-      {
-        insert: [
-          "candidates",
-          "deleted",
-          "failed",
-          "key",
-          "lastRunAt",
-          "lastSuccessfulRunAt",
-          "resumedDeliveryDeletions",
-          "resumedPhotoDeletions",
-          "scanned",
-          "status",
-          "updatedAt",
-        ],
-        update: [
-          "candidates",
-          "deleted",
-          "failed",
-          "lastRunAt",
-          "lastSuccessfulRunAt",
-          "resumedDeliveryDeletions",
-          "resumedPhotoDeletions",
-          "scanned",
-          "status",
-          "updatedAt",
-        ],
-      },
-      {
-        insert: [
-          "candidates",
-          "deleted",
-          "failed",
-          "key",
-          "lastRunAt",
-          "lastSuccessfulRunAt",
-          "resumedDeliveryDeletions",
-          "resumedPhotoDeletions",
-          "scanned",
-          "status",
-          "updatedAt",
-        ],
-        update: [
-          "candidates",
-          "deleted",
-          "failed",
-          "lastRunAt",
-          "resumedDeliveryDeletions",
-          "resumedPhotoDeletions",
-          "scanned",
-          "status",
-          "updatedAt",
-        ],
-      },
-      {
-        insert: [
-          "candidates",
-          "deleted",
-          "failed",
-          "key",
-          "lastRunAt",
-          "lastSuccessfulRunAt",
-          "resumedDeliveryDeletions",
-          "resumedPhotoDeletions",
-          "scanned",
-          "status",
-          "updatedAt",
-        ],
-        update: [
-          "candidates",
-          "deleted",
-          "failed",
-          "lastRunAt",
-          "resumedDeliveryDeletions",
-          "resumedPhotoDeletions",
-          "scanned",
-          "status",
-          "updatedAt",
-        ],
-      },
+      { status: "success", failureKind: "none" },
+      { status: "failed", failureKind: "other" },
+      { status: "failed", failureKind: "other" },
     ],
   );
+  assert.equal(upserts.length, 3);
+  for (const { insert, update } of upserts) {
+    assert.ok("failureKind" in insert);
+    assert.ok("consecutiveFailures" in insert);
+    assert.ok("failureKind" in update);
+    assert.ok("consecutiveFailures" in update);
+  }
 });
 
 test("automatic cleanup preserves both errors when failed status cannot be written", async () => {
@@ -545,4 +887,143 @@ test("automatic cleanup preserves both errors when failed status cannot be writt
     return true;
   });
   assert.equal(writeCalls, 1);
+});
+
+test("coordinator logs both cleanup failures once through the production Pino serializer without private status data", async () => {
+  const previousNodeEnvironment = process.env.NODE_ENV;
+  process.env.NODE_ENV = "production";
+  const { createLogger } = await import("./logger.ts");
+  process.env.NODE_ENV = previousNodeEnvironment;
+  const lines: string[] = [];
+  const destination = new Writable({
+    write(chunk, _encoding, callback) {
+      lines.push(String(chunk));
+      callback();
+    },
+  });
+  const actualLogger = createLogger(
+    {
+      NODE_ENV: "production",
+      LOG_LEVEL: "error",
+      PRIVATE_OBJECT_DIR: "/private-bucket/customer-files",
+    },
+    destination,
+  );
+  const privateObjectPath =
+    "/objects/uploads/customer's report: final (signed).pdf";
+  const physicalPrivateObjectPath =
+    "https://storage.googleapis.com/private-bucket/customer-files/uploads/customer's report: final (signed).pdf";
+  const cleanupError = Object.assign(
+    new Error(`access denied while deleting ${privateObjectPath}`),
+    { objectPath: privateObjectPath },
+  );
+  const statusWriteError = Object.assign(
+    new Error(
+      `cleanup status database write failed after ${physicalPrivateObjectPath}: connection closed`,
+    ),
+    { objectPath: privateObjectPath },
+  );
+  const recordRun = createAutomaticCleanupRunRecorder({
+    runCleanup: async () => {
+      throw cleanupError;
+    },
+    writeStatus: async () => {
+      throw statusWriteError;
+    },
+  });
+  const coordinator = createDeliveryUploadCleanupCoordinator(
+    { retentionHours: 24, intervalHours: 6, initialDelaySeconds: 60 },
+    { runCleanup: recordRun, logger: actualLogger },
+    () => 0,
+  );
+
+  await coordinator.runIfDue();
+
+  assert.equal(lines.length, 1);
+  const entry = JSON.parse(lines[0]!);
+  assert.match(
+    entry.err.message,
+    /^Cleanup failed and its failed status could not be recorded/,
+  );
+  assert.equal(
+    entry.err.cause.message,
+    "access denied while deleting [PRIVATE_OBJECT_PATH]",
+  );
+  assert.equal(
+    entry.err.statusWriteError.message,
+    "cleanup status database write failed after [PRIVATE_OBJECT_PATH]",
+  );
+  assert.match(entry.err.cause.stack, /access denied while deleting/);
+  assert.match(
+    entry.err.statusWriteError.stack,
+    /cleanup status database write failed/,
+  );
+  assert.doesNotMatch(
+    lines[0]!,
+    /customer's|final \(signed\)|private-bucket|customer-files/,
+  );
+});
+
+test("production logger preserves the root error when cause references itself", async () => {
+  const previousNodeEnvironment = process.env.NODE_ENV;
+  process.env.NODE_ENV = "production";
+  const { createLogger } = await import("./logger.ts");
+  process.env.NODE_ENV = previousNodeEnvironment;
+  const lines: string[] = [];
+  const destination = new Writable({
+    write(chunk, _encoding, callback) {
+      lines.push(String(chunk));
+      callback();
+    },
+  });
+  const actualLogger = createLogger(
+    { NODE_ENV: "production", LOG_LEVEL: "error" },
+    destination,
+  );
+  const cyclicError = new Error("корневая ошибка очистки");
+  cyclicError.cause = cyclicError;
+
+  assert.doesNotThrow(() => {
+    actualLogger.error({ err: cyclicError }, "cleanup failed");
+  });
+
+  assert.equal(lines.length, 1);
+  const entry = JSON.parse(lines[0]!);
+  assert.equal(entry.err.message, "корневая ошибка очистки");
+  assert.deepEqual(entry.err.cause, {
+    type: "RepeatedErrorReference",
+    message: "Повторная ссылка на уже записанную ошибку опущена",
+  });
+});
+
+test("production logger sanitizes a private path in a string-valued cause", async () => {
+  const previousNodeEnvironment = process.env.NODE_ENV;
+  process.env.NODE_ENV = "production";
+  const { createLogger } = await import("./logger.ts");
+  process.env.NODE_ENV = previousNodeEnvironment;
+  const lines: string[] = [];
+  const destination = new Writable({
+    write(chunk, _encoding, callback) {
+      lines.push(String(chunk));
+      callback();
+    },
+  });
+  const actualLogger = createLogger(
+    { NODE_ENV: "production", LOG_LEVEL: "error" },
+    destination,
+  );
+  const error = new Error("cleanup failed", {
+    cause:
+      "code 403 while deleting /objects/uploads/customer's report: final (signed).pdf",
+  });
+
+  actualLogger.error({ err: error }, "cleanup failed");
+
+  assert.equal(lines.length, 1);
+  const entry = JSON.parse(lines[0]!);
+  assert.equal(
+    entry.err.cause.message,
+    "code 403 while deleting [PRIVATE_OBJECT_PATH]",
+  );
+  assert.doesNotMatch(lines[0]!, /customer's|final \(signed\)/);
 });

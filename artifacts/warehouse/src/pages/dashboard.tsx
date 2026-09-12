@@ -16,6 +16,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { usePermissions } from "@/hooks/use-permissions";
+import { createOverdueDeliveryBuckets } from "@/lib/overdue-delivery-buckets";
 import {
   AlertTriangle,
   Truck,
@@ -66,6 +67,10 @@ export default function Dashboard() {
   const unpaidOrders = (orders ?? [])
     .filter((order) => !order.isPaid)
     .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+  const overdueBuckets = createOverdueDeliveryBuckets(
+    deliverySummary?.overdueDeliveries ?? [],
+    deliverySummary?.totalScheduled ?? 0,
+  );
 
   return (
     <div className="space-y-6">
@@ -454,11 +459,8 @@ export default function Dashboard() {
         </Card>
 
         <Card>
-          <CardHeader className="flex flex-row items-center justify-between">
+          <CardHeader>
             <CardTitle>Просроченные доставки</CardTitle>
-            <Link href="/deliveries" className="text-sm text-primary hover:underline" data-testid="link-view-overdue-deliveries">
-              Все доставки
-            </Link>
           </CardHeader>
           <CardContent>
             {isDeliveryLoading ? (
@@ -466,27 +468,27 @@ export default function Dashboard() {
                 <Skeleton className="h-10 w-full" />
                 <Skeleton className="h-10 w-full" />
               </div>
-            ) : deliverySummary && deliverySummary.overdueDeliveries.length > 0 ? (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Объект</TableHead>
-                    <TableHead>Водитель</TableHead>
-                    <TableHead className="text-right">Отставание</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {deliverySummary.overdueDeliveries.map((delivery) => (
-                    <TableRow key={delivery.id} data-testid={`row-overdue-${delivery.id}`}>
-                      <TableCell className="font-medium">{delivery.siteName}</TableCell>
-                      <TableCell className="text-muted-foreground">{delivery.driver}</TableCell>
-                      <TableCell className="text-right">
-                        <Badge variant="destructive">{delivery.lagDays} дн.</Badge>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+            ) : deliverySummary && deliverySummary.overdueCount > 0 ? (
+              <div className="divide-y">
+                {overdueBuckets.map((bucket) => (
+                  <Link
+                    key={bucket.id}
+                    href={`/deliveries?month=${month}&view=${bucket.id}`}
+                    className="flex min-h-14 items-center justify-between gap-4 py-3 transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    data-testid={`link-overdue-bucket-${bucket.id}`}
+                  >
+                    <span className="text-sm font-medium">{bucket.label}</span>
+                    <span className="flex shrink-0 items-center gap-2">
+                      <strong className="text-lg text-destructive">
+                        {bucket.count}
+                      </strong>
+                      <Badge variant="destructive">
+                        {bucket.percent.toFixed(0)}%
+                      </Badge>
+                    </span>
+                  </Link>
+                ))}
+              </div>
             ) : (
               <p className="text-sm text-muted-foreground py-8 text-center">
                 Просроченных доставок нет

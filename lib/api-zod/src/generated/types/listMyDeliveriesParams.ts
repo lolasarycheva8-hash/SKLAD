@@ -7,19 +7,19 @@
  */
 
 export type ListMyDeliveriesParams = {
-/**
- * Date YYYY-MM-DD
- * @pattern ^\d{4}-\d{2}-\d{2}$
- */
-from?: string;
-/**
- * Date YYYY-MM-DD
- * @pattern ^\d{4}-\d{2}-\d{2}$
- */
-to?: string;
-siteId?: string;
-/**
- * Case-insensitive substring of site name or address
- */
-search?: string;
+  /**
+   * Date YYYY-MM-DD
+   * @pattern ^\d{4}-\d{2}-\d{2}$
+   */
+  from?: string;
+  /**
+   * Date YYYY-MM-DD
+   * @pattern ^\d{4}-\d{2}-\d{2}$
+   */
+  to?: string;
+  siteId?: string;
+  /**
+   * Case-insensitive substring of site name or address
+   */
+  search?: string;
 };

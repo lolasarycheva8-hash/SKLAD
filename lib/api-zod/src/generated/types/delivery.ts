@@ -5,27 +5,42 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
-import type { DeliveryStatus } from './deliveryStatus';
-import type { DeliveryWorkflowStatus } from './deliveryWorkflowStatus';
+import type { DeliveryStatus } from "./deliveryStatus";
+import type { DeliveryWorkflowStatus } from "./deliveryWorkflowStatus";
 
 export interface Delivery {
   id: string;
   siteId: string;
   siteName: string;
   siteAddress: string;
+  /**
+   * Телефон менеджера объекта для связи с водителем
+   * @nullable
+   */
+  managerContact?: string | null;
   /** @nullable */
   driverUserId: string | null;
   driver: string;
   /**
-     * Плановая дата доставки (null, если дата ещё не назначена)
-     * @nullable
-     */
+   * Плановая дата доставки (null, если дата ещё не назначена)
+   * @nullable
+   */
   plannedDate: Date | null;
   /**
-     * Месяц владения строкой графика; null возможен только у legacy rows
-     * @nullable
-     * @pattern ^\d{4}-(0[1-9]|1[0-2])$
-     */
+   * Уточнённая плановая дата только для отчётности; не изменяет исходный план, график или показатели
+   * @nullable
+   */
+  correctedPlannedDate?: Date | null;
+  /**
+   * Тип поставки для этой доставки; null означает использовать значение объекта
+   * @nullable
+   */
+  deliveryType?: string | null;
+  /**
+   * Месяц владения строкой графика; null возможен только у legacy rows
+   * @nullable
+   * @pattern ^\d{4}-(0[1-9]|1[0-2])$
+   */
   scheduleMonth: string | null;
   /** Фактическая дата доставки (редактируемая) */
   actualDate: Date | null;
@@ -34,7 +49,10 @@ export interface Delivery {
   /** @nullable */
   actApprovedBy: string | null;
   workflowStatus: DeliveryWorkflowStatus;
+  /** Комментарий водителя; логист видит его только для чтения */
   note: string | null;
+  /** Примечание логиста для водителя; водитель видит его только для чтения */
+  logisticianNote: string | null;
   status: DeliveryStatus;
   /** Отклонение факта от плана в днях (положительное — отставание) */
   lagDays: number | null;

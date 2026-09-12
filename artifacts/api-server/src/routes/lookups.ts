@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import {
   db,
   categoriesTable,
@@ -23,11 +23,15 @@ import {
   ListShipmentOrderLookupResponse,
   ListShipmentProductLookupResponse,
   ListShipmentSiteLookupResponse,
+  ListSiteBranchLookupResponse,
 } from "@workspace/api-zod";
 import { getCurrentStockMap } from "../lib/stock";
 import { toOrderDto } from "../lib/orders";
 import { toShipmentDto } from "../lib/shipments";
-import { requireAnySectionAccess } from "../middlewares/requirePermission";
+import {
+  requireAnySectionAccess,
+  requireSectionAccess,
+} from "../middlewares/requirePermission";
 
 const router: IRouter = Router();
 const ordersOrShipments = requireAnySectionAccess(["orders", "shipments"]);
@@ -40,6 +44,20 @@ async function shipmentOrder(id: string) {
     .where(eq(ordersTable.id, id));
   return row ? toOrderDto(row.order, row.clientName) : undefined;
 }
+
+router.get(
+  "/lookups/site-branches",
+  requireSectionAccess("sites"),
+  async (_req, res) => {
+    const trimmedBranch = sql<string>`btrim(${sitesTable.branch}, chr(32) || chr(9) || chr(10) || chr(13) || chr(12) || chr(11) || chr(160))`;
+    const rows = await db
+      .selectDistinct({ name: trimmedBranch })
+      .from(sitesTable)
+      .where(sql`${trimmedBranch} <> ''`)
+      .orderBy(trimmedBranch);
+    res.json(ListSiteBranchLookupResponse.parse(rows));
+  },
+);
 
 router.get(
   "/lookups/receipt-products",

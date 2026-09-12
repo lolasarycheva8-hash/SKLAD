@@ -414,6 +414,123 @@ paths:
                 items:
                   $ref: "#/components/schemas/Site"
 
+  /site-change-requests:
+    get:
+      operationId: listSiteChangeRequests
+      tags: [sites]
+      summary: Список предложений правок объектов (только администратор)
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/SiteChangeRequestStatus"
+      responses:
+        "200":
+          description: Предложения правок
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SiteChangeRequest"
+
+  /sites/{id}/change-requests:
+    post:
+      operationId: createSiteChangeRequest
+      tags: [sites]
+      summary: Предложить правки объекта (логист с доступом к разделу Объекты)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SiteChangeProposal"
+      responses:
+        "201":
+          description: Предложение создано
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SiteChangeRequest"
+
+  /sites/{id}/features:
+    patch:
+      operationId: updateSiteFeatures
+      tags: [sites]
+      summary: Изменить особенности объекта
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateSiteFeaturesInput"
+      responses:
+        "200":
+          description: Особенности объекта обновлены
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Site"
+
+  /site-change-requests/{id}/approve:
+    post:
+      operationId: approveSiteChangeRequest
+      tags: [sites]
+      summary: Принять предложение правок (только администратор)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Предложение принято
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SiteChangeRequest"
+        "409":
+          description: Предложение уже обработано
+
+  /site-change-requests/{id}/reject:
+    post:
+      operationId: rejectSiteChangeRequest
+      tags: [sites]
+      summary: Отклонить предложение правок (только администратор)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Предложение отклонено
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SiteChangeRequest"
+        "409":
+          description: Предложение уже обработано
+
   /sites/{id}:
     get:
       operationId: getSite
@@ -556,6 +673,41 @@ paths:
                 items:
                   $ref: "#/components/schemas/Delivery"
 
+  /deliveries/acts/download:
+    get:
+      operationId: downloadDeliveryActsForPeriod
+      tags: [deliveries]
+      summary: Скачать ZIP актов доставок за диапазон фактических дат
+      parameters:
+        - name: from
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+        - name: to
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+      responses:
+        "200":
+          description: ZIP archive
+          content:
+            application/zip:
+              schema:
+                type: string
+                format: binary
+        "400":
+          description: Invalid date range
+        "403":
+          description: Forbidden
+        "404":
+          description: No acts found
+        "413":
+          description: Too many act files
+
   /deliveries/bulk/replace:
     post:
       operationId: replaceDeliveriesBulk
@@ -633,6 +785,17 @@ paths:
       responses:
         "204":
           description: Deleted
+        "404":
+          description: Доставка уже отсутствует
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error:
+                    type: string
+                    example: Доставка не найдена
 
   /deliveries/{id}/reschedule:
     post:
@@ -658,6 +821,32 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Delivery"
+
+  /deliveries/{id}/acts/download:
+    get:
+      operationId: downloadDeliveryActs
+      tags: [deliveries]
+      summary: Скачать ZIP всех актов доставки
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: ZIP archive
+          content:
+            application/zip:
+              schema:
+                type: string
+                format: binary
+        "403":
+          description: Forbidden
+        "404":
+          description: Delivery or acts not found
+        "413":
+          description: Too many act files
 
   /deliveries/{id}/approve-act:
     post:
@@ -736,6 +925,17 @@ paths:
       responses:
         "204":
           description: Deleted
+        "404":
+          description: Акт отсутствует или уже удалён
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error:
+                    type: string
+                    example: Акт не найден
 
   /sites/{id}/close:
     post:
@@ -978,6 +1178,36 @@ paths:
                 items:
                   $ref: "#/components/schemas/DeliverySiteLookup"
 
+  /deliveries/type-lookup:
+    get:
+      tags: [deliveries]
+      operationId: listDeliveryTypeLookup
+      summary: List delivery types available to the deliveries workspace
+      responses:
+        "200":
+          description: Delivery type lookup rows
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/DeliveryTypeEntry"
+
+  /lookups/site-branches:
+    get:
+      operationId: listSiteBranchLookup
+      tags: [sites]
+      summary: List distinct nonblank site branches
+      responses:
+        "200":
+          description: Site branch lookup values
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SiteBranchLookup"
+
   /lookups/receipt-products:
     get:
       tags: [goods-receipts]
@@ -1212,7 +1442,7 @@ paths:
     patch:
       operationId: updateUserRole
       tags: [users]
-      summary: Update a user's role and assigned sections (admin only)
+      summary: Update a user's profile, email, role and assigned sections (admin only)
       parameters:
         - name: id
           in: path
@@ -1232,6 +1462,68 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/AppUser"
+        "400":
+          description: Invalid user update
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: User not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Email address is already in use
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: User update failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "502":
+          description: Authentication provider update failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /users/{id}/impersonation-token:
+    post:
+      operationId: createUserImpersonationToken
+      tags: [users]
+      summary: Create a short-lived Clerk actor ticket for an admin to enter a user account
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: One-time actor ticket
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserImpersonationTicket"
+
+  /users/impersonation/return-url:
+    post:
+      operationId: createImpersonationReturnUrl
+      tags: [users]
+      summary: Create a short-lived sign-in ticket back to the actor administrator
+      responses:
+        "200":
+          description: One-time administrator return ticket
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserImpersonationTicket"
 
   /admin/clear-data:
     post:
@@ -1650,6 +1942,12 @@ paths:
       responses:
         "204":
           description: Deleted
+        "409":
+          description: Client deletion is blocked by related records
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeleteClientConflict"
 
   /orders:
     get:
@@ -1970,6 +2268,15 @@ paths:
 
 components:
   schemas:
+    UserImpersonationTicket:
+      type: object
+      required: [token]
+      properties:
+        token:
+          type: string
+          minLength: 1
+          description: Short-lived, one-time Clerk ticket
+
     HealthStatus:
       type: object
       properties:
@@ -2291,7 +2598,11 @@ components:
           description: Торговое название объекта (необязательно; непустое значение строго из справочника trade_names)
         client:
           type: string
-          description: Клиент
+          description: Отображаемое название клиента, сохранённое вместе с объектом
+        clientId:
+          type: string
+          format: uuid
+          description: Стабильная обязательная связь с клиентом
         manager:
           type: string
           description: Закреплённый менеджер
@@ -2314,6 +2625,9 @@ components:
         deliveryType:
           type: string
           description: Тип поставки (из справочника delivery_types; может быть пустым)
+        features:
+          type: string
+          description: Особенности работы объекта или подъезда большой машины
         closedFrom:
           type: string
           format: date
@@ -2343,6 +2657,7 @@ components:
         - branch
         - customer
         - client
+        - clientId
         - manager
         - managerContact
         - director
@@ -2350,6 +2665,7 @@ components:
         - driverUserId
         - driver
         - deliveryType
+        - features
         - closedFrom
         - reopenDate
         - closureReason
@@ -2357,7 +2673,42 @@ components:
         - isClosed
         - createdAt
 
-    CreateSiteInput:
+    SiteBranchLookup:
+      type: object
+      properties:
+        name:
+          type: string
+      required: [name]
+
+    DeleteClientConflict:
+      type: object
+      properties:
+        error:
+          type: string
+        code:
+          type: string
+          enum: [CLIENT_HAS_SITES, CLIENT_HAS_ORDERS]
+        blockingSites:
+          type: object
+          properties:
+            count:
+              type: integer
+              minimum: 1
+            preview:
+              type: array
+              maxItems: 3
+              items:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  name:
+                    type: string
+                required: [id, name]
+          required: [count, preview]
+      required: [error, code]
+
+    SiteWriteInputBase:
       type: object
       properties:
         name:
@@ -2366,11 +2717,9 @@ components:
           type: string
         branch:
           type: string
-        customer:
+        clientId:
           type: string
-          description: Необязательное торговое название объекта
-        client:
-          type: string
+          format: uuid
         manager:
           type: string
         managerContact:
@@ -2384,14 +2733,40 @@ components:
           format: uuid
         deliveryType:
           type: string
+        features:
+          type: string
       required:
         - name
         - address
         - branch
-        - client
+        - clientId
         - manager
         - director
         - project
+
+    CreateSiteInput:
+      allOf:
+        - $ref: "#/components/schemas/SiteWriteInputBase"
+        - type: object
+          properties:
+            customer:
+              type: string
+              minLength: 1
+              pattern: '.*\S.*'
+              description: Обязательное непустое торговое название объекта из справочника
+          required: [customer]
+
+    BulkSiteInput:
+      allOf:
+        - $ref: "#/components/schemas/SiteWriteInputBase"
+        - type: object
+          properties:
+            customer:
+              type: string
+              description: Необязательное торговое название объекта
+            id:
+              type: string
+              format: uuid
 
     UpdateSiteInput:
       type: object
@@ -2404,8 +2779,9 @@ components:
           type: string
         customer:
           type: string
-        client:
+        clientId:
           type: string
+          format: uuid
         manager:
           type: string
         managerContact:
@@ -2419,6 +2795,107 @@ components:
           format: uuid
         deliveryType:
           type: string
+        features:
+          type: string
+      minProperties: 1
+      required:
+        - clientId
+
+    UpdateSiteFeaturesInput:
+      type: object
+      additionalProperties: false
+      properties:
+        features:
+          type: string
+      required:
+        - features
+
+    SiteChangeProposal:
+      type: object
+      minProperties: 1
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+        address:
+          type: string
+        branch:
+          type: string
+        customer:
+          type: string
+        clientId:
+          type: string
+          format: uuid
+        manager:
+          type: string
+        managerContact:
+          type: string
+        director:
+          type: string
+        project:
+          type: string
+        driverUserId:
+          type: [string, "null"]
+          format: uuid
+        deliveryType:
+          type: string
+
+    SiteChangeRequestStatus:
+      type: string
+      enum: [pending, approved, rejected]
+
+    SiteChangeRequest:
+      type: object
+      required:
+        - id
+        - siteId
+        - siteName
+        - authorUserId
+        - authorName
+        - authorEmail
+        - payload
+        - originalPayload
+        - status
+        - createdAt
+        - decidedAt
+        - decidedByUserId
+        - decidedByName
+        - decidedByEmail
+      properties:
+        id:
+          type: string
+          format: uuid
+        siteId:
+          type: [string, "null"]
+          format: uuid
+        siteName:
+          type: string
+        authorUserId:
+          type: [string, "null"]
+          format: uuid
+        authorName:
+          type: string
+        authorEmail:
+          type: string
+        payload:
+          $ref: "#/components/schemas/SiteChangeProposal"
+        originalPayload:
+          $ref: "#/components/schemas/SiteChangeProposal"
+        status:
+          $ref: "#/components/schemas/SiteChangeRequestStatus"
+        createdAt:
+          type: string
+          format: date-time
+        decidedAt:
+          type: [string, "null"]
+          format: date-time
+        decidedByUserId:
+          type: [string, "null"]
+          format: uuid
+        decidedByName:
+          type: [string, "null"]
+        decidedByEmail:
+          type: [string, "null"]
 
     DeliveryStatus:
       type: string
@@ -2443,6 +2920,9 @@ components:
           type: string
         siteAddress:
           type: string
+        managerContact:
+          type: [string, "null"]
+          description: Телефон менеджера объекта для связи с водителем
         driverUserId:
           type: [string, "null"]
           format: uuid
@@ -2452,6 +2932,13 @@ components:
           type: [string, "null"]
           format: date
           description: Плановая дата доставки (null, если дата ещё не назначена)
+        correctedPlannedDate:
+          type: [string, "null"]
+          format: date
+          description: Уточнённая плановая дата только для отчётности; не изменяет исходный план, график или показатели
+        deliveryType:
+          type: [string, "null"]
+          description: Тип поставки для этой доставки; null означает использовать значение объекта
         scheduleMonth:
           type: [string, "null"]
           pattern: '^\d{4}-(0[1-9]|1[0-2])$'
@@ -2472,6 +2959,11 @@ components:
         note:
           type: string
           nullable: true
+          description: Комментарий водителя; логист видит его только для чтения
+        logisticianNote:
+          type: string
+          nullable: true
+          description: Примечание логиста для водителя; водитель видит его только для чтения
         status:
           $ref: "#/components/schemas/DeliveryStatus"
         lagDays:
@@ -2510,6 +3002,7 @@ components:
         - actApprovedBy
         - workflowStatus
         - note
+        - logisticianNote
         - status
         - lagDays
         - rescheduledFromDate
@@ -2529,11 +3022,19 @@ components:
         plannedDate:
           type: [string, "null"]
           format: date
+        correctedPlannedDate:
+          type: [string, "null"]
+          format: date
+          description: Уточнённая плановая дата только для отчётности
+        actualDate:
+          type: [string, "null"]
+          format: date
+        deliveryType:
+          type: [string, "null"]
+          description: Тип поставки для этой доставки; null означает использовать значение объекта
         scheduleMonth:
           type: [string, "null"]
           pattern: '^\d{4}-(0[1-9]|1[0-2])$'
-        note:
-          type: string
       required: [siteId]
 
     CreateDeliveriesBulkInput:
@@ -2586,17 +3087,23 @@ components:
 
     UpdateDeliveryInput:
       type: object
+      additionalProperties: false
       properties:
         plannedDate:
           type: [string, "null"]
           format: date
+        correctedPlannedDate:
+          type: [string, "null"]
+          format: date
+          description: Уточнённая плановая дата только для отчётности; null очищает значение
         actualDate:
           type: string
           format: date
           nullable: true
-        note:
+        logisticianNote:
           type: string
           nullable: true
+          description: Примечание для водителя; изменять может только логист
         driverUserId:
           type: [string, "null"]
           format: uuid
@@ -2709,7 +3216,7 @@ components:
         items:
           type: array
           items:
-            $ref: "#/components/schemas/CreateSiteInput"
+            $ref: "#/components/schemas/BulkSiteInput"
       required: [items]
 
     TradeName:
@@ -2762,10 +3269,13 @@ components:
         contact:
           type: string
           nullable: true
+        siteCount:
+          type: integer
+          minimum: 0
         createdAt:
           type: string
           format: date-time
-      required: [id, name, contact, createdAt]
+      required: [id, name, contact, siteCount, createdAt]
 
     CreateClientInput:
       type: object
@@ -2790,7 +3300,16 @@ components:
     Section:
       type: string
       enum:
-        [products, receipts, sites, deliveries, clients, orders, shipments, inventory]
+        [
+          products,
+          receipts,
+          sites,
+          deliveries,
+          clients,
+          orders,
+          shipments,
+          inventory,
+        ]
 
     UserRole:
       type: string
@@ -2813,6 +3332,9 @@ components:
           nullable: true
         role:
           $ref: "#/components/schemas/UserRole"
+        isDriver:
+          type: boolean
+          description: Legacy-флаг водительской учётной записи
         editableSections:
           type: array
           description: Разделы, доступные пользователю
@@ -2827,7 +3349,19 @@ components:
         createdAt:
           type: string
           format: date-time
-      required: [id, clerkUserId, email, name, phone, role, editableSections, assignedSiteIds, createdAt]
+      required:
+        [
+          id,
+          clerkUserId,
+          email,
+          name,
+          phone,
+          role,
+          isDriver,
+          editableSections,
+          assignedSiteIds,
+          createdAt,
+        ]
 
     DriverUser:
       type: object
@@ -2875,13 +3409,17 @@ components:
               description: Время актуальной проверки группы; null у непроверенной группы.
             similarityReviewedByName:
               type: [string, "null"]
-              description: Имя проверившего администратора; null у непроверенной группы или после удаления его учётной записи.
+              description: Текущее или сохранённое историческое имя проверившего администратора; null у непроверенной группы или старой записи без снимка имени.
+            similarityReviewedByDeleted:
+              type: boolean
+              description: Учётная запись проверившего администратора была удалена. Для старой записи имя при этом может быть null.
           required:
             [
               similarityGroup,
               similarityReviewed,
               similarityReviewedAt,
               similarityReviewedByName,
+              similarityReviewedByDeleted,
             ]
 
     LegacyDriverSimilarityReviewInput:
@@ -2954,9 +3492,19 @@ components:
           minimum: 0
       required: [results, sitesUpdated, deliveriesUpdated, totalUpdated]
 
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+      required: [error]
+
     UpdateUserRoleInput:
       type: object
       properties:
+        email:
+          type: string
+          format: email
         name:
           type: string
           nullable: true
@@ -3028,7 +3576,18 @@ components:
           type: string
           format: date-time
       required:
-        [id, userId, userEmail, userName, method, entity, entityId, path, statusCode, createdAt]
+        [
+          id,
+          userId,
+          userEmail,
+          userName,
+          method,
+          entity,
+          entityId,
+          path,
+          statusCode,
+          createdAt,
+        ]
 
     AuditLogPage:
       type: object
@@ -3078,6 +3637,14 @@ components:
         status:
           type: string
           enum: [never, success, failed]
+        failureKind:
+          type: string
+          enum: [none, list_timeout, other]
+        consecutiveFailures:
+          type: integer
+          minimum: 0
+        hasRepeatedFailures:
+          type: boolean
         summary:
           anyOf:
             - $ref: "#/components/schemas/DeliveryUploadCleanupSummary"
@@ -3087,7 +3654,17 @@ components:
         isStale:
           type: boolean
       required:
-        [lastRunAt, lastSuccessfulRunAt, status, summary, staleAfterHours, isStale]
+        [
+          lastRunAt,
+          lastSuccessfulRunAt,
+          status,
+          failureKind,
+          consecutiveFailures,
+          hasRepeatedFailures,
+          summary,
+          staleAfterHours,
+          isStale,
+        ]
 
     MySiteSummary:
       type: object
@@ -3112,7 +3689,17 @@ components:
         overdue:
           type: integer
           description: Просрочено (дата прошла, факта нет)
-      required: [siteId, siteName, address, driverUserId, driver, planned, done, overdue]
+      required:
+        [
+          siteId,
+          siteName,
+          address,
+          driverUserId,
+          driver,
+          planned,
+          done,
+          overdue,
+        ]
 
     ClearAllDataResult:
       type: object
@@ -3446,7 +4033,8 @@ components:
         createdAt:
           type: string
           format: date-time
-      required: [id, deliveryId, objectPath, fileName, mimeType, uploadedBy, createdAt]
+      required:
+        [id, deliveryId, objectPath, fileName, mimeType, uploadedBy, createdAt]
 
     AddDeliveryPhotoInput:
       type: object
@@ -3601,7 +4189,21 @@ components:
           type: string
           format: date-time
       required:
-        [id, siteId, siteName, status, note, createdBy, decidedBy, decidedAt, decisionNote, doneBy, doneAt, items, createdAt]
+        [
+          id,
+          siteId,
+          siteName,
+          status,
+          note,
+          createdBy,
+          decidedBy,
+          decidedAt,
+          decisionNote,
+          doneBy,
+          doneAt,
+          items,
+          createdAt,
+        ]
 
     CreateInventoryRequestInput:
       type: object
@@ -3645,14 +4247,29 @@ components:
 
     DeliverySiteLookup:
       type: object
-      required: [id, name, address, branch, manager, deliveryType, client, driver, driverUserId, isClosed]
+      required:
+        [
+          id,
+          name,
+          address,
+          branch,
+          manager,
+          deliveryType,
+          features,
+          client,
+          driver,
+          driverUserId,
+          isClosed,
+        ]
       properties:
         id: { type: string, format: uuid }
         name: { type: string }
         address: { type: string }
         branch: { type: string }
         manager: { type: string }
+        managerContact: { type: string }
         deliveryType: { type: string }
+        features: { type: string }
         client: { type: string }
         driver: { type: string }
         driverUserId: { type: [string, "null"], format: uuid }
@@ -3667,7 +4284,20 @@ components:
 
     ReceiptProductLookup:
       type: object
-      required: [id, name, sku, unit, categoryId, purchasePrice, price, minStock, supplier, supplierContact, currentStock]
+      required:
+        [
+          id,
+          name,
+          sku,
+          unit,
+          categoryId,
+          purchasePrice,
+          price,
+          minStock,
+          supplier,
+          supplierContact,
+          currentStock,
+        ]
       properties:
         id: { type: string, format: uuid }
         name: { type: string }
@@ -3700,7 +4330,16 @@ components:
 
     ShipmentOrderItemLookup:
       type: object
-      required: [id, productId, productName, quantity, price, shippedQuantity, remainingQuantity]
+      required:
+        [
+          id,
+          productId,
+          productName,
+          quantity,
+          price,
+          shippedQuantity,
+          remainingQuantity,
+        ]
       properties:
         id: { type: string, format: uuid }
         productId: { type: string, format: uuid }
@@ -3723,7 +4362,16 @@ components:
 
     OrderShipmentLookup:
       type: object
-      required: [id, siteName, driver, shipmentDate, totalAmount, isDispatched, isDeleted]
+      required:
+        [
+          id,
+          siteName,
+          driver,
+          shipmentDate,
+          totalAmount,
+          isDispatched,
+          isDeleted,
+        ]
       properties:
         id: { type: string, format: uuid }
         siteName: { type: string }

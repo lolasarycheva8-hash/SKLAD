@@ -9,12 +9,12 @@
 /**
  * new — новая; approved — одобрена; rejected — отклонена; done — выдана
  */
-export type InventoryRequestStatus = typeof InventoryRequestStatus[keyof typeof InventoryRequestStatus];
-
+export type InventoryRequestStatus =
+  (typeof InventoryRequestStatus)[keyof typeof InventoryRequestStatus];
 
 export const InventoryRequestStatus = {
-  new: 'new',
-  approved: 'approved',
-  rejected: 'rejected',
-  done: 'done',
+  new: "new",
+  approved: "approved",
+  rejected: "rejected",
+  done: "done",
 } as const;

@@ -5,7 +5,7 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
-import type { OrderItemInput } from './orderItemInput';
+import type { OrderItemInput } from "./orderItemInput";
 
 export interface CreateOrderInput {
   clientId: string;

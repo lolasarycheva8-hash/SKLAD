@@ -100,7 +100,9 @@ export default function Audit() {
   const cleanupHealthState =
     cleanupHealth === undefined
       ? "loading"
-      : cleanupHealth.isStale
+      : cleanupHealth.hasRepeatedFailures
+        ? "repeated-failures"
+        : cleanupHealth.isStale
         ? "stale"
         : "fresh";
 
@@ -119,6 +121,24 @@ export default function Audit() {
         </p>
       </div>
 
+      {cleanupHealth?.hasRepeatedFailures && (
+        <Alert variant="destructive" data-testid="alert-delivery-upload-cleanup-failures">
+          <AlertTriangle className="h-4 w-4" />
+          <AlertTitle>Автоматическая сверка несколько раз завершилась с ошибкой</AlertTitle>
+          <AlertDescription>
+            Неудачных попыток подряд: {cleanupHealth.consecutiveFailures}.{" "}
+            {cleanupHealth.failureKind === "list_timeout"
+              ? "Хранилище не успело вернуть список файлов. Повторные попытки выполняются автоматически."
+              : "Проверьте состояние автоматической сверки."}{" "}
+            Последняя попытка:{" "}
+            {cleanupHealth.lastRunAt
+              ? formatDateTime(cleanupHealth.lastRunAt)
+              : "нет данных"}
+            .
+          </AlertDescription>
+        </Alert>
+      )}
+
       {cleanupHealth?.isStale && (
         <Alert variant="destructive" data-testid="alert-delivery-upload-cleanup">
           <AlertTriangle className="h-4 w-4" />
@@ -131,6 +151,13 @@ export default function Audit() {
             {cleanupHealth.lastRunAt
               ? formatDateTime(cleanupHealth.lastRunAt)
               : "нет данных"}
+            {cleanupHealth.failureKind === "list_timeout"
+              ? `. Хранилище не успело вернуть список файлов${
+                  cleanupHealth.consecutiveFailures > 1
+                    ? ` (${cleanupHealth.consecutiveFailures} попытки подряд)`
+                    : ""
+                }`
+              : ""}
             {cleanupHealth.summary
               ? `. Проверено: ${cleanupHealth.summary.scanned}, удалено: ${cleanupHealth.summary.deleted}${
                   cleanupHealth.summary.resumedPhotoDeletions > 0 ||

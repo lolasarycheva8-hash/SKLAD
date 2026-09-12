@@ -7,5 +7,5 @@
  */
 
 export type ListSitesParams = {
-search?: string;
+  search?: string;
 };

@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  buildDeliveryImportReview,
+  buildSkippedImportExportRows,
   canRescheduleDelivery,
   confirmPlannedDate,
   getDeliveryCellTone,
@@ -15,6 +17,50 @@ import {
   toDateInputValue,
   uploadDeliveryActsSequentially,
 } from "./delivery-workspace.ts";
+
+const importFixtureRows = [
+  {
+    Объект: "Объект Альфа",
+    Водитель: "Иван Водитель",
+    "Email водителя": "driver@example.test",
+    "Плановая дата": "2026-09-15",
+  },
+  {
+    Объект: "Объект Бета",
+    Водитель: "Иван Водитель",
+    "Email водителя": "driver@example.test",
+    "Плановая дата": "2026-10-02",
+  },
+  {
+    Объект: "Объект Альфа",
+    Водитель: "Иван Водитель",
+    "Email водителя": "driver@example.test",
+    "Плановая дата": "2026-09-15",
+  },
+  {
+    Объект: "Новый объект Гамма",
+    Водитель: "Иван Водитель",
+    "Email водителя": "driver@example.test",
+    "Плановая дата": "2026-09-18",
+  },
+  {
+    Объект: "Новый объект Дельта",
+    Водитель: "Иван Водитель",
+    "Email водителя": "driver@example.test",
+    "Плановая дата": "2026-09-19",
+  },
+];
+const importFixtureSites = [
+  { id: "site-alpha", name: "Объект Альфа", driverUserId: "driver-1" },
+  { id: "site-beta", name: "Объект Бета", driverUserId: "driver-1" },
+];
+const importFixtureDrivers = [
+  {
+    id: "driver-1",
+    name: "Иван Водитель",
+    email: "driver@example.test",
+  },
+];
 
 test("подтверждённая доставка без акта оранжевая в обеих вкладках", () => {
   const workspaceTone = getDeliveryCellTone("2026-09-05", 0);
@@ -123,6 +169,93 @@ test("parseImportPlannedDate отклоняет даты других месяц
   assert.deepEqual(parseImportPlannedDate("2026-10-15", "2026-09"), { valid: false });
   assert.deepEqual(parseImportPlannedDate("2026-09-35", "2026-09"), { valid: false });
   assert.deepEqual(parseImportPlannedDate("invalid", "2026-09"), { valid: false });
+});
+
+test("отчёт импорта сохраняет все пропуски и отправляет только допустимые строки", () => {
+  const review = buildDeliveryImportReview(
+    importFixtureRows,
+    "2026-09",
+    importFixtureSites,
+    importFixtureDrivers,
+  );
+
+  assert.deepEqual(review.items, [
+    {
+      siteId: "site-alpha",
+      driverUserId: "driver-1",
+      plannedDate: "2026-09-15",
+      scheduleMonth: "2026-09",
+    },
+  ]);
+  assert.deepEqual(
+    review.skippedRows.map(({ rowNumber, siteName, reasonCode, reason }) => ({
+      rowNumber,
+      siteName,
+      reasonCode,
+      reason,
+    })),
+    [
+      {
+        rowNumber: 3,
+        siteName: "Объект Бета",
+        reasonCode: "other_month",
+        reason:
+          "Дата 2026-10-02 относится к другому месяцу; выбран сентябрь 26",
+      },
+      {
+        rowNumber: 4,
+        siteName: "Объект Альфа",
+        reasonCode: "duplicate",
+        reason:
+          "Повтор объекта на 2026-09-15; загружена строка 2",
+      },
+      {
+        rowNumber: 5,
+        siteName: "Новый объект Гамма",
+        reasonCode: "missing_site",
+        reason: "Объект не найден в справочнике",
+      },
+      {
+        rowNumber: 6,
+        siteName: "Новый объект Дельта",
+        reasonCode: "missing_site",
+        reason: "Объект не найден в справочнике",
+      },
+    ],
+  );
+});
+
+test("выгрузка пропусков содержит все причины в порядке исходного Excel", () => {
+  const review = buildDeliveryImportReview(
+    importFixtureRows,
+    "2026-09",
+    importFixtureSites,
+    importFixtureDrivers,
+  );
+
+  assert.deepEqual(buildSkippedImportExportRows(review.skippedRows), [
+    {
+      Строка: 3,
+      Объект: "Объект Бета",
+      Причина:
+        "Дата 2026-10-02 относится к другому месяцу; выбран сентябрь 26",
+    },
+    {
+      Строка: 4,
+      Объект: "Объект Альфа",
+      Причина: "Повтор объекта на 2026-09-15; загружена строка 2",
+    },
+    {
+      Строка: 5,
+      Объект: "Новый объект Гамма",
+      Причина: "Объект не найден в справочнике",
+    },
+    {
+      Строка: 6,
+      Объект: "Новый объект Дельта",
+      Причина: "Объект не найден в справочнике",
+    },
+  ]);
 });
 
 test("несколько актов загружаются и прикрепляются строго последовательно", async () => {

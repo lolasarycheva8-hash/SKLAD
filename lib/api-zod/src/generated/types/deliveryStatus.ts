@@ -10,12 +10,12 @@
  * pending — план в будущем, факта нет; on_time — доставлено в срок или раньше;
  * late — доставлено позже плана; overdue — план уже прошёл, факта нет
  */
-export type DeliveryStatus = typeof DeliveryStatus[keyof typeof DeliveryStatus];
-
+export type DeliveryStatus =
+  (typeof DeliveryStatus)[keyof typeof DeliveryStatus];
 
 export const DeliveryStatus = {
-  pending: 'pending',
-  on_time: 'on_time',
-  late: 'late',
-  overdue: 'overdue',
+  pending: "pending",
+  on_time: "on_time",
+  late: "late",
+  overdue: "overdue",
 } as const;

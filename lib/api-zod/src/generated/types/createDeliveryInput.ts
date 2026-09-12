@@ -13,9 +13,20 @@ export interface CreateDeliveryInput {
   /** @nullable */
   plannedDate?: Date | null;
   /**
-     * @nullable
-     * @pattern ^\d{4}-(0[1-9]|1[0-2])$
-     */
+   * Уточнённая плановая дата только для отчётности
+   * @nullable
+   */
+  correctedPlannedDate?: Date | null;
+  /** @nullable */
+  actualDate?: Date | null;
+  /**
+   * Тип поставки для этой доставки; null означает использовать значение объекта
+   * @nullable
+   */
+  deliveryType?: string | null;
+  /**
+   * @nullable
+   * @pattern ^\d{4}-(0[1-9]|1[0-2])$
+   */
   scheduleMonth?: string | null;
-  note?: string;
 }

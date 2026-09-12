@@ -39,6 +39,12 @@ Acquire the cross-instance cleanup lock before listing App Storage objects.
 
 **How to apply:** In live cleanup, return immediately when the global try-lock loses; only the winner may call the storage listing API. Keep a test that asserts the losing path performs no list operation.
 
+Bound the App Storage listing call with a timeout while the global lock is held. A timeout must fail the run, release the session lock, and fence the late listing result from reconciliation.
+
+**Why:** A hanging list call otherwise blocks all cleanup instances indefinitely; allowing its late result to continue after unlock would run reconciliation without cross-instance ownership.
+
+**How to apply:** Race the awaited listing against a bounded timer inside the lock callback, persist the attempt as failed, and test that a later run succeeds while resolving the old promise produces no reference reads or deletes.
+
 When cleanup needs independent database commits, hold its global advisory lock at session scope and execute every local transaction through that same database client.
 
 **Why:** A transaction-scoped global lock cannot survive per-object commits, while holding it on one pool connection and opening work on another self-deadlocks when the supported pool size is one.

@@ -6,16 +6,15 @@
  * OpenAPI spec version: 0.1.0
  */
 
-export type Section = typeof Section[keyof typeof Section];
-
+export type Section = (typeof Section)[keyof typeof Section];
 
 export const Section = {
-  products: 'products',
-  receipts: 'receipts',
-  sites: 'sites',
-  deliveries: 'deliveries',
-  clients: 'clients',
-  orders: 'orders',
-  shipments: 'shipments',
-  inventory: 'inventory',
+  products: "products",
+  receipts: "receipts",
+  sites: "sites",
+  deliveries: "deliveries",
+  clients: "clients",
+  orders: "orders",
+  shipments: "shipments",
+  inventory: "inventory",
 } as const;

@@ -20,6 +20,10 @@ author = "agent"
 task = "workflow.run"
 args = "roles-smoke"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "release-structure"
+
 [[workflows.workflow]]
 name = "roles-smoke"
 author = "agent"
@@ -27,6 +31,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "pnpm run test:release:roles"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "release-structure"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "pnpm run test:release:structure"
 
 [workflows.workflow.metadata]
 isValidation = true

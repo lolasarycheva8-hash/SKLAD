@@ -5,10 +5,11 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
-import type { Section } from './section';
-import type { UserRole } from './userRole';
+import type { Section } from "./section";
+import type { UserRole } from "./userRole";
 
 export interface UpdateUserRoleInput {
+  email?: string;
   name?: string | null;
   phone?: string | null;
   role: UserRole;

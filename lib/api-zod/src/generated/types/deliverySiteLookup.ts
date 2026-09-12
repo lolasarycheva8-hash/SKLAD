@@ -12,7 +12,9 @@ export interface DeliverySiteLookup {
   address: string;
   branch: string;
   manager: string;
+  managerContact?: string;
   deliveryType: string;
+  features: string;
   client: string;
   driver: string;
   /** @nullable */

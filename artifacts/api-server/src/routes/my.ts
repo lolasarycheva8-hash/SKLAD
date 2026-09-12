@@ -14,6 +14,7 @@ import {
 } from "@workspace/api-zod";
 import { toDeliveryDto, todayLocalISO, photosCountMap } from "../lib/deliveries";
 import { getMyDeliveriesAccess } from "../lib/my-deliveries-access";
+import { isDriverUser } from "../lib/user-roles";
 import { requireDriver } from "../middlewares/requirePermission";
 
 const router: IRouter = Router();
@@ -64,6 +65,7 @@ router.get("/my/deliveries", async (req, res): Promise<void> => {
       delivery: deliveriesTable,
       siteName: sitesTable.name,
       siteAddress: sitesTable.address,
+      managerContact: sitesTable.managerContact,
       driverName: appUsersTable.name,
       driverEmail: appUsersTable.email,
     })
@@ -83,6 +85,7 @@ router.get("/my/deliveries", async (req, res): Promise<void> => {
           row.siteAddress,
           counts.get(row.delivery.id) ?? 0,
           row.driverName || row.driverEmail || "Не назначен",
+          row.managerContact || null,
         ),
       ),
     ),
@@ -97,9 +100,7 @@ router.post("/my/deliveries/:id/done", async (req, res): Promise<void> => {
   }
 
   const driverUserId =
-    req.appUser?.role === "driver" || req.appUser?.isDriver
-      ? req.appUser.id
-      : null;
+    req.appUser && isDriverUser(req.appUser) ? req.appUser.id : null;
   if (!driverUserId) {
     res.status(403).json({ error: "Только пользователь-водитель может отметить доставку" });
     return;
@@ -181,9 +182,7 @@ router.patch("/my/deliveries/:id/comment", async (req, res): Promise<void> => {
   }
 
   const driverUserId =
-    req.appUser?.role === "driver" || req.appUser?.isDriver
-      ? req.appUser.id
-      : null;
+    req.appUser && isDriverUser(req.appUser) ? req.appUser.id : null;
   if (!driverUserId) {
     res.status(403).json({ error: "Только активный водитель может изменить комментарий" });
     return;
@@ -206,7 +205,11 @@ router.patch("/my/deliveries/:id/comment", async (req, res): Promise<void> => {
       })
       .from(deliveriesTable)
       .where(eq(deliveriesTable.id, params.data.id));
-    if (!current || current.driverUserId !== driverUserId) {
+    if (!current) {
+      res.status(404).json({ error: "Доставка не найдена" });
+      return;
+    }
+    if (current.driverUserId !== driverUserId) {
       res.status(403).json({ error: "Доставка не назначена этому водителю" });
       return;
     }

@@ -1,4 +1,5 @@
 import { Router, type IRouter } from "express";
+import { Readable } from "node:stream";
 import {
   and,
   eq,
@@ -15,6 +16,7 @@ import {
   db,
   deliveriesTable,
   deliveryPhotosTable,
+  deliveryTypesTable,
   sitesTable,
   appUsersTable,
 } from "@workspace/db";
@@ -45,8 +47,10 @@ import {
   AddDeliveryPhotoResponse,
   DeleteDeliveryPhotoParams,
   ListDeliverySiteLookupResponse,
+  ListDeliveryTypeLookupResponse,
 } from "@workspace/api-zod";
 import { toDeliveryDto, monthRange, photosCountMap } from "../lib/deliveries";
+import { isPostgresConstraintError } from "../lib/postgres-errors";
 import {
   requireAdmin,
   requireDeliveryActApproval,
@@ -56,6 +60,7 @@ import {
 import { ObjectStorageService } from "../lib/objectStorage";
 import {
   canAccessDeliveryActs,
+  canApproveDeliveryActs,
   canEditDeliveries as canUserEditDeliveries,
   canUploadDeliveryActs,
   isAllowedDeliveryActMimeType,
@@ -63,12 +68,290 @@ import {
   isDeliveryActAlreadyAttached,
   isUploadObjectPath,
 } from "../lib/delivery-acts";
+import {
+  MAX_DELIVERY_ACT_FILES,
+  isRealIsoDate,
+  preflightDeliveryActObjects,
+  streamDeliveryActsZip,
+  validateDeliveryActDateRange,
+  type DeliveryActArchiveItem,
+} from "../lib/delivery-act-download";
 import { findInvalidDriverUserIds } from "../lib/drivers";
 import { acquireDeliveryUploadLock } from "../lib/delivery-upload-lock";
+import { createStorageFailureLogFields } from "../lib/storage-log-sanitizer";
 
 const router: IRouter = Router();
 const canEditDeliveries = requirePermission("deliveries");
 const objectStorageService = new ObjectStorageService();
+
+function zipDownloadHeaders(fileName: string) {
+  return {
+    "Content-Type": "application/zip",
+    "Content-Disposition": `attachment; filename="delivery-acts.zip"; filename*=UTF-8''${encodeURIComponent(fileName)}`,
+    "Cache-Control": "no-store",
+    "X-Content-Type-Options": "nosniff",
+  };
+}
+
+function sendArchiveError(
+  req: Parameters<typeof canEditDeliveries>[0],
+  res: Parameters<typeof canEditDeliveries>[1],
+  status: number,
+  message: string,
+): void {
+  if (req.method === "HEAD") {
+    res
+      .status(status)
+      .set("X-Download-Error", encodeURIComponent(message))
+      .set("Cache-Control", "no-store")
+      .end();
+    return;
+  }
+  for (const header of [
+    "Content-Disposition",
+    "Content-Type",
+    "Content-Length",
+    "Transfer-Encoding",
+  ]) {
+    res.removeHeader(header);
+  }
+  res
+    .status(status)
+    .set("Cache-Control", "no-store")
+    .set("X-Content-Type-Options", "nosniff")
+    .json({ error: message });
+}
+
+async function sendActsArchive(
+  req: Parameters<typeof canEditDeliveries>[0],
+  res: Parameters<typeof canEditDeliveries>[1],
+  items: DeliveryActArchiveItem[],
+  fileName: string,
+): Promise<void> {
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  req.once("aborted", abort);
+  res.once("close", abort);
+  try {
+    res.set(zipDownloadHeaders(fileName));
+    await streamDeliveryActsZip(
+      items,
+      res,
+      async (item, signal) => {
+        if (signal.aborted)
+          throw new DOMException("Download aborted", "AbortError");
+        const file = await objectStorageService.getObjectEntityFile(
+          item.objectPath,
+        );
+        if (signal.aborted)
+          throw new DOMException("Download aborted", "AbortError");
+        const response = await objectStorageService.downloadObject(file, 0);
+        if (!response.body) throw new Error("Object download returned no body");
+        const stream = Readable.fromWeb(
+          response.body as import("node:stream/web").ReadableStream,
+        );
+        if (signal.aborted) {
+          stream.destroy();
+          throw new DOMException("Download aborted", "AbortError");
+        }
+        return stream;
+      },
+      controller.signal,
+    );
+  } catch (error) {
+    if (!controller.signal.aborted) {
+      req.log?.error(
+        {
+          operation: "download-delivery-acts",
+          errorName: error instanceof Error ? error.name : "UnknownError",
+        },
+        "Failed to stream delivery acts archive",
+      );
+      if (res.headersSent) res.destroy();
+      else
+        sendArchiveError(req, res, 502, "Не удалось сформировать архив актов");
+    }
+  } finally {
+    req.removeListener("aborted", abort);
+    res.removeListener("close", abort);
+  }
+}
+
+async function preflightActs(
+  req: Parameters<typeof canEditDeliveries>[0],
+  res: Parameters<typeof canEditDeliveries>[1],
+  items: DeliveryActArchiveItem[],
+): Promise<boolean> {
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  req.once("aborted", abort);
+  res.once("close", abort);
+  try {
+    await preflightDeliveryActObjects(
+      items,
+      async (item, signal) => {
+        if (signal.aborted)
+          throw new DOMException("Download aborted", "AbortError");
+        await objectStorageService.getObjectEntityFile(item.objectPath);
+        if (signal.aborted)
+          throw new DOMException("Download aborted", "AbortError");
+      },
+      controller.signal,
+    );
+    return true;
+  } catch {
+    return false;
+  } finally {
+    req.removeListener("aborted", abort);
+    res.removeListener("close", abort);
+  }
+}
+
+router.get("/deliveries/acts/download", async (req, res): Promise<void> => {
+  if (!canApproveDeliveryActs(req.appUser)) {
+    sendArchiveError(req, res, 403, "Нет прав выгружать акты за период");
+    return;
+  }
+  const range = validateDeliveryActDateRange(req.query.from, req.query.to);
+  if (!range.success) {
+    sendArchiveError(req, res, 400, range.error);
+    return;
+  }
+  const rows = await db
+    .select({
+      objectPath: deliveryPhotosTable.objectPath,
+      fileName: deliveryPhotosTable.fileName,
+      actualDate: deliveriesTable.actualDate,
+      siteName: sitesTable.name,
+    })
+    .from(deliveryPhotosTable)
+    .innerJoin(
+      deliveriesTable,
+      eq(deliveryPhotosTable.deliveryId, deliveriesTable.id),
+    )
+    .innerJoin(sitesTable, eq(deliveriesTable.siteId, sitesTable.id))
+    .where(
+      and(
+        gte(deliveriesTable.actualDate, range.from),
+        lte(deliveriesTable.actualDate, range.to),
+        isNull(deliveriesTable.deletionPendingAt),
+        isNull(deliveryPhotosTable.deletionPendingAt),
+      ),
+    )
+    .orderBy(
+      deliveriesTable.actualDate,
+      deliveriesTable.id,
+      deliveryPhotosTable.createdAt,
+      deliveryPhotosTable.id,
+    )
+    .limit(MAX_DELIVERY_ACT_FILES + 1);
+  if (rows.length === 0) {
+    sendArchiveError(req, res, 404, "За выбранный период акты не найдены");
+    return;
+  }
+  if (rows.length > MAX_DELIVERY_ACT_FILES) {
+    sendArchiveError(
+      req,
+      res,
+      413,
+      "В архиве больше 2000 актов. Сократите период",
+    );
+    return;
+  }
+  if (req.method === "HEAD") {
+    if (!(await preflightActs(req, res, rows))) {
+      sendArchiveError(req, res, 502, "Не удалось подготовить архив актов");
+      return;
+    }
+    res
+      .status(200)
+      .set(zipDownloadHeaders(`акты-${range.from}-${range.to}.zip`))
+      .end();
+    return;
+  }
+  await sendActsArchive(req, res, rows, `акты-${range.from}-${range.to}.zip`);
+});
+
+router.get("/deliveries/:id/acts/download", async (req, res): Promise<void> => {
+  const params = ListDeliveryPhotosParams.safeParse(req.params);
+  if (!params.success) {
+    sendArchiveError(req, res, 400, params.error.message);
+    return;
+  }
+  const [delivery] = await db
+    .select({
+      id: deliveriesTable.id,
+      driverUserId: deliveriesTable.driverUserId,
+      actualDate: deliveriesTable.actualDate,
+      siteName: sitesTable.name,
+    })
+    .from(deliveriesTable)
+    .innerJoin(sitesTable, eq(deliveriesTable.siteId, sitesTable.id))
+    .where(
+      and(
+        eq(deliveriesTable.id, params.data.id),
+        isNull(deliveriesTable.deletionPendingAt),
+      ),
+    )
+    .limit(1);
+  if (!delivery) {
+    sendArchiveError(req, res, 404, "Доставка не найдена");
+    return;
+  }
+  if (!canAccessDeliveryActs(req.appUser, delivery.driverUserId)) {
+    sendArchiveError(
+      req,
+      res,
+      403,
+      "Нет прав просматривать акты этой доставки",
+    );
+    return;
+  }
+  const photos = await db
+    .select({
+      objectPath: deliveryPhotosTable.objectPath,
+      fileName: deliveryPhotosTable.fileName,
+    })
+    .from(deliveryPhotosTable)
+    .where(
+      and(
+        eq(deliveryPhotosTable.deliveryId, delivery.id),
+        isNull(deliveryPhotosTable.deletionPendingAt),
+      ),
+    )
+    .orderBy(deliveryPhotosTable.createdAt, deliveryPhotosTable.id)
+    .limit(MAX_DELIVERY_ACT_FILES + 1);
+  if (photos.length === 0) {
+    sendArchiveError(req, res, 404, "У доставки нет актов");
+    return;
+  }
+  if (photos.length > MAX_DELIVERY_ACT_FILES) {
+    sendArchiveError(req, res, 413, "В архиве больше 2000 актов");
+    return;
+  }
+  if (req.method === "HEAD") {
+    const items = photos.map((photo) => ({
+      ...photo,
+      actualDate: delivery.actualDate,
+      siteName: delivery.siteName,
+    }));
+    if (!(await preflightActs(req, res, items))) {
+      sendArchiveError(req, res, 502, "Не удалось подготовить архив актов");
+      return;
+    }
+    res
+      .status(200)
+      .set(zipDownloadHeaders(`акты-доставки-${delivery.id}.zip`))
+      .end();
+    return;
+  }
+  const items = photos.map((photo) => ({
+    ...photo,
+    actualDate: delivery.actualDate,
+    siteName: delivery.siteName,
+  }));
+  await sendActsArchive(req, res, items, `акты-доставки-${delivery.id}.zip`);
+});
 
 router.get(
   "/deliveries/site-lookup",
@@ -81,7 +364,9 @@ router.get(
         address: sitesTable.address,
         branch: sitesTable.branch,
         manager: sitesTable.manager,
+        managerContact: sitesTable.managerContact,
         deliveryType: sitesTable.deliveryType,
+        features: sitesTable.features,
         client: sitesTable.client,
         driverUserId: sitesTable.driverUserId,
         isClosed: sql<boolean>`${sitesTable.closedFrom} is not null`,
@@ -110,7 +395,9 @@ router.get(
           ...row,
           branch: row.branch ?? "",
           manager: row.manager ?? "",
+          managerContact: row.managerContact ?? "",
           deliveryType: row.deliveryType ?? "",
+          features: row.features ?? "",
           client: row.client ?? "",
           driver: row.driverUserId
             ? (driverNames.get(row.driverUserId) ?? "Не назначен")
@@ -121,8 +408,91 @@ router.get(
   },
 );
 
+router.get(
+  "/deliveries/type-lookup",
+  requireSectionAccess("deliveries"),
+  async (_req, res): Promise<void> => {
+    const rows = await db
+      .select()
+      .from(deliveryTypesTable)
+      .orderBy(deliveryTypesTable.name);
+    res.json(ListDeliveryTypeLookupResponse.parse(rows));
+  },
+);
+
 function dateString(value: Date | null | undefined): string | null {
   return value ? value.toISOString().slice(0, 10) : null;
+}
+
+function hasInvalidCreateDate(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  return ["plannedDate", "actualDate", "correctedPlannedDate"].some((field) => {
+    const date = (value as Record<string, unknown>)[field];
+    return (
+      date !== undefined &&
+      date !== null &&
+      (typeof date !== "string" || !isRealIsoDate(date))
+    );
+  });
+}
+
+function hasInvalidCreateDates(body: unknown, bulk: boolean): boolean {
+  if (!bulk) return hasInvalidCreateDate(body);
+  if (
+    typeof body !== "object" ||
+    body === null ||
+    !Array.isArray((body as { items?: unknown }).items)
+  ) {
+    return false;
+  }
+  return (body as { items: unknown[] }).items.some(hasInvalidCreateDate);
+}
+
+async function findUnknownDeliveryTypes(
+  values: Array<string | null | undefined>,
+): Promise<string[]> {
+  const requested = [
+    ...new Set(
+      values
+        .filter(
+          (value): value is string => value !== null && value !== undefined,
+        )
+        .map((value) => value.trim()),
+    ),
+  ];
+  if (requested.length === 0) return [];
+  const existing = await db
+    .select({ name: deliveryTypesTable.name })
+    .from(deliveryTypesTable)
+    .where(inArray(deliveryTypesTable.name, requested));
+  const existingNames = new Set(existing.map((row) => row.name));
+  return requested.filter((name) => !existingNames.has(name));
+}
+
+function deliveryTypeError(unknown: string[]): string {
+  return `Неизвестный тип поставки: ${unknown.join(", ")}`;
+}
+
+function createDatesError(
+  plannedDate: string | null,
+  actualDate: string | null,
+  correctedPlannedDate: string | null,
+  scheduleMonth: string | null,
+): string | null {
+  if (actualDate && !plannedDate) {
+    return "Сначала назначьте плановую дату доставки";
+  }
+  if (
+    actualDate &&
+    plannedDate &&
+    !isDateInPlannedMonth(plannedDate, actualDate, scheduleMonth)
+  ) {
+    return "Фактическая дата должна быть в том же месяце, что и плановая";
+  }
+  if (correctedPlannedDate && !plannedDate) {
+    return "Сначала назначьте исходную плановую дату доставки";
+  }
+  return null;
 }
 
 function effectiveMonth(
@@ -132,13 +502,22 @@ function effectiveMonth(
   return scheduleMonth ?? plannedDate?.slice(0, 7) ?? null;
 }
 
-function isUniqueViolation(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    error.code === "23505"
+const DELIVERY_UNIQUE_CONSTRAINTS = new Set([
+  "deliveries_owned_dated_uq",
+  "deliveries_owned_undated_uq",
+]);
+
+export function isDeliveryScheduleUniqueViolation(error: unknown): boolean {
+  return [...DELIVERY_UNIQUE_CONSTRAINTS].some((constraint) =>
+    isPostgresConstraintError(error, { code: "23505", constraint }),
   );
+}
+
+function isDeliveryDriverForeignKeyViolation(error: unknown): boolean {
+  return isPostgresConstraintError(error, {
+    code: "23503",
+    constraint: "deliveries_driver_user_id_app_users_id_fk",
+  });
 }
 
 function monthCondition(month: string) {
@@ -188,7 +567,11 @@ async function cleanupRejectedObject(
     });
   } catch (error) {
     req.log?.error(
-      { err: error, objectPath },
+      createStorageFailureLogFields({
+        operation: "delete-rejected-delivery-act",
+        error,
+        objectPath,
+      }),
       "Failed to clean up rejected delivery act object",
     );
   }
@@ -216,7 +599,11 @@ async function deleteAttachedObject(
     return true;
   } catch (error) {
     req.log?.error(
-      { err: error, objectPath },
+      createStorageFailureLogFields({
+        operation: "delete-delivery-act-object",
+        error,
+        objectPath,
+      }),
       "Failed to delete delivery act object",
     );
     return false;
@@ -293,6 +680,12 @@ router.post(
   "/deliveries",
   canEditDeliveries,
   async (req, res): Promise<void> => {
+    if (hasInvalidCreateDates(req.body, false)) {
+      res.status(400).json({
+        error: "Даты должны быть корректными датами в формате YYYY-MM-DD",
+      });
+      return;
+    }
     const parsed = CreateDeliveryBody.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: parsed.error.message });
@@ -316,20 +709,43 @@ router.post(
       return;
     }
     const plannedDate = dateString(parsed.data.plannedDate);
+    const actualDate = dateString(parsed.data.actualDate);
+    const correctedPlannedDate = dateString(parsed.data.correctedPlannedDate);
     const scheduleMonth =
       parsed.data.scheduleMonth ?? plannedDate?.slice(0, 7) ?? null;
     if (!scheduleMonth) {
-      res
-        .status(400)
-        .json({
-          error: "Для доставки без даты необходимо указать месяц графика",
-        });
+      res.status(400).json({
+        error: "Для доставки без даты необходимо указать месяц графика",
+      });
       return;
     }
     if (plannedDate && plannedDate.slice(0, 7) !== scheduleMonth) {
       res
         .status(400)
         .json({ error: "Плановая дата должна относиться к месяцу графика" });
+      return;
+    }
+    const datesError = createDatesError(
+      plannedDate,
+      actualDate,
+      correctedPlannedDate,
+      scheduleMonth,
+    );
+    if (datesError) {
+      res
+        .status(
+          (actualDate && !plannedDate) || (correctedPlannedDate && !plannedDate)
+            ? 409
+            : 400,
+        )
+        .json({ error: datesError });
+      return;
+    }
+    const unknownTypes = await findUnknownDeliveryTypes([
+      parsed.data.deliveryType,
+    ]);
+    if (unknownTypes.length > 0) {
+      res.status(400).json({ error: deliveryTypeError(unknownTypes) });
       return;
     }
 
@@ -341,12 +757,20 @@ router.post(
           siteId: parsed.data.siteId,
           driverUserId: parsed.data.driverUserId ?? null,
           plannedDate,
+          correctedPlannedDate,
+          actualDate,
+          deliveryType: parsed.data.deliveryType?.trim() ?? null,
           scheduleMonth,
-          note: parsed.data.note ?? null,
         })
         .returning();
     } catch (error) {
-      if (isUniqueViolation(error)) {
+      if (isDeliveryDriverForeignKeyViolation(error)) {
+        res
+          .status(400)
+          .json({ error: "Выбранный пользователь не является водителем" });
+        return;
+      }
+      if (isDeliveryScheduleUniqueViolation(error)) {
         res.status(409).json({ error: "Такая строка графика уже существует" });
         return;
       }
@@ -371,8 +795,14 @@ router.post(
 
 router.post(
   "/deliveries/bulk",
-  canEditDeliveries,
+  requireAdmin,
   async (req, res): Promise<void> => {
+    if (hasInvalidCreateDates(req.body, true)) {
+      res.status(400).json({
+        error: "Даты должны быть корректными датами в формате YYYY-MM-DD",
+      });
+      return;
+    }
     const parsed = CreateDeliveriesBulkBody.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: parsed.error.message });
@@ -402,11 +832,9 @@ router.post(
         )
       ).length > 0
     ) {
-      res
-        .status(400)
-        .json({
-          error: "Один или несколько пользователей не являются водителями",
-        });
+      res.status(400).json({
+        error: "Один или несколько пользователей не являются водителями",
+      });
       return;
     }
     const normalizedItems = parsed.data.items.map((item) => {
@@ -414,15 +842,47 @@ router.post(
       return {
         ...item,
         plannedDate,
+        actualDate: dateString(item.actualDate),
+        correctedPlannedDate: dateString(item.correctedPlannedDate),
+        deliveryType: item.deliveryType?.trim() ?? null,
         scheduleMonth: item.scheduleMonth ?? plannedDate?.slice(0, 7) ?? null,
       };
     });
     if (normalizedItems.some((item) => !item.scheduleMonth)) {
+      res.status(400).json({
+        error: "Для доставки без даты необходимо указать месяц графика",
+      });
+      return;
+    }
+    const invalidDates = normalizedItems
+      .map((item) =>
+        createDatesError(
+          item.plannedDate,
+          item.actualDate,
+          item.correctedPlannedDate,
+          item.scheduleMonth,
+        ),
+      )
+      .find((error) => error !== null);
+    if (invalidDates) {
       res
-        .status(400)
-        .json({
-          error: "Для доставки без даты необходимо указать месяц графика",
-        });
+        .status(
+          normalizedItems.some(
+            (item) =>
+              !item.plannedDate &&
+              (item.actualDate || item.correctedPlannedDate),
+          )
+            ? 409
+            : 400,
+        )
+        .json({ error: invalidDates });
+      return;
+    }
+    const unknownTypes = await findUnknownDeliveryTypes(
+      normalizedItems.map((item) => item.deliveryType),
+    );
+    if (unknownTypes.length > 0) {
+      res.status(400).json({ error: deliveryTypeError(unknownTypes) });
       return;
     }
     if (
@@ -471,8 +931,10 @@ router.post(
           siteId: item.siteId,
           driverUserId: item.driverUserId ?? null,
           plannedDate: item.plannedDate,
+          correctedPlannedDate: item.correctedPlannedDate,
+          actualDate: item.actualDate,
+          deliveryType: item.deliveryType,
           scheduleMonth: item.scheduleMonth!,
-          note: item.note ?? null,
         })),
       )
       .returning();
@@ -574,8 +1036,14 @@ router.post(
 
 router.post(
   "/deliveries/bulk/replace",
-  canEditDeliveries,
+  requireAdmin,
   async (req, res): Promise<void> => {
+    if (hasInvalidCreateDates(req.body, true)) {
+      res.status(400).json({
+        error: "Даты должны быть корректными датами в формате YYYY-MM-DD",
+      });
+      return;
+    }
     const parsed = ReplaceDeliveriesBulkBody.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: parsed.error.message });
@@ -589,11 +1057,9 @@ router.post(
       );
     });
     if (itemsOutsideMonth.length > 0) {
-      res
-        .status(400)
-        .json({
-          error: "Все плановые даты должны относиться к выбранному месяцу",
-        });
+      res.status(400).json({
+        error: "Все плановые даты должны относиться к выбранному месяцу",
+      });
       return;
     }
 
@@ -619,11 +1085,50 @@ router.post(
         )
       ).length > 0
     ) {
+      res.status(400).json({
+        error: "Один или несколько пользователей не являются водителями",
+      });
+      return;
+    }
+    const normalizedItems = parsed.data.items.map((item) => ({
+      ...item,
+      plannedDate: dateString(item.plannedDate),
+      actualDate: dateString(item.actualDate),
+      actualDateProvided: item.actualDate !== undefined,
+      correctedPlannedDate: dateString(item.correctedPlannedDate),
+      correctedPlannedDateProvided: item.correctedPlannedDate !== undefined,
+      deliveryType: item.deliveryType?.trim() ?? null,
+      deliveryTypeProvided: item.deliveryType !== undefined,
+    }));
+    const invalidDates = normalizedItems
+      .map((item) =>
+        createDatesError(
+          item.plannedDate,
+          item.actualDate,
+          item.correctedPlannedDate,
+          parsed.data.month,
+        ),
+      )
+      .find((error) => error !== null);
+    if (invalidDates) {
       res
-        .status(400)
-        .json({
-          error: "Один или несколько пользователей не являются водителями",
-        });
+        .status(
+          normalizedItems.some(
+            (item) =>
+              !item.plannedDate &&
+              (item.actualDate || item.correctedPlannedDate),
+          )
+            ? 409
+            : 400,
+        )
+        .json({ error: invalidDates });
+      return;
+    }
+    const unknownTypes = await findUnknownDeliveryTypes(
+      normalizedItems.map((item) => item.deliveryType),
+    );
+    if (unknownTypes.length > 0) {
+      res.status(400).json({ error: deliveryTypeError(unknownTypes) });
       return;
     }
 
@@ -633,6 +1138,8 @@ router.post(
         siteId: deliveriesTable.siteId,
         plannedDate: deliveriesTable.plannedDate,
         actualDate: deliveriesTable.actualDate,
+        correctedPlannedDate: deliveriesTable.correctedPlannedDate,
+        deliveryType: deliveriesTable.deliveryType,
       })
       .from(deliveriesTable)
       .where(monthCondition(parsed.data.month));
@@ -658,18 +1165,69 @@ router.post(
         .filter((delivery) => delivery.plannedDate === null)
         .map((delivery) => delivery.siteId),
     );
+    const existingByKey = new Map(
+      existingDeliveries.map((delivery) => [
+        `${delivery.siteId}:${parsed.data.month}:${delivery.plannedDate ?? "undated"}`,
+        delivery,
+      ]),
+    );
     const incomingKeys = new Set<string>();
-    const itemsToInsert = parsed.data.items.filter((item) => {
-      const plannedDate = dateString(item.plannedDate);
-      const key = `${item.siteId}:${parsed.data.month}:${plannedDate ?? "undated"}`;
+    const preservedUndatedUpdates: Array<{
+      existingId: string;
+      actualDate: string | null;
+      actualDateProvided: boolean;
+      correctedPlannedDate: string | null;
+      correctedPlannedDateProvided: boolean;
+      deliveryType: string | null;
+      deliveryTypeProvided: boolean;
+    }> = [];
+    const itemsToInsert = normalizedItems.filter((item) => {
+      const key = `${item.siteId}:${parsed.data.month}:${item.plannedDate ?? "undated"}`;
       if (incomingKeys.has(key)) return false;
       incomingKeys.add(key);
-      if (plannedDate !== null) return true;
-      if (preservedUndatedSites.has(item.siteId)) return false;
+      if (item.plannedDate !== null) return true;
+      if (preservedUndatedSites.has(item.siteId)) {
+        const existing = existingByKey.get(key);
+        if (
+          existing &&
+          (item.actualDateProvided ||
+            item.correctedPlannedDateProvided ||
+            item.deliveryTypeProvided)
+        ) {
+          preservedUndatedUpdates.push({
+            existingId: existing.id,
+            actualDate: item.actualDate,
+            actualDateProvided: item.actualDateProvided,
+            correctedPlannedDate: item.correctedPlannedDate,
+            correctedPlannedDateProvided: item.correctedPlannedDateProvided,
+            deliveryType: item.deliveryType,
+            deliveryTypeProvided: item.deliveryTypeProvided,
+          });
+        }
+        return false;
+      }
       return true;
     });
 
     const inserted = await db.transaction(async (tx) => {
+      for (const item of preservedUndatedUpdates) {
+        const updateValues: {
+          actualDate?: string | null;
+          correctedPlannedDate?: string | null;
+          deliveryType?: string | null;
+        } = {};
+        if (item.actualDateProvided) updateValues.actualDate = item.actualDate;
+        if (item.correctedPlannedDateProvided) {
+          updateValues.correctedPlannedDate = item.correctedPlannedDate;
+        }
+        if (item.deliveryTypeProvided) {
+          updateValues.deliveryType = item.deliveryType;
+        }
+        await tx
+          .update(deliveriesTable)
+          .set(updateValues)
+          .where(eq(deliveriesTable.id, item.existingId));
+      }
       if (existingIds.length > 0) {
         await tx
           .delete(deliveriesTable)
@@ -680,11 +1238,26 @@ router.post(
         .insert(deliveriesTable)
         .values(
           itemsToInsert.map((item) => ({
+            ...(() => {
+              const existing = existingByKey.get(
+                `${item.siteId}:${parsed.data.month}:${item.plannedDate ?? "undated"}`,
+              );
+              return {
+                actualDate: item.actualDateProvided
+                  ? item.actualDate
+                  : (existing?.actualDate ?? null),
+                correctedPlannedDate: item.correctedPlannedDateProvided
+                  ? item.correctedPlannedDate
+                  : (existing?.correctedPlannedDate ?? null),
+                deliveryType: item.deliveryTypeProvided
+                  ? item.deliveryType
+                  : (existing?.deliveryType ?? null),
+              };
+            })(),
             siteId: item.siteId,
             driverUserId: item.driverUserId ?? null,
-            plannedDate: dateString(item.plannedDate),
+            plannedDate: item.plannedDate,
             scheduleMonth: parsed.data.month,
-            note: item.note ?? null,
           })),
         )
         .returning();
@@ -728,6 +1301,22 @@ router.patch(
       res.status(400).json({ error: parsed.error.message });
       return;
     }
+    if (Object.keys(parsed.data).length === 0) {
+      res.status(400).json({ error: "Укажите данные доставки для изменения" });
+      return;
+    }
+    if (
+      req.body.correctedPlannedDate !== undefined &&
+      req.body.correctedPlannedDate !== null &&
+      (typeof req.body.correctedPlannedDate !== "string" ||
+        !isRealIsoDate(req.body.correctedPlannedDate))
+    ) {
+      res.status(400).json({
+        error:
+          "Уточнённая плановая дата должна быть корректной датой в формате YYYY-MM-DD",
+      });
+      return;
+    }
 
     const updateValues: Record<string, unknown> = {};
     if (
@@ -742,7 +1331,8 @@ router.patch(
     let existing: typeof deliveriesTable.$inferSelect | undefined;
     if (
       parsed.data.actualDate !== undefined ||
-      parsed.data.plannedDate !== undefined
+      parsed.data.plannedDate !== undefined ||
+      parsed.data.correctedPlannedDate !== undefined
     ) {
       [existing] = await db
         .select()
@@ -753,14 +1343,37 @@ router.patch(
         return;
       }
     }
+    if (parsed.data.correctedPlannedDate !== undefined) {
+      const correctedPlannedDate = parsed.data.correctedPlannedDate
+        ? dateString(parsed.data.correctedPlannedDate)
+        : null;
+      const resultingPlannedDate =
+        parsed.data.plannedDate !== undefined
+          ? dateString(parsed.data.plannedDate)
+          : existing!.plannedDate;
+      if (correctedPlannedDate && !resultingPlannedDate) {
+        res.status(409).json({
+          error: "Сначала назначьте исходную плановую дату доставки",
+        });
+        return;
+      }
+      updateValues.correctedPlannedDate = correctedPlannedDate;
+    } else if (
+      parsed.data.plannedDate !== undefined &&
+      parsed.data.plannedDate === null &&
+      existing!.correctedPlannedDate
+    ) {
+      res.status(409).json({
+        error: "Сначала очистите уточнённую плановую дату доставки",
+      });
+      return;
+    }
     if (parsed.data.plannedDate !== undefined) {
       const plannedDate = dateString(parsed.data.plannedDate);
       if (!plannedDate && (existing!.actualDate || existing!.actApprovedAt)) {
-        res
-          .status(409)
-          .json({
-            error: "Нельзя убрать дату у выполненной или закрытой доставки",
-          });
+        res.status(409).json({
+          error: "Нельзя убрать дату у выполненной или закрытой доставки",
+        });
         return;
       }
       const ownerMonth = effectiveMonth(
@@ -817,19 +1430,47 @@ router.patch(
       updateValues.actApprovedAt = null;
       updateValues.actApprovedBy = null;
     }
-    if (parsed.data.note !== undefined) updateValues.note = parsed.data.note;
+    if (parsed.data.logisticianNote !== undefined) {
+      if (req.appUser!.role !== "logistician") {
+        res.status(403).json({
+          error: "Примечание к доставке может изменять только логист",
+        });
+        return;
+      }
+      updateValues.logisticianNote = parsed.data.logisticianNote;
+    }
     if (parsed.data.driverUserId !== undefined)
       updateValues.driverUserId = parsed.data.driverUserId;
+
+    const updateConditions = [eq(deliveriesTable.id, params.data.id)];
+    if (
+      parsed.data.correctedPlannedDate instanceof Date &&
+      !(parsed.data.plannedDate instanceof Date)
+    ) {
+      updateConditions.push(isNotNull(deliveriesTable.plannedDate));
+    }
+    if (
+      parsed.data.plannedDate === null &&
+      parsed.data.correctedPlannedDate === undefined
+    ) {
+      updateConditions.push(isNull(deliveriesTable.correctedPlannedDate));
+    }
 
     let delivery: typeof deliveriesTable.$inferSelect | undefined;
     try {
       [delivery] = await db
         .update(deliveriesTable)
         .set(updateValues)
-        .where(eq(deliveriesTable.id, params.data.id))
+        .where(and(...updateConditions))
         .returning();
     } catch (error) {
-      if (isUniqueViolation(error)) {
+      if (isDeliveryDriverForeignKeyViolation(error)) {
+        res
+          .status(400)
+          .json({ error: "Выбранный пользователь не является водителем" });
+        return;
+      }
+      if (isDeliveryScheduleUniqueViolation(error)) {
         res.status(409).json({ error: "Такая строка графика уже существует" });
         return;
       }
@@ -837,6 +1478,17 @@ router.patch(
     }
 
     if (!delivery) {
+      const [stillExists] = await db
+        .select({ id: deliveriesTable.id })
+        .from(deliveriesTable)
+        .where(eq(deliveriesTable.id, params.data.id))
+        .limit(1);
+      if (stillExists) {
+        res.status(409).json({
+          error: "Состояние плановых дат изменилось. Повторите изменение",
+        });
+        return;
+      }
       res.status(404).json({ error: "Delivery not found" });
       return;
     }
@@ -922,7 +1574,7 @@ router.post(
         .where(eq(deliveriesTable.id, params.data.id))
         .returning();
     } catch (error) {
-      if (isUniqueViolation(error)) {
+      if (isDeliveryScheduleUniqueViolation(error)) {
         res.status(409).json({ error: "Такая строка графика уже существует" });
         return;
       }
@@ -1222,7 +1874,14 @@ router.post("/deliveries/:id/photos", async (req, res): Promise<void> => {
       return { status: 201 as const, photo, cleanup: false };
     });
   } catch (error) {
-    req.log?.error({ err: error }, "Failed to attach delivery act");
+    req.log?.error(
+      createStorageFailureLogFields({
+        operation: "attach-delivery-act",
+        error,
+        objectPath: parsed.data.objectPath,
+      }),
+      "Failed to attach delivery act",
+    );
     await cleanupRejectedObject(req, parsed.data.objectPath);
     res.status(500).json({ error: "Не удалось прикрепить файл" });
     return;
@@ -1299,7 +1958,7 @@ router.delete(
       });
 
       if (prepared.status === 404) {
-        res.status(404).json({ error: "Фото не найдено" });
+        res.status(404).json({ error: "Акт не найден" });
         return;
       }
 
@@ -1397,7 +2056,7 @@ router.delete(
       });
 
       if (prepared.status === 404) {
-        res.status(404).json({ error: "Delivery not found" });
+        res.status(404).json({ error: "Доставка не найдена" });
         return;
       }
 

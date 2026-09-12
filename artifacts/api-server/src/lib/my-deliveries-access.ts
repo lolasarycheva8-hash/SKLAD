@@ -1,3 +1,5 @@
+import { isDriverUser } from "./user-roles.ts";
+
 export type MyDeliveriesActor = {
   id: string;
   role: string;
@@ -8,6 +10,6 @@ export type MyDeliveriesActor = {
 export function getMyDeliveriesAccess(
   user: MyDeliveriesActor | null | undefined,
 ): "driver" | "sites" | "none" {
-  if (user?.role === "driver" || user?.isDriver) return "driver";
+  if (user && isDriverUser(user)) return "driver";
   return "none";
 }

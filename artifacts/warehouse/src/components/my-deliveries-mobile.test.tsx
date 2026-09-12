@@ -5,6 +5,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const markDone = vi.fn();
 const refetchDeliveries = vi.fn();
+const invalidateQueries = vi.fn();
+const toast = vi.fn();
+let markDoneMutation: {
+  onError?: (error: unknown) => void;
+};
 let deliveriesQuery: {
   data: typeof ownDelivery[] | undefined;
   isLoading: boolean;
@@ -26,6 +31,7 @@ const ownDelivery = {
   siteId: "site-1",
   siteName: `Очень-длинное-название-объекта-${"безпробелов".repeat(20)}`,
   siteAddress: "Тестовый адрес",
+  managerContact: "+7 (999) 123-45-67",
   driverUserId: "driver-1",
   driver: "Тестовый водитель",
   plannedDate: todayLocal(),
@@ -40,18 +46,21 @@ const ownDelivery = {
 vi.mock("@workspace/api-client-react", () => ({
   getListMyDeliveriesQueryKey: () => ["my-deliveries"],
   useListMyDeliveries: () => deliveriesQuery,
-  useMarkMyDeliveryDone: () => ({
-    isPending: false,
-    mutate: markDone,
-  }),
+  useMarkMyDeliveryDone: (options: { mutation: typeof markDoneMutation }) => {
+    markDoneMutation = options.mutation;
+    return {
+      isPending: false,
+      mutate: markDone,
+    };
+  },
 }));
 
 vi.mock("@tanstack/react-query", () => ({
-  useQueryClient: () => ({ invalidateQueries: vi.fn() }),
+  useQueryClient: () => ({ invalidateQueries }),
 }));
 
 vi.mock("@/hooks/use-toast", () => ({
-  useToast: () => ({ toast: vi.fn() }),
+  useToast: () => ({ toast }),
 }));
 
 vi.mock("@/hooks/use-permissions", () => ({
@@ -74,6 +83,7 @@ import MyDeliveries from "@/pages/my-deliveries";
 describe("мобильная страница водителя", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    markDoneMutation = {};
     deliveriesQuery = {
       data: [ownDelivery],
       isLoading: false,
@@ -90,20 +100,41 @@ describe("мобильная страница водителя", () => {
 
   afterEach(cleanup);
 
+  it("учитывает сегодняшний план без факта как невыполненный", () => {
+    render(<MyDeliveries />);
+
+    expect(
+      screen.getByRole("button", { name: /План на сегодня\s*1/ }),
+    ).not.toBeNull();
+    expect(
+      screen.getByRole("button", { name: /Не выполнено\s*1/ }),
+    ).not.toBeNull();
+  });
+
   it("удерживает длинное содержимое в узком viewport и оставляет действия доступными", async () => {
     const user = userEvent.setup();
     render(<MyDeliveries />);
 
     const page = screen.getByTestId("my-deliveries-page");
     const note = screen.getByTestId("delivery-note-own-delivery");
+    const card = screen.getByTestId(`delivery-card-${ownDelivery.id}`);
     expect(window.innerWidth).toBe(390);
     expect(page.className).toContain("min-w-0");
     expect(page.className).toContain("overflow-x-hidden");
+    expect(card.className).toContain("rounded-xl");
     expect(note.className).toContain("[overflow-wrap:anywhere]");
+    expect(note.className).toContain("line-clamp-2");
     expect(screen.getByText(ownDelivery.siteName).className).toContain("[overflow-wrap:anywhere]");
+    expect(
+      screen
+        .getByRole("link", { name: `Позвонить менеджеру объекта ${ownDelivery.siteName}` })
+        .getAttribute("href"),
+    ).toBe("tel:+79991234567");
 
     const doneButton = screen.getByRole("button", { name: "Выполнено" });
     const actsButton = screen.getByRole("button", { name: /Акты/ });
+    expect(doneButton.className).toContain("h-10");
+    expect(actsButton.className).toContain("h-10");
     expect((doneButton as HTMLButtonElement).disabled).toBe(false);
     expect((actsButton as HTMLButtonElement).disabled).toBe(false);
 
@@ -144,5 +175,34 @@ describe("мобильная страница водителя", () => {
 
     expect(screen.getByText("Нет доставок")).not.toBeNull();
     expect(screen.queryByText("Не удалось загрузить доставки")).toBeNull();
+  });
+
+  it("при удалённой доставке обновляет список и показывает нейтральное сообщение", async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(<MyDeliveries />);
+
+    await user.click(screen.getByRole("button", { name: "Выполнено" }));
+    markDoneMutation.onError?.({
+      response: {
+        status: 404,
+        data: { error: "Delivery not found" },
+      },
+    });
+
+    expect(invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["my-deliveries"],
+    });
+    expect(toast).toHaveBeenCalledWith({
+      title: "Доставка больше недоступна",
+      description: "Список доставок обновлён.",
+    });
+    expect(toast).not.toHaveBeenCalledWith(
+      expect.objectContaining({ variant: "destructive" }),
+    );
+
+    deliveriesQuery = { ...deliveriesQuery, data: [] };
+    rerender(<MyDeliveries />);
+    expect(screen.queryByText(ownDelivery.siteName)).toBeNull();
+    expect(screen.getByText("Нет доставок")).not.toBeNull();
   });
 });

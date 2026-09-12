@@ -11,6 +11,7 @@
 - `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
 - `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
 - Required env: `DATABASE_URL` — Postgres connection string
+- После каждого созданного Git-коммита сразу отправлять текущую ветку в подключённый GitHub-репозиторий и сообщать пользователю об успешной отправке; секреты и локальные служебные файлы не коммитить.
 
 ## Stack
 

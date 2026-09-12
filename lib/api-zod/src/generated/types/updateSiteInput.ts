@@ -11,7 +11,7 @@ export interface UpdateSiteInput {
   address?: string;
   branch?: string;
   customer?: string;
-  client?: string;
+  clientId: string;
   manager?: string;
   managerContact?: string;
   director?: string;
@@ -19,4 +19,5 @@ export interface UpdateSiteInput {
   /** @nullable */
   driverUserId?: string | null;
   deliveryType?: string;
+  features?: string;
 }

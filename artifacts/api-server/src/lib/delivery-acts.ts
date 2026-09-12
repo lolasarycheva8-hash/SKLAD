@@ -1,3 +1,5 @@
+import { isDriverUser } from "./user-roles.ts";
+
 type DeliveryActor = {
   id: string;
   isDriver: boolean;
@@ -45,7 +47,8 @@ export function canUploadDeliveryActs(
 ): boolean {
   return (
     canEditDeliveries(user) ||
-    ((user?.role === "driver" || !!user?.isDriver) &&
+    (!!user &&
+      isDriverUser(user) &&
       user.id === deliveryDriverUserId)
   );
 }

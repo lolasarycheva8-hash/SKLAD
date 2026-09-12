@@ -11,8 +11,11 @@
 - [Private object serving must be allow-listed](private-object-serving.md) — storage template serves any private object and its auth check fails under Clerk; register paths in a table and 404 the rest.
 - [Storage cleanup consistency](storage-cleanup-consistency.md) — serialize attach/delete and commit each successful object cleanup so partial failures never leave broken database references.
 - [Drivers are application users](drivers-are-users.md) — assign drivers only by app-user UUID; never reintroduce free-text driver identities.
+- [Object driver assignments](object-driver-assignments.md) — create and change driver assignments only from Objects; Users manages identity, roles, and section access.
 - [Delivery completion workflow](delivery-completion-workflow.md) — driver marks Done; only logistician approval of an uploaded act makes the delivery Closed.
 - [Undated deliveries](undated-deliveries.md) — undated rows belong to a schedule month, survive month replacement, and cannot be completed until dated.
+- [Informational plan corrections](delivery-plan-correction.md) — corrected dates document changes; the user chose to keep the schedule and lateness tied to the original plan.
+- [Delivery form field ownership](delivery-form-ownership.md) — autofill shared object data; driver, dates, and supply-type choices affect only the delivery.
 - [Express route-prefix guards](express-route-prefix-guards.md) — on root-mounted routers, protect case-insensitive string routes with matching string-prefix middleware, not case-sensitive regexes.
 - [Development smoke environment guards](development-smoke-environment-guards.md) — don't identify Replit development by REPLIT_ENVIRONMENT or by comparing its two DB URLs.
 - [Additive role-schema publishing](additive-role-schema-publishing.md) — keep old enum defaults and populated legacy columns until new role values commit in production.
@@ -20,3 +23,25 @@
 - [Synchronizing data-backed UI counters](data-backed-counter-sync.md) — browser smoke must wait for fixture-backed counts, not merely for an element initially rendered with zero.
 - [Legacy similarity reviews](legacy-similarity-reviews.md) — keep name-derived group keys out of URLs and invalidate reviews when group membership changes.
 - [Cleanup commit-failure fixtures](cleanup-commit-failure-fixtures.md) — arm after object deletion, fail only the dedicated client's actual COMMIT, then recover on a fresh connection.
+- [Clerk actor-session switching](clerk-actor-session-switching.md) — switch through an unprotected route; protected pages unmount after session end, and external actor URLs may reject dev origins.
+- [Safe Pino error serialization](safe-pino-error-serialization.md) — stdSerializers.err flattens cause text and copies enumerable Error fields; explicitly allow-list safe fields.
+- [Drizzle PostgreSQL errors](drizzle-postgres-errors.md) — constraint metadata may live on a wrapped cause; map expected conflicts by code plus constraint name.
+- [Cancelling Google Storage listings](google-storage-list-cancellation.md) — getFiles lacks AbortSignal support in the installed client; use getFilesStream and destroy it on abort.
+- [Google Storage DELETE completion](google-storage-delete-completion.md) — non-GET requestStream has no readable end; settle DELETE from its HTTP response and end the writable side.
+- [Drizzle expression-index rollout](drizzle-expression-index-rollout.md) — changing an index expression under the same name may be silently ignored; add a newly named index and verify PostgreSQL.
+- [Qualifying PostgreSQL upsert counters](postgres-upsert-column-qualification.md) — ON CONFLICT increments must qualify the existing table column to avoid ambiguity with EXCLUDED.
+- [Expanding API error contracts](api-error-contract-expansion.md) — when adding structured fields to an error, search all exact JSON assertions for that status/message before validation.
+- [Wouter query strings](wouter-query-strings.md) — default useLocation exposes pathname, not search parameters; read query state with useSearch.
+- [Production data backfills](production-data-backfills.md) — Publish migrates schema, not historical row values; use idempotent startup DML after the schema already exists.
+- [Raw SQL fixtures and schema constraints](raw-sql-fixtures-schema-constraints.md) — apply constraints locally before release smoke; direct SQL fixtures bypass compile-time contract checks.
+- [Cancelling PostgreSQL integration fixtures](postgres-integration-query-cancellation.md) — use an advisory-lock marker plus pg_cancel_backend to fail an in-transaction query without destabilizing the pool.
+- [Serializing cross-system identity changes](cross-system-identity-serialization.md) — hold one session lock through provider change, DB commit, and compensation on the same DB connection.
+- [Site change approval safety](site-change-approval-safety.md) — alternate site-write paths must preserve client locks, reject stale baselines, and retain review history.
+- [Stable IDs in mixed site imports](stable-site-import-identities.md) — resolve legacy name-only rows before ID-based renames and reject overlapping targets.
+- [Streaming binary downloads](streaming-binary-downloads.md) — preflight every source, then use a native download; fetch().blob() defeats server-side streaming.
+- [PostgreSQL query-failure fixtures](postgres-query-failure-fixtures.md) — inject failures through the original pg query method; a bare rejected Promise can leave request lifecycle state hanging.
+- [Constraint rollout on existing data](constraint-rollout-existing-data.md) — production DDL belongs to Publish, never build hooks; failed Promote does not prove the DB is unchanged.
+- [SheetJS CSV fixtures in jsdom](sheetjs-csv-fixtures-jsdom.md) — build CSV File bytes with XLSX.write; hand-encoded buffers can produce empty headers only under Vitest/jsdom.
+- [Tailwind CSS variables](tailwind-css-variables.md) — legacy bracket shorthand can compile into invalid CSS; use explicit var() and inspect generated styles.
+- [Storage log import trust](storage-log-import-trust.md) — reject opaque imported log builders by default; approving a metrics builder must not grant sanitizer privileges.
+- [Radix jsdom verification limits](radix-jsdom-check-limits.md) — Select interaction tests can stall beyond their timeout; distinguish incomplete UI checks from verified API behavior.

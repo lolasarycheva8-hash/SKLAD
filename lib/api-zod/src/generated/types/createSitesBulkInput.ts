@@ -5,8 +5,8 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
-import type { CreateSiteInput } from './createSiteInput';
+import type { BulkSiteInput } from "./bulkSiteInput";
 
 export interface CreateSitesBulkInput {
-  items: CreateSiteInput[];
+  items: BulkSiteInput[];
 }

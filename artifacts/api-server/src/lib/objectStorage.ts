@@ -143,13 +143,32 @@ export class ObjectStorageService {
    * Lists only objects created through the private upload endpoint. Creation
    * metadata that cannot be trusted is returned as null so callers fail safe.
    */
-  async listPrivateUploadObjects(): Promise<PrivateUploadObject[]> {
+  async listPrivateUploadObjects(
+    signal?: AbortSignal,
+  ): Promise<PrivateUploadObject[]> {
     const privateObjectDir = this.getPrivateObjectDir().replace(/\/+$/, '');
     const { bucketName, objectName: privatePrefix } =
       parseObjectPath(privateObjectDir);
     const uploadPrefix = `${privatePrefix}/uploads/`;
-    const [files] = await objectStorageClient.bucket(bucketName).getFiles({
-      prefix: uploadPrefix,
+    const files = await new Promise<File[]>((resolve, reject) => {
+      const listedFiles: File[] = [];
+      const stream = objectStorageClient.bucket(bucketName).getFilesStream({
+        prefix: uploadPrefix,
+      });
+      const abort = () => {
+        stream.destroy(new DOMException('Storage listing aborted', 'AbortError'));
+      };
+      if (signal?.aborted) {
+        abort();
+      } else {
+        signal?.addEventListener('abort', abort, { once: true });
+      }
+      stream.on('data', (file: File) => listedFiles.push(file));
+      stream.once('error', reject);
+      stream.once('end', () => resolve(listedFiles));
+      stream.once('close', () => {
+        signal?.removeEventListener('abort', abort);
+      });
     });
 
     return files.flatMap((file) => {
@@ -207,13 +226,74 @@ export class ObjectStorageService {
     return objectFile;
   }
 
-  async deleteObjectEntity(objectPath: string): Promise<boolean> {
+  async deleteObjectEntity(
+    objectPath: string,
+    signal?: AbortSignal,
+  ): Promise<boolean> {
     try {
-      const objectFile = await this.getObjectEntityFile(objectPath);
-      await objectFile.delete({ ignoreNotFound: true });
+      const objectFile = await this.getObjectEntityFile(objectPath, false);
+      if (signal?.aborted) {
+        throw new DOMException('Storage deletion aborted', 'AbortError');
+      }
+      await new Promise<void>((resolve, reject) => {
+        const request = objectFile.requestStream({
+          method: 'DELETE',
+          uri: '',
+        });
+        let settled = false;
+        const settle = (result: { error?: unknown } = {}) => {
+          if (settled) return;
+          settled = true;
+          signal?.removeEventListener('abort', abort);
+          request.removeListener('error', fail);
+          request.removeListener('response', respond);
+          if (result.error !== undefined) {
+            reject(result.error);
+          } else {
+            resolve();
+          }
+        };
+        const fail = (error: unknown) => settle({ error });
+        const respond = (
+          response: NodeJS.ReadableStream & { statusCode?: number },
+        ) => {
+          response.resume();
+          const statusCode = response.statusCode;
+          if (
+            typeof statusCode === 'number' &&
+            statusCode >= 200 &&
+            statusCode < 300
+          ) {
+            settle();
+            return;
+          }
+          const error = new Error(
+            `Storage deletion failed with HTTP ${statusCode ?? 'unknown'}`,
+          ) as Error & { code?: number };
+          error.code = statusCode;
+          settle({ error });
+        };
+        const abort = () => {
+          request.destroy(
+            new DOMException('Storage deletion aborted', 'AbortError'),
+          );
+        };
+        signal?.addEventListener('abort', abort, { once: true });
+        request.once('error', fail);
+        request.once('response', respond);
+        request.end();
+      });
       return true;
     } catch (error) {
-      if (error instanceof ObjectNotFoundError) {
+      if (
+        error instanceof ObjectNotFoundError ||
+        (
+          typeof error === 'object' &&
+          error !== null &&
+          'code' in error &&
+          error.code === 404
+        )
+      ) {
         return false;
       }
       throw error;

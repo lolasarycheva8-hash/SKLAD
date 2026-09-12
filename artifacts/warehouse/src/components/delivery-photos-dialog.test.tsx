@@ -9,6 +9,9 @@ const deletePhotoRequest = vi.fn();
 const toast = vi.fn();
 const approveAct = vi.fn();
 const invalidateQueries = vi.fn();
+const { downloadFileResponse } = vi.hoisted(() => ({
+  downloadFileResponse: vi.fn(),
+}));
 let deletePhotoMutationOptions: any;
 let approveMutationOptions: any;
 let listedPhotos: Array<{
@@ -64,6 +67,11 @@ vi.mock("@tanstack/react-query", () => ({
 
 vi.mock("@/hooks/use-toast", () => ({
   useToast: () => ({ toast }),
+}));
+
+vi.mock("@/lib/download-file", () => ({
+  downloadFileResponse,
+  resolveAppUrl: (path: string) => path,
 }));
 
 vi.mock("@/components/ui/dialog", () => ({
@@ -142,6 +150,39 @@ describe("DeliveryPhotosDialog", () => {
     ).toEqual(["added.pdf", "broken.pdf"]);
   });
 
+  it("скачивает ZIP всех актов текущей доставки", async () => {
+    listedPhotos = [
+      {
+        id: "photo-1",
+        mimeType: "application/pdf",
+        objectPath: "/uploads/act.pdf",
+        fileName: "act.pdf",
+      },
+    ];
+    downloadFileResponse.mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    render(
+      <DeliveryPhotosDialog
+        delivery={{ id: "delivery-1" } as never}
+        open
+        onOpenChange={vi.fn()}
+        canEdit={false}
+        canDownload
+      />,
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: "Скачать все акты" }),
+    );
+
+    await waitFor(() =>
+      expect(downloadFileResponse).toHaveBeenCalledWith(
+        "/api/deliveries/delivery-1/acts/download",
+        "акты-доставки-delivery-1.zip",
+      ),
+    );
+  });
+
   it("не показывает запоздалый результат и уведомление после закрытия диалога", async () => {
     let finishUpload!: (value: { objectPath: string }) => void;
     uploadFile.mockImplementation(
@@ -211,6 +252,83 @@ describe("DeliveryPhotosDialog", () => {
 
     await waitFor(() => expect(deletePhotoRequest).toHaveBeenCalledOnce());
     expect(toast).not.toHaveBeenCalled();
+  });
+
+  it("при 404 обновляет акты и показывает нейтральное уведомление", async () => {
+    deletePhotoRequest.mockRejectedValue({ status: 404 });
+    listedPhotos = [
+      {
+        id: "photo-1",
+        mimeType: "application/pdf",
+        objectPath: "/uploads/act.pdf",
+        fileName: "act.pdf",
+      },
+    ];
+    const user = userEvent.setup();
+    render(
+      <DeliveryPhotosDialog
+        delivery={{ id: "delivery-1" } as never}
+        open
+        onOpenChange={vi.fn()}
+        canEdit
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "" }));
+
+    await waitFor(() =>
+      expect(toast).toHaveBeenCalledWith({
+        title: "Акт уже удалён",
+        description: "Список актов обновлён: файл удалил другой администратор.",
+      }),
+    );
+    expect(invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["delivery-photos", "delivery-1"],
+    });
+    expect(invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["deliveries"],
+    });
+    expect(invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["my-deliveries"],
+    });
+    expect(toast).not.toHaveBeenCalledWith(
+      expect.objectContaining({ variant: "destructive" }),
+    );
+  });
+
+  it("настоящую ошибку удаления оставляет красной и не обновляет список", async () => {
+    deletePhotoRequest.mockRejectedValue({
+      status: 500,
+      data: { error: "Хранилище недоступно" },
+    });
+    listedPhotos = [
+      {
+        id: "photo-1",
+        mimeType: "application/pdf",
+        objectPath: "/uploads/act.pdf",
+        fileName: "act.pdf",
+      },
+    ];
+    const user = userEvent.setup();
+    render(
+      <DeliveryPhotosDialog
+        delivery={{ id: "delivery-1" } as never}
+        open
+        onOpenChange={vi.fn()}
+        canEdit
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "" }));
+
+    await waitFor(() =>
+      expect(toast).toHaveBeenCalledWith({
+        title: "Ошибка",
+        description: "Хранилище недоступно",
+        variant: "destructive",
+      }),
+    );
+    expect(invalidateQueries).not.toHaveBeenCalled();
   });
 
   it("сохраняет блокировку загрузки при возврате к обрабатываемой доставке", async () => {

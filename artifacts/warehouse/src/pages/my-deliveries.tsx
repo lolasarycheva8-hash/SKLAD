@@ -12,7 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import {
   CheckCircle2, MapPin, Camera, Loader2,
-  ChevronLeft, ChevronRight, Search, Calendar, Edit2, AlertCircle, Check
+  ChevronLeft, ChevronRight, Search, Calendar, Edit2, AlertCircle, Check, Phone
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { usePermissions } from "@/hooks/use-permissions";
@@ -64,6 +64,15 @@ function StatusBadge({ delivery, isOverdue }: { delivery: Delivery, isOverdue: b
   return <Badge variant="secondary" className="shrink-0 text-slate-700">План</Badge>;
 }
 
+function managerPhoneHref(contact: string | null | undefined): string | null {
+  if (!contact) return null;
+  const phone = contact.match(/\+?\d[\d\s().-]{4,}\d/)?.[0];
+  if (!phone) return null;
+  const normalized = phone.replace(/[^\d+]/g, "");
+  if (normalized.replace(/\D/g, "").length < 6) return null;
+  return `tel:${normalized}`;
+}
+
 export default function MyDeliveries() {
   const { user } = usePermissions();
   const [selectedDate, setSelectedDate] = useState(todayStr);
@@ -89,11 +98,16 @@ export default function MyDeliveries() {
 
   const { counts, filtered } = useMemo(() => {
     const list = deliveries ?? [];
-    const c = { planned: 0, done: 0, closed: 0, not_completed: 0 };
+    const c = {
+      planned: list.length,
+      done: 0,
+      closed: 0,
+      not_completed: 0,
+    };
     const f = [];
 
     for (const d of list) {
-      let cat: "planned" | "done" | "closed" | "not_completed" = "planned";
+      let cat: "done" | "closed" | "not_completed";
 
       if (d.workflowStatus === "closed") {
         c.closed++;
@@ -102,17 +116,15 @@ export default function MyDeliveries() {
         c.done++;
         cat = "done";
       } else {
-        const isOverdue = d.plannedDate !== null && d.plannedDate < todayStr;
-        if (isOverdue) {
-          c.not_completed++;
-          cat = "not_completed";
-        } else {
-          c.planned++;
-          cat = "planned";
-        }
+        c.not_completed++;
+        cat = "not_completed";
       }
 
-      if (activeFilter === "all" || activeFilter === cat) {
+      if (
+        activeFilter === "all" ||
+        activeFilter === "planned" ||
+        activeFilter === cat
+      ) {
         f.push(d);
       }
     }
@@ -125,7 +137,7 @@ export default function MyDeliveries() {
     });
 
     return { counts: c, filtered: f };
-  }, [deliveries, activeFilter, todayStr]);
+  }, [deliveries, activeFilter]);
 
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -137,6 +149,14 @@ export default function MyDeliveries() {
         toast({ title: "Доставка отмечена выполненной" });
       },
       onError: (err: any) => {
+        if (err.response?.status === 404) {
+          queryClient.invalidateQueries({ queryKey: getListMyDeliveriesQueryKey() });
+          toast({
+            title: "Доставка больше недоступна",
+            description: "Список доставок обновлён.",
+          });
+          return;
+        }
         toast({ title: "Ошибка", description: err.response?.data?.error ?? err.message, variant: "destructive" });
       }
     }
@@ -209,7 +229,7 @@ export default function MyDeliveries() {
       </div>
 
       {/* List */}
-      <div className="px-4 space-y-4">
+      <div className="space-y-2 px-3 sm:px-4">
         {isLoading ? (
           <div className="py-16 flex flex-col items-center justify-center text-slate-400">
             <Loader2 className="h-10 w-10 animate-spin mb-3 opacity-50" />
@@ -244,6 +264,7 @@ export default function MyDeliveries() {
         ) : (
           filtered.map(d => {
             const isOverdue = d.plannedDate !== null && d.plannedDate < todayStr;
+            const phoneHref = managerPhoneHref(d.managerContact);
             let toneBorderColor = "border-slate-200";
             if (d.workflowStatus === "closed") toneBorderColor = "border-emerald-500 bg-emerald-50/30";
             else if (d.workflowStatus === "done") toneBorderColor = "border-orange-500 bg-orange-50/30";
@@ -253,65 +274,98 @@ export default function MyDeliveries() {
               <Card
                 key={d.id}
                 data-testid={`delivery-card-${d.id}`}
-                className={cn("min-w-0 shadow-sm overflow-hidden border-l-[5px] rounded-2xl", toneBorderColor)}
+                className={cn("min-w-0 overflow-hidden rounded-xl border-l-4 shadow-sm", toneBorderColor)}
               >
-                <div className="p-4 sm:p-5">
-                  <div className="flex justify-between items-start gap-2 mb-2">
+                <div className="p-3 sm:p-4">
+                  <div className="mb-1 flex items-start justify-between gap-2">
                     <h3
                       data-testid={`delivery-site-name-${d.id}`}
-                      className="min-w-0 break-words [overflow-wrap:anywhere] font-bold text-[18px] leading-tight text-slate-900"
+                      className="min-w-0 break-words text-[16px] font-bold leading-tight text-slate-900 [overflow-wrap:anywhere]"
                     >
                       {d.siteName}
                     </h3>
-                    <StatusBadge delivery={d} isOverdue={isOverdue} />
+                    <div className="flex shrink-0 items-center gap-1">
+                      {phoneHref && (
+                        <Button
+                          asChild
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7 rounded-full text-emerald-700 hover:bg-emerald-50 hover:text-emerald-800"
+                        >
+                          <a
+                            href={phoneHref}
+                            aria-label={`Позвонить менеджеру объекта ${d.siteName}`}
+                            title={`Позвонить: ${d.managerContact}`}
+                            data-testid={`link-call-manager-${d.id}`}
+                          >
+                            <Phone className="h-4 w-4" />
+                          </a>
+                        </Button>
+                      )}
+                      <StatusBadge delivery={d} isOverdue={isOverdue} />
+                    </div>
                   </div>
 
-                  <div className="mb-3 flex min-w-0 items-start gap-2 text-[15px] text-slate-600">
-                    <MapPin className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" />
-                    <span className="min-w-0 flex-1 break-words [overflow-wrap:anywhere]">{d.siteAddress}</span>
+                  <div className="mb-2 flex min-w-0 items-start gap-1.5 text-[13px] leading-snug text-slate-600">
+                    <MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-400" />
+                    <span className="line-clamp-2 min-w-0 flex-1 break-words [overflow-wrap:anywhere]">{d.siteAddress}</span>
                   </div>
 
-                  <div className="bg-white/80 border border-slate-100 rounded-xl p-3.5 mb-4 shadow-sm">
-                    <div className="flex justify-between items-center mb-1.5">
-                      <span className="text-[11px] font-bold uppercase tracking-widest text-slate-500">Комментарий</span>
+                  {d.logisticianNote && (
+                    <div
+                      className="mb-2 rounded-lg border border-blue-200 bg-blue-50 p-2"
+                      data-testid={`delivery-logistician-note-${d.id}`}
+                    >
+                      <div className="mb-0.5 text-[10px] font-bold uppercase tracking-wide text-blue-700">
+                        Примечание логиста
+                      </div>
+                      <div className="line-clamp-2 min-w-0 whitespace-pre-wrap break-words text-[13px] leading-snug text-blue-950 [overflow-wrap:anywhere]">
+                        {d.logisticianNote}
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="mb-2 rounded-lg border border-slate-100 bg-white/80 p-2 shadow-sm">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Комментарий</span>
                       {d.workflowStatus !== "closed" && (
-                        <Button variant="ghost" size="sm" className="h-7 px-2.5 text-xs font-semibold text-orange-600 hover:text-orange-700 hover:bg-orange-50 rounded-lg" onClick={() => setCommentDelivery(d)}>
-                          <Edit2 className="h-3 w-3 mr-1.5" /> {d.note ? "Изменить" : "Написать"}
+                        <Button variant="ghost" size="sm" className="h-6 rounded-md px-1.5 text-[11px] font-semibold text-orange-600 hover:bg-orange-50 hover:text-orange-700" onClick={() => setCommentDelivery(d)}>
+                          <Edit2 className="mr-1 h-3 w-3" /> {d.note ? "Изменить" : "Написать"}
                         </Button>
                       )}
                     </div>
                     {d.note ? (
                       <div
                         data-testid={`delivery-note-${d.id}`}
-                        className="min-w-0 break-words [overflow-wrap:anywhere] whitespace-pre-wrap text-[15px] leading-relaxed text-slate-800"
+                        className="line-clamp-2 min-w-0 whitespace-pre-wrap break-words text-[13px] leading-snug text-slate-800 [overflow-wrap:anywhere]"
                       >
                         {d.note}
                       </div>
                     ) : (
-                      <div className="text-[14px] text-slate-400 italic">Нет комментария</div>
+                      <div className="text-[12px] italic text-slate-400">Нет комментария</div>
                     )}
                   </div>
 
                   <div className="flex min-w-0 gap-2">
                     {!d.actualDate && (
                       <Button
-                        className="h-14 min-w-0 flex-1 rounded-xl bg-emerald-600 px-2 text-[16px] font-bold shadow-sm hover:bg-emerald-700"
+                        className="h-10 min-w-0 flex-1 rounded-lg bg-emerald-600 px-2 text-[14px] font-bold shadow-sm hover:bg-emerald-700"
                         onClick={() => markDone.mutate({ id: d.id })}
                         disabled={markDone.isPending}
                         data-testid={`button-mark-done-${d.id}`}
                       >
-                        {markDone.isPending ? <Loader2 className="animate-spin h-6 w-6" /> : <Check className="h-6 w-6 mr-1.5" />}
+                        {markDone.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="mr-1 h-4 w-4" />}
                         Выполнено
                       </Button>
                     )}
                     <Button
                       variant={d.photosCount > 0 ? "secondary" : "outline"}
-                      className={cn("h-14 min-w-0 px-2 text-[16px] font-bold rounded-xl shadow-sm", !d.actualDate ? "flex-1" : "w-full border-slate-300 bg-white")}
+                      className={cn("h-10 min-w-0 rounded-lg px-2 text-[14px] font-bold shadow-sm", !d.actualDate ? "flex-1" : "w-full border-slate-300 bg-white")}
                       onClick={() => setPhotosDelivery(d)}
                       data-testid={`button-acts-${d.id}`}
                     >
-                      <Camera className={cn("h-6 w-6 mr-2", d.photosCount > 0 ? "text-slate-800" : "text-slate-500")} />
-                      Акты {d.photosCount > 0 && <Badge className="ml-2 px-2 py-0.5 text-xs bg-white text-slate-900 rounded-full shadow-sm">{d.photosCount}</Badge>}
+                      <Camera className={cn("mr-1.5 h-4 w-4", d.photosCount > 0 ? "text-slate-800" : "text-slate-500")} />
+                      Акты {d.photosCount > 0 && <Badge className="ml-1.5 rounded-full bg-white px-1.5 py-0 text-[10px] text-slate-900 shadow-sm">{d.photosCount}</Badge>}
                     </Button>
                   </div>
                 </div>
@@ -327,6 +381,7 @@ export default function MyDeliveries() {
         onOpenChange={(open) => !open && setPhotosDelivery(null)}
         canEdit={true}
         canDelete={false}
+        canDownload
       />
 
       <DeliveryCommentDialog

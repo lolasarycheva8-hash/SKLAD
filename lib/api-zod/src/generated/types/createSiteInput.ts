@@ -5,19 +5,13 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
+import type { SiteWriteInputBase } from "./siteWriteInputBase";
 
-export interface CreateSiteInput {
-  name: string;
-  address: string;
-  branch: string;
-  /** Необязательное торговое название объекта */
-  customer?: string;
-  client: string;
-  manager: string;
-  managerContact?: string;
-  director: string;
-  project: string;
-  /** @nullable */
-  driverUserId?: string | null;
-  deliveryType?: string;
-}
+export type CreateSiteInput = SiteWriteInputBase & {
+  /**
+   * Обязательное непустое торговое название объекта из справочника
+   * @minLength 1
+   * @pattern .*\S.*
+   */
+  customer: string;
+};
