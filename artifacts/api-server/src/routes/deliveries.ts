@@ -40,6 +40,8 @@ import {
   RescheduleDeliveryResponse,
   ApproveDeliveryActParams,
   ApproveDeliveryActResponse,
+  RestoreDeliveryParams,
+  RestoreDeliveryResponse,
   ListDeliveryPhotosParams,
   ListDeliveryPhotosResponse,
   AddDeliveryPhotoParams,
@@ -83,6 +85,20 @@ import { createStorageFailureLogFields } from "../lib/storage-log-sanitizer";
 const router: IRouter = Router();
 const canEditDeliveries = requirePermission("deliveries");
 const objectStorageService = new ObjectStorageService();
+
+function canViewArchivedDeliveries(
+  req: Parameters<typeof canEditDeliveries>[0],
+): boolean {
+  return canUserEditDeliveries(req.appUser);
+}
+
+function archivedCondition(
+  archived: boolean,
+) {
+  return archived
+    ? isNotNull(deliveriesTable.archivedAt)
+    : isNull(deliveriesTable.archivedAt);
+}
 
 function zipDownloadHeaders(fileName: string) {
   return {
@@ -234,6 +250,7 @@ router.get("/deliveries/acts/download", async (req, res): Promise<void> => {
       and(
         gte(deliveriesTable.actualDate, range.from),
         lte(deliveriesTable.actualDate, range.to),
+        isNull(deliveriesTable.archivedAt),
         isNull(deliveriesTable.deletionPendingAt),
         isNull(deliveryPhotosTable.deletionPendingAt),
       ),
@@ -284,6 +301,7 @@ router.get("/deliveries/:id/acts/download", async (req, res): Promise<void> => {
       driverUserId: deliveriesTable.driverUserId,
       actualDate: deliveriesTable.actualDate,
       siteName: sitesTable.name,
+      archivedAt: deliveriesTable.archivedAt,
     })
     .from(deliveriesTable)
     .innerJoin(sitesTable, eq(deliveriesTable.siteId, sitesTable.id))
@@ -298,7 +316,11 @@ router.get("/deliveries/:id/acts/download", async (req, res): Promise<void> => {
     sendArchiveError(req, res, 404, "Доставка не найдена");
     return;
   }
-  if (!canAccessDeliveryActs(req.appUser, delivery.driverUserId)) {
+   if (
+     delivery.archivedAt
+       ? !canUserEditDeliveries(req.appUser)
+       : !canAccessDeliveryActs(req.appUser, delivery.driverUserId)
+   ) {
     sendArchiveError(
       req,
       res,
@@ -505,6 +527,8 @@ function effectiveMonth(
 const DELIVERY_UNIQUE_CONSTRAINTS = new Set([
   "deliveries_owned_dated_uq",
   "deliveries_owned_undated_uq",
+  "deliveries_owned_dated_active_uq",
+  "deliveries_owned_undated_active_uq",
 ]);
 
 export function isDeliveryScheduleUniqueViolation(error: unknown): boolean {
@@ -619,8 +643,16 @@ router.get(
       res.status(400).json({ error: query.error.message });
       return;
     }
+    // Do not rely on z.coerce.boolean here: Boolean("false") is true.
+    // The wire contract treats an omitted value and explicit false identically.
+    const archived = req.query.archived === "true";
+    if (archived && !canViewArchivedDeliveries(req)) {
+      res.status(403).json({ error: "Нет прав просматривать архив доставок" });
+      return;
+    }
 
     const conditions = [];
+    conditions.push(archivedCondition(archived));
     if (query.data.siteId) {
       conditions.push(eq(deliveriesTable.siteId, query.data.siteId));
     }
@@ -904,7 +936,8 @@ router.post(
         plannedDate: deliveriesTable.plannedDate,
         scheduleMonth: deliveriesTable.scheduleMonth,
       })
-      .from(deliveriesTable);
+      .from(deliveriesTable)
+      .where(isNull(deliveriesTable.archivedAt));
     const existingKeys = new Set(
       existingDeliveries.map(
         (delivery) =>
@@ -924,20 +957,31 @@ router.post(
       return;
     }
 
-    const inserted = await db
-      .insert(deliveriesTable)
-      .values(
-        newItems.map((item) => ({
-          siteId: item.siteId,
-          driverUserId: item.driverUserId ?? null,
-          plannedDate: item.plannedDate,
-          correctedPlannedDate: item.correctedPlannedDate,
-          actualDate: item.actualDate,
-          deliveryType: item.deliveryType,
-          scheduleMonth: item.scheduleMonth!,
-        })),
-      )
-      .returning();
+    let inserted;
+    try {
+      inserted = await db
+        .insert(deliveriesTable)
+        .values(
+          newItems.map((item) => ({
+            siteId: item.siteId,
+            driverUserId: item.driverUserId ?? null,
+            plannedDate: item.plannedDate,
+            correctedPlannedDate: item.correctedPlannedDate,
+            actualDate: item.actualDate,
+            deliveryType: item.deliveryType,
+            scheduleMonth: item.scheduleMonth!,
+          })),
+        )
+        .returning();
+    } catch (error) {
+      if (isDeliveryScheduleUniqueViolation(error)) {
+        res.status(409).json({
+          error: "Конфликт строк графика: слот уже занят другой доставкой",
+        });
+        return;
+      }
+      throw error;
+    }
 
     const dtos = await Promise.all(
       inserted.map(async (row) =>
@@ -976,46 +1020,42 @@ router.post(
       return;
     }
 
-    const existing = await db
-      .select({
-        id: deliveriesTable.id,
-        plannedDate: deliveriesTable.plannedDate,
-        scheduleMonth: deliveriesTable.scheduleMonth,
-      })
-      .from(deliveriesTable)
-      .where(inArray(deliveriesTable.id, [...updates.keys()]));
+    const outcome = await db.transaction(async (tx) => {
+      // Lock every requested row, including archived rows, before deciding
+      // whether it is a valid active import target. This prevents an archive
+      // racing the validation from receiving the update below.
+      const locked = await tx
+        .select({
+          id: deliveriesTable.id,
+          plannedDate: deliveriesTable.plannedDate,
+          scheduleMonth: deliveriesTable.scheduleMonth,
+          archivedAt: deliveriesTable.archivedAt,
+        })
+        .from(deliveriesTable)
+        .where(inArray(deliveriesTable.id, [...updates.keys()]))
+        .for("update");
+      const existing = locked.filter((delivery) => delivery.archivedAt === null);
 
-    if (existing.length !== updates.size) {
-      res.status(404).json({ error: "Одна или несколько доставок не найдены" });
-      return;
-    }
-    if (existing.some((delivery) => !delivery.plannedDate)) {
-      res
-        .status(409)
-        .json({ error: "Сначала назначьте плановую дату каждой доставки" });
-      return;
-    }
+      if (existing.length !== updates.size) {
+        return { status: 404 as const };
+      }
+      if (existing.some((delivery) => !delivery.plannedDate)) {
+        return { status: 409 as const, reason: "undated" as const };
+      }
 
-    const invalid = existing.find((delivery) => {
-      const actualDate = updates.get(delivery.id)!;
-      return (
-        !delivery.plannedDate ||
-        !isDateInPlannedMonth(
-          delivery.plannedDate,
-          actualDate,
-          delivery.scheduleMonth,
-        )
-      );
-    });
-    if (invalid) {
-      res.status(400).json({
-        error:
-          "Дата факта должна находиться в том же месяце, что и плановая дата",
+      const invalid = existing.find((delivery) => {
+        const actualDate = updates.get(delivery.id)!;
+        return (
+          !delivery.plannedDate ||
+          !isDateInPlannedMonth(
+            delivery.plannedDate,
+            actualDate,
+            delivery.scheduleMonth,
+          )
+        );
       });
-      return;
-    }
+      if (invalid) return { status: 400 as const, reason: "month" as const };
 
-    await db.transaction(async (tx) => {
       for (const delivery of existing) {
         await tx
           .update(deliveriesTable)
@@ -1024,9 +1064,33 @@ router.post(
             actApprovedAt: null,
             actApprovedBy: null,
           })
-          .where(eq(deliveriesTable.id, delivery.id));
+          .where(
+            and(
+              eq(deliveriesTable.id, delivery.id),
+              isNull(deliveriesTable.archivedAt),
+            ),
+          );
       }
+      return { status: 200 as const };
     });
+
+    if (outcome.status === 404) {
+      res.status(404).json({ error: "Одна или несколько доставок не найдены" });
+      return;
+    }
+    if (outcome.status === 409) {
+      res
+        .status(409)
+        .json({ error: "Сначала назначьте плановую дату каждой доставки" });
+      return;
+    }
+    if (outcome.status === 400) {
+      res.status(400).json({
+        error:
+          "Дата факта должна находиться в том же месяце, что и плановая дата",
+      });
+      return;
+    }
 
     res.json(
       UpdateDeliveriesActualBulkResponse.parse({ updated: updates.size }),
@@ -1132,84 +1196,79 @@ router.post(
       return;
     }
 
-    const existingDeliveries = await db
-      .select({
-        id: deliveriesTable.id,
-        siteId: deliveriesTable.siteId,
-        plannedDate: deliveriesTable.plannedDate,
-        actualDate: deliveriesTable.actualDate,
-        correctedPlannedDate: deliveriesTable.correctedPlannedDate,
-        deliveryType: deliveriesTable.deliveryType,
-      })
-      .from(deliveriesTable)
-      .where(monthCondition(parsed.data.month));
-    const existingIds = existingDeliveries
-      .filter((delivery) => delivery.plannedDate !== null)
-      .map((delivery) => delivery.id);
-    if (existingDeliveries.some((delivery) => delivery.actualDate !== null)) {
-      res.status(409).json({
-        error:
-          "Полная замена запрещена: в выбранном месяце уже есть фактические даты",
-      });
-      return;
-    }
-    const photos =
-      existingIds.length > 0
-        ? await db
-            .select({ objectPath: deliveryPhotosTable.objectPath })
-            .from(deliveryPhotosTable)
-            .where(inArray(deliveryPhotosTable.deliveryId, existingIds))
-        : [];
-    const preservedUndatedSites = new Set(
-      existingDeliveries
-        .filter((delivery) => delivery.plannedDate === null)
-        .map((delivery) => delivery.siteId),
-    );
-    const existingByKey = new Map(
-      existingDeliveries.map((delivery) => [
-        `${delivery.siteId}:${parsed.data.month}:${delivery.plannedDate ?? "undated"}`,
-        delivery,
-      ]),
-    );
-    const incomingKeys = new Set<string>();
-    const preservedUndatedUpdates: Array<{
-      existingId: string;
-      actualDate: string | null;
-      actualDateProvided: boolean;
-      correctedPlannedDate: string | null;
-      correctedPlannedDateProvided: boolean;
-      deliveryType: string | null;
-      deliveryTypeProvided: boolean;
-    }> = [];
-    const itemsToInsert = normalizedItems.filter((item) => {
-      const key = `${item.siteId}:${parsed.data.month}:${item.plannedDate ?? "undated"}`;
-      if (incomingKeys.has(key)) return false;
-      incomingKeys.add(key);
-      if (item.plannedDate !== null) return true;
-      if (preservedUndatedSites.has(item.siteId)) {
-        const existing = existingByKey.get(key);
-        if (
-          existing &&
-          (item.actualDateProvided ||
-            item.correctedPlannedDateProvided ||
-            item.deliveryTypeProvided)
-        ) {
-          preservedUndatedUpdates.push({
-            existingId: existing.id,
-            actualDate: item.actualDate,
-            actualDateProvided: item.actualDateProvided,
-            correctedPlannedDate: item.correctedPlannedDate,
-            correctedPlannedDateProvided: item.correctedPlannedDateProvided,
-            deliveryType: item.deliveryType,
-            deliveryTypeProvided: item.deliveryTypeProvided,
-          });
+    let replacement;
+    try {
+      replacement = await db.transaction(async (tx) => {
+        const existingDeliveries = await tx
+          .select({
+            id: deliveriesTable.id,
+            siteId: deliveriesTable.siteId,
+            plannedDate: deliveriesTable.plannedDate,
+            actualDate: deliveriesTable.actualDate,
+            correctedPlannedDate: deliveriesTable.correctedPlannedDate,
+            deliveryType: deliveriesTable.deliveryType,
+            archivedAt: deliveriesTable.archivedAt,
+          })
+          .from(deliveriesTable)
+          .where(
+            and(monthCondition(parsed.data.month), isNull(deliveriesTable.archivedAt)),
+          )
+          .for("update");
+        const existingIds = existingDeliveries
+          .filter((delivery) => delivery.plannedDate !== null)
+          .map((delivery) => delivery.id);
+        if (existingDeliveries.some((delivery) => delivery.actualDate !== null)) {
+          return { kind: "actual" as const };
         }
-        return false;
-      }
-      return true;
-    });
+        const preservedUndatedSites = new Set(
+          existingDeliveries
+            .filter((delivery) => delivery.plannedDate === null)
+            .map((delivery) => delivery.siteId),
+        );
+        const existingByKey = new Map(
+          existingDeliveries.map((delivery) => [
+            `${delivery.siteId}:${parsed.data.month}:${delivery.plannedDate ?? "undated"}`,
+            delivery,
+          ]),
+        );
+        const incomingKeys = new Set<string>();
+        const preservedUndatedUpdates: Array<{
+          existingId: string;
+          actualDate: string | null;
+          actualDateProvided: boolean;
+          correctedPlannedDate: string | null;
+          correctedPlannedDateProvided: boolean;
+          deliveryType: string | null;
+          deliveryTypeProvided: boolean;
+        }> = [];
+        const itemsToInsert = normalizedItems.filter((item) => {
+          const key = `${item.siteId}:${parsed.data.month}:${item.plannedDate ?? "undated"}`;
+          if (incomingKeys.has(key)) return false;
+          incomingKeys.add(key);
+          if (item.plannedDate !== null) return true;
+          if (preservedUndatedSites.has(item.siteId)) {
+            const existing = existingByKey.get(key);
+            if (
+              existing &&
+              (item.actualDateProvided ||
+                item.correctedPlannedDateProvided ||
+                item.deliveryTypeProvided)
+            ) {
+              preservedUndatedUpdates.push({
+                existingId: existing.id,
+                actualDate: item.actualDate,
+                actualDateProvided: item.actualDateProvided,
+                correctedPlannedDate: item.correctedPlannedDate,
+                correctedPlannedDateProvided: item.correctedPlannedDateProvided,
+                deliveryType: item.deliveryType,
+                deliveryTypeProvided: item.deliveryTypeProvided,
+              });
+            }
+            return false;
+          }
+          return true;
+        });
 
-    const inserted = await db.transaction(async (tx) => {
       for (const item of preservedUndatedUpdates) {
         const updateValues: {
           actualDate?: string | null;
@@ -1226,15 +1285,33 @@ router.post(
         await tx
           .update(deliveriesTable)
           .set(updateValues)
-          .where(eq(deliveriesTable.id, item.existingId));
+          .where(
+            and(
+              eq(deliveriesTable.id, item.existingId),
+              isNull(deliveriesTable.archivedAt),
+            ),
+          );
       }
       if (existingIds.length > 0) {
         await tx
-          .delete(deliveriesTable)
-          .where(inArray(deliveriesTable.id, existingIds));
+          .update(deliveriesTable)
+          .set({
+            archivedAt: new Date(),
+            archivedBy: req.appUser?.id ?? null,
+            archivedByName:
+              req.appUser?.name ?? req.appUser?.email ?? "неизвестно",
+          })
+          .where(
+            and(
+              inArray(deliveriesTable.id, existingIds),
+              isNull(deliveriesTable.archivedAt),
+            ),
+          );
       }
-      if (itemsToInsert.length === 0) return [];
-      return tx
+      if (itemsToInsert.length === 0) {
+        return { kind: "ok" as const, inserted: [] };
+      }
+      const inserted = await tx
         .insert(deliveriesTable)
         .values(
           itemsToInsert.map((item) => ({
@@ -1261,15 +1338,26 @@ router.post(
           })),
         )
         .returning();
-    });
+      return { kind: "ok" as const, inserted };
+      });
+    } catch (error) {
+      if (isDeliveryScheduleUniqueViolation(error)) {
+        res.status(409).json({
+          error: "Конфликт строк графика: слот уже занят другой доставкой",
+        });
+        return;
+      }
+      throw error;
+    }
 
-    await Promise.allSettled(
-      photos.map(async ({ objectPath }) => {
-        const objectFile =
-          await objectStorageService.getObjectEntityFile(objectPath);
-        await objectFile.delete();
-      }),
-    );
+    if (replacement.kind === "actual") {
+      res.status(409).json({
+        error:
+          "Полная замена запрещена: в выбранном месяце уже есть фактические даты",
+      });
+      return;
+    }
+    const inserted = replacement.inserted;
 
     const dtos = await Promise.all(
       inserted.map(async (row) =>
@@ -1328,20 +1416,17 @@ router.patch(
         .json({ error: "Выбранный пользователь не является водителем" });
       return;
     }
-    let existing: typeof deliveriesTable.$inferSelect | undefined;
-    if (
-      parsed.data.actualDate !== undefined ||
-      parsed.data.plannedDate !== undefined ||
-      parsed.data.correctedPlannedDate !== undefined
-    ) {
-      [existing] = await db
-        .select()
-        .from(deliveriesTable)
-        .where(eq(deliveriesTable.id, params.data.id));
-      if (!existing) {
-        res.status(404).json({ error: "Доставка не найдена" });
-        return;
-      }
+    const [existing] = await db
+      .select()
+      .from(deliveriesTable)
+      .where(eq(deliveriesTable.id, params.data.id));
+    if (!existing) {
+      res.status(404).json({ error: "Доставка не найдена" });
+      return;
+    }
+    if (existing.archivedAt) {
+      res.status(409).json({ error: "Архивная доставка недоступна для изменения" });
+      return;
     }
     if (parsed.data.correctedPlannedDate !== undefined) {
       const correctedPlannedDate = parsed.data.correctedPlannedDate
@@ -1442,7 +1527,10 @@ router.patch(
     if (parsed.data.driverUserId !== undefined)
       updateValues.driverUserId = parsed.data.driverUserId;
 
-    const updateConditions = [eq(deliveriesTable.id, params.data.id)];
+    const updateConditions = [
+      eq(deliveriesTable.id, params.data.id),
+      isNull(deliveriesTable.archivedAt),
+    ];
     if (
       parsed.data.correctedPlannedDate instanceof Date &&
       !(parsed.data.plannedDate instanceof Date)
@@ -1481,7 +1569,12 @@ router.patch(
       const [stillExists] = await db
         .select({ id: deliveriesTable.id })
         .from(deliveriesTable)
-        .where(eq(deliveriesTable.id, params.data.id))
+        .where(
+          and(
+            eq(deliveriesTable.id, params.data.id),
+            isNull(deliveriesTable.archivedAt),
+          ),
+        )
         .limit(1);
       if (stillExists) {
         res.status(409).json({
@@ -1501,6 +1594,95 @@ router.patch(
 
     res.json(
       UpdateDeliveryResponse.parse(
+        toDeliveryDto(
+          delivery,
+          site?.name ?? "",
+          site?.address ?? "",
+          counts.get(delivery.id) ?? 0,
+          await getDriverName(delivery.driverUserId),
+        ),
+      ),
+    );
+  },
+);
+
+router.post(
+  "/deliveries/:id/restore",
+  canEditDeliveries,
+  async (req, res): Promise<void> => {
+    const params = RestoreDeliveryParams.safeParse(req.params);
+    if (!params.success) {
+      res.status(400).json({ error: params.error.message });
+      return;
+    }
+
+    let delivery: typeof deliveriesTable.$inferSelect | undefined;
+    try {
+      [delivery] = await db.transaction(async (tx) => {
+        const [current] = await tx
+          .select()
+          .from(deliveriesTable)
+          .where(eq(deliveriesTable.id, params.data.id))
+          .for("update")
+          .limit(1);
+        if (!current) return [];
+        if (!current.archivedAt) {
+          const error = new Error("active delivery");
+          (error as Error & { code?: string }).code = "ACTIVE_DELIVERY";
+          throw error;
+        }
+        return tx
+          .update(deliveriesTable)
+          .set({
+            archivedAt: null,
+            archivedBy: null,
+            archivedByName: null,
+          })
+          .where(
+            and(
+              eq(deliveriesTable.id, current.id),
+              isNotNull(deliveriesTable.archivedAt),
+            ),
+          )
+          .returning();
+      });
+    } catch (error) {
+      if (
+        (error as { code?: string }).code === "ACTIVE_DELIVERY" ||
+        isDeliveryScheduleUniqueViolation(error)
+      ) {
+        res.status(409).json({
+          error:
+            "Невозможно восстановить доставку: строка графика уже существует",
+        });
+        return;
+      }
+      throw error;
+    }
+
+    if (!delivery) {
+      const [current] = await db
+        .select({ archivedAt: deliveriesTable.archivedAt })
+        .from(deliveriesTable)
+        .where(eq(deliveriesTable.id, params.data.id))
+        .limit(1);
+      res
+        .status(current ? 409 : 404)
+        .json({
+          error: current
+            ? "Доставка уже активна"
+            : "Доставка не найдена",
+        });
+      return;
+    }
+
+    const [site] = await db
+      .select()
+      .from(sitesTable)
+      .where(eq(sitesTable.id, delivery.siteId));
+    const counts = await photosCountMap([delivery.id]);
+    res.json(
+      RestoreDeliveryResponse.parse(
         toDeliveryDto(
           delivery,
           site?.name ?? "",
@@ -1534,6 +1716,10 @@ router.post(
       .where(eq(deliveriesTable.id, params.data.id));
     if (!existing) {
       res.status(404).json({ error: "Доставка не найдена" });
+      return;
+    }
+    if (existing.archivedAt) {
+      res.status(409).json({ error: "Архивная доставка недоступна для изменения" });
       return;
     }
     if (existing.actualDate) {
@@ -1571,7 +1757,12 @@ router.post(
             req.appUser?.name ?? req.appUser?.email ?? "неизвестно",
           rescheduledAt: new Date(),
         })
-        .where(eq(deliveriesTable.id, params.data.id))
+        .where(
+          and(
+            eq(deliveriesTable.id, params.data.id),
+            isNull(deliveriesTable.archivedAt),
+          ),
+        )
         .returning();
     } catch (error) {
       if (isDeliveryScheduleUniqueViolation(error)) {
@@ -1622,6 +1813,8 @@ router.post(
         .for("update")
         .limit(1);
       if (!delivery) return { status: 404 as const };
+      if (delivery.archivedAt)
+        return { status: 409 as const, reason: "archived" as const };
       if (!delivery.plannedDate)
         return { status: 409 as const, reason: "undated" as const };
       if (delivery.actApprovedAt) return { status: 200 as const, delivery };
@@ -1655,7 +1848,9 @@ router.post(
     if (outcome.status === 409) {
       res.status(409).json({
         error:
-          outcome.reason === "done"
+          outcome.reason === "archived"
+            ? "Архивная доставка недоступна для изменения"
+            : outcome.reason === "done"
             ? "Сначала отметьте доставку выполненной"
             : outcome.reason === "undated"
               ? "Сначала назначьте плановую дату доставки"
@@ -1702,7 +1897,11 @@ router.get("/deliveries/:id/photos", async (req, res): Promise<void> => {
     res.status(404).json({ error: "Доставка не найдена" });
     return;
   }
-  if (!canAccessDeliveryActs(req.appUser, delivery.driverUserId)) {
+  if (
+    delivery.archivedAt
+      ? !canUserEditDeliveries(req.appUser)
+      : !canAccessDeliveryActs(req.appUser, delivery.driverUserId)
+  ) {
     res
       .status(403)
       .json({ error: "Нет прав просматривать акты этой доставки" });
@@ -1732,7 +1931,10 @@ router.post("/deliveries/:id/photos", async (req, res): Promise<void> => {
   }
 
   const [authorizedDelivery] = await db
-    .select({ driverUserId: deliveriesTable.driverUserId })
+    .select({
+      driverUserId: deliveriesTable.driverUserId,
+      archivedAt: deliveriesTable.archivedAt,
+    })
     .from(deliveriesTable)
     .where(eq(deliveriesTable.id, params.data.id))
     .limit(1);
@@ -1740,7 +1942,11 @@ router.post("/deliveries/:id/photos", async (req, res): Promise<void> => {
     res.status(404).json({ error: "Доставка не найдена" });
     return;
   }
-  if (!canUploadDeliveryActs(req.appUser, authorizedDelivery.driverUserId)) {
+  if (
+    authorizedDelivery.archivedAt
+      ? !canUserEditDeliveries(req.appUser)
+      : !canUploadDeliveryActs(req.appUser, authorizedDelivery.driverUserId)
+  ) {
     res
       .status(403)
       .json({ error: "Нет прав прикладывать фото к этой доставке" });
@@ -1781,6 +1987,13 @@ router.post("/deliveries/:id/photos", async (req, res): Promise<void> => {
         return {
           status: 409 as const,
           error: "Доставка уже удаляется",
+          cleanup: true,
+        };
+      }
+      if (delivery.archivedAt) {
+        return {
+          status: 409 as const,
+          error: "Архивная доставка недоступна для изменения",
           cleanup: true,
         };
       }
@@ -1920,13 +2133,19 @@ router.delete(
         }
 
         const [delivery] = await tx
-          .select({ id: deliveriesTable.id })
+          .select({
+            id: deliveriesTable.id,
+            archivedAt: deliveriesTable.archivedAt,
+          })
           .from(deliveriesTable)
           .where(eq(deliveriesTable.id, photo.deliveryId))
           .for("update")
           .limit(1);
         if (!delivery) {
           return { status: 404 as const };
+        }
+        if (delivery.archivedAt) {
+          return { status: 409 as const };
         }
 
         await acquireDeliveryUploadLock(tx, photo.objectPath);
@@ -1959,6 +2178,10 @@ router.delete(
 
       if (prepared.status === 404) {
         res.status(404).json({ error: "Акт не найден" });
+        return;
+      }
+      if (prepared.status === 409) {
+        res.status(409).json({ error: "Архивная доставка недоступна для изменения" });
         return;
       }
 
@@ -2008,7 +2231,7 @@ router.delete(
 
 router.delete(
   "/deliveries/:id",
-  requireAdmin,
+  canEditDeliveries,
   async (req, res): Promise<void> => {
     const params = DeleteDeliveryParams.safeParse(req.params);
     if (!params.success) {
@@ -2017,9 +2240,13 @@ router.delete(
     }
 
     try {
-      const prepared = await db.transaction(async (tx) => {
+      const archived = await db.transaction(async (tx) => {
         const [delivery] = await tx
-          .select()
+          .select({
+            id: deliveriesTable.id,
+            archivedAt: deliveriesTable.archivedAt,
+            deletionPendingAt: deliveriesTable.deletionPendingAt,
+          })
           .from(deliveriesTable)
           .where(eq(deliveriesTable.id, params.data.id))
           .for("update")
@@ -2027,81 +2254,40 @@ router.delete(
         if (!delivery) {
           return { status: 404 as const };
         }
-
-        const photos = await tx
-          .select({
-            id: deliveryPhotosTable.id,
-            objectPath: deliveryPhotosTable.objectPath,
+        if (delivery.deletionPendingAt) {
+          return { status: 409 as const, reason: "deleting" as const };
+        }
+        if (delivery.archivedAt) return { status: 204 as const };
+        await tx
+          .update(deliveriesTable)
+          .set({
+            archivedAt: new Date(),
+            archivedBy: req.appUser?.id ?? null,
+            archivedByName:
+              req.appUser?.name ?? req.appUser?.email ?? "неизвестно",
           })
-          .from(deliveryPhotosTable)
-          .where(eq(deliveryPhotosTable.deliveryId, delivery.id))
-          .orderBy(deliveryPhotosTable.objectPath);
-        for (const photo of photos) {
-          await acquireDeliveryUploadLock(tx, photo.objectPath);
-        }
-        const pendingAt = delivery.deletionPendingAt ?? new Date();
-        if (!delivery.deletionPendingAt) {
-          await tx
-            .update(deliveriesTable)
-            .set({ deletionPendingAt: pendingAt })
-            .where(eq(deliveriesTable.id, delivery.id));
-        }
-        if (photos.length > 0) {
-          await tx
-            .update(deliveryPhotosTable)
-            .set({ deletionPendingAt: pendingAt })
-            .where(eq(deliveryPhotosTable.deliveryId, delivery.id));
-        }
-        return { status: 200 as const, deliveryId: delivery.id };
-      });
-
-      if (prepared.status === 404) {
-        res.status(404).json({ error: "Доставка не найдена" });
-        return;
-      }
-
-      const outcome = await db.transaction(async (tx) => {
-        const [delivery] = await tx
-          .select({ id: deliveriesTable.id })
-          .from(deliveriesTable)
           .where(
             and(
-              eq(deliveriesTable.id, prepared.deliveryId),
-              isNotNull(deliveriesTable.deletionPendingAt),
+              eq(deliveriesTable.id, delivery.id),
+              isNull(deliveriesTable.archivedAt),
             ),
-          )
-          .for("update")
-          .limit(1);
-        if (!delivery) return { status: 204 as const };
-
-        const photos = await tx
-          .select({
-            id: deliveryPhotosTable.id,
-            objectPath: deliveryPhotosTable.objectPath,
-          })
-          .from(deliveryPhotosTable)
-          .where(eq(deliveryPhotosTable.deliveryId, delivery.id))
-          .orderBy(deliveryPhotosTable.objectPath);
-        for (const photo of photos) {
-          await acquireDeliveryUploadLock(tx, photo.objectPath);
-          if (!(await deleteAttachedObject(req, photo.objectPath))) {
-            return { status: 502 as const };
-          }
-        }
-
-        await tx
-          .delete(deliveriesTable)
-          .where(eq(deliveriesTable.id, delivery.id));
+          );
         return { status: 204 as const };
       });
 
-      if (outcome.status === 502) {
-        res.status(502).json({ error: "Не удалось удалить файлы актов" });
+      if (archived.status === 404) {
+        res.status(404).json({ error: "Доставка не найдена" });
+        return;
+      }
+      if (archived.status === 409) {
+        res.status(409).json({
+          error: "Доставка уже подготовлена к физическому удалению",
+        });
         return;
       }
     } catch (error) {
-      req.log?.error({ err: error }, "Failed to delete delivery");
-      res.status(500).json({ error: "Не удалось удалить доставку" });
+      req.log?.error({ err: error }, "Failed to archive delivery");
+      res.status(500).json({ error: "Не удалось архивировать доставку" });
       return;
     }
 

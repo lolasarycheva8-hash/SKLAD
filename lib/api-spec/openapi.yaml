@@ -625,6 +625,13 @@ paths:
           required: false
           schema:
             $ref: "#/components/schemas/DeliveryStatus"
+        - name: archived
+          in: query
+          required: false
+          description: Return archived deliveries only; restricted to delivery editors
+          schema:
+            type: boolean
+            default: false
       responses:
         "200":
           description: List of deliveries
@@ -796,6 +803,37 @@ paths:
                   error:
                     type: string
                     example: Доставка не найдена
+
+  /deliveries/{id}/restore:
+    post:
+      operationId: restoreDelivery
+      tags: [deliveries]
+      summary: Restore an archived delivery
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Restored delivery
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Delivery"
+        "404":
+          description: Delivery not found
+        "409":
+          description: An active delivery already occupies the schedule slot
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error:
+                    type: string
 
   /deliveries/{id}/reschedule:
     post:
@@ -3070,6 +3108,11 @@ components:
         createdAt:
           type: string
           format: date-time
+        archivedAt:
+          type: [string, "null"]
+          format: date-time
+        archivedByName:
+          type: [string, "null"]
       required:
         - id
         - siteId
@@ -3092,6 +3135,8 @@ components:
         - rescheduledAt
         - photosCount
         - createdAt
+        - archivedAt
+        - archivedByName
 
     CreateDeliveryInput:
       type: object

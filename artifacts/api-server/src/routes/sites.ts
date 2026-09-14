@@ -7,6 +7,7 @@ import {
   clientsTable,
   db,
   deliveryTypesTable,
+  deliveriesTable,
   normalizeClientNameWhitespace,
   sitesTable,
   siteChangeRequestsTable,
@@ -1632,6 +1633,14 @@ router.delete("/sites/:id", requireAdmin, async (req, res): Promise<void> => {
 
   const outcome = await db.transaction(async (tx) => {
     await lockSiteClientWrites(tx);
+    const [lockedSite] = await tx
+      .select({ id: sitesTable.id })
+      .from(sitesTable)
+      .where(eq(sitesTable.id, params.data.id))
+      .for("update")
+      .limit(1);
+    if (!lockedSite) return { status: 404 as const };
+
     const [pendingRequest] = await tx
       .select({ id: siteChangeRequestsTable.id })
       .from(siteChangeRequestsTable)
@@ -1642,6 +1651,13 @@ router.delete("/sites/:id", requireAdmin, async (req, res): Promise<void> => {
         ),
       );
     if (pendingRequest) return { status: 409 as const };
+    const [delivery] = await tx
+      .select({ id: deliveriesTable.id })
+      .from(deliveriesTable)
+      .where(eq(deliveriesTable.siteId, params.data.id))
+      .for("update")
+      .limit(1);
+    if (delivery) return { status: 410 as const };
     const [site] = await tx
       .delete(sitesTable)
       .where(eq(sitesTable.id, params.data.id))
@@ -1657,6 +1673,13 @@ router.delete("/sites/:id", requireAdmin, async (req, res): Promise<void> => {
   }
   if (outcome.status === 404) {
     res.status(404).json({ error: "Site not found" });
+    return;
+  }
+  if (outcome.status === 410) {
+    res.status(409).json({
+      error:
+        "Нельзя удалить объект: у него есть доставки. Сначала удалите все связанные доставки",
+    });
     return;
   }
 

@@ -516,7 +516,12 @@ export function createProductionDeliveryUploadCleanupDependencies(
         transaction
           .select({ id: deliveriesTable.id })
           .from(deliveriesTable)
-          .where(isNotNull(deliveriesTable.deletionPendingAt))
+          .where(
+            and(
+              isNotNull(deliveriesTable.deletionPendingAt),
+              isNull(deliveriesTable.archivedAt),
+            ),
+          )
           .orderBy(deliveriesTable.id),
       )) as Array<{ id: string }>;
       for (const pendingDelivery of pendingDeliveries) {
@@ -531,6 +536,7 @@ export function createProductionDeliveryUploadCleanupDependencies(
                 and(
                   eq(deliveriesTable.id, pendingDelivery.id),
                   isNotNull(deliveriesTable.deletionPendingAt),
+                  isNull(deliveriesTable.archivedAt),
                 ),
               )
               .for("update")
@@ -555,6 +561,7 @@ export function createProductionDeliveryUploadCleanupDependencies(
                 and(
                   eq(deliveriesTable.id, delivery.id),
                   isNotNull(deliveriesTable.deletionPendingAt),
+                  isNull(deliveriesTable.archivedAt),
                 ),
               );
             return true;
@@ -593,6 +600,7 @@ export function createProductionDeliveryUploadCleanupDependencies(
             and(
               isNotNull(deliveryPhotosTable.deletionPendingAt),
               isNull(deliveriesTable.deletionPendingAt),
+              isNull(deliveriesTable.archivedAt),
             ),
           )
           .orderBy(deliveryPhotosTable.objectPath),
@@ -605,12 +613,19 @@ export function createProductionDeliveryUploadCleanupDependencies(
               .select({
                 id: deliveriesTable.id,
                 deletionPendingAt: deliveriesTable.deletionPendingAt,
+                archivedAt: deliveriesTable.archivedAt,
               })
               .from(deliveriesTable)
               .where(eq(deliveriesTable.id, row.deliveryId))
               .for("update")
               .limit(1);
-            if (!delivery || delivery.deletionPendingAt !== null) return false;
+            if (
+              !delivery ||
+              delivery.deletionPendingAt !== null ||
+              delivery.archivedAt !== null
+            ) {
+              return false;
+            }
             await acquireDeliveryUploadLock(transaction, row.objectPath);
             const [pendingPhoto] = await transaction
               .select({

@@ -88,6 +88,7 @@ import type {
   ReceiptProductLookup,
   ReplaceDeliveriesBulkInput,
   RescheduleDeliveryInput,
+  RestoreDelivery409,
   Shipment,
   ShipmentOrderLookup,
   ShipmentSiteLookup,
@@ -3262,6 +3263,90 @@ export const useDeleteDelivery = <
   TContext
 > => {
   return useMutation(getDeleteDeliveryMutationOptions(options));
+};
+
+export const getRestoreDeliveryUrl = (id: string) => {
+  return `/api/deliveries/${id}/restore`;
+};
+
+/**
+ * @summary Restore an archived delivery
+ */
+export const restoreDelivery = async (
+  id: string,
+  options?: RequestInit,
+): Promise<Delivery> => {
+  return customFetch<Delivery>(getRestoreDeliveryUrl(id), {
+    ...options,
+    method: "POST",
+  });
+};
+
+export const getRestoreDeliveryMutationOptions = <
+  TError = ErrorType<void | RestoreDelivery409>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof restoreDelivery>>,
+    TError,
+    { id: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof restoreDelivery>>,
+  TError,
+  { id: string },
+  TContext
+> => {
+  const mutationKey = ["restoreDelivery"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof restoreDelivery>>,
+    { id: string }
+  > = (props) => {
+    const { id } = props ?? {};
+
+    return restoreDelivery(id, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type RestoreDeliveryMutationResult = NonNullable<
+  Awaited<ReturnType<typeof restoreDelivery>>
+>;
+
+export type RestoreDeliveryMutationError = ErrorType<void | RestoreDelivery409>;
+
+/**
+ * @summary Restore an archived delivery
+ */
+export const useRestoreDelivery = <
+  TError = ErrorType<void | RestoreDelivery409>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof restoreDelivery>>,
+    TError,
+    { id: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof restoreDelivery>>,
+  TError,
+  { id: string },
+  TContext
+> => {
+  return useMutation(getRestoreDeliveryMutationOptions(options));
 };
 
 export const getRescheduleDeliveryUrl = (id: string) => {

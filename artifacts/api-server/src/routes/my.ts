@@ -36,7 +36,7 @@ router.get("/my/deliveries", async (req, res): Promise<void> => {
     return;
   }
 
-  const conditions = [];
+  const conditions = [isNull(deliveriesTable.archivedAt)];
   if (access === "driver" && user) {
     conditions.push(eq(deliveriesTable.driverUserId, user.id));
   } else if (siteIds && siteIds.length > 0) {
@@ -109,7 +109,12 @@ router.post("/my/deliveries/:id/done", async (req, res): Promise<void> => {
   const [existing] = await db
     .select()
     .from(deliveriesTable)
-    .where(eq(deliveriesTable.id, params.data.id));
+    .where(
+      and(
+        eq(deliveriesTable.id, params.data.id),
+        isNull(deliveriesTable.archivedAt),
+      ),
+    );
 
   if (!existing) {
     res.status(404).json({ error: "Доставка не найдена" });
@@ -142,6 +147,7 @@ router.post("/my/deliveries/:id/done", async (req, res): Promise<void> => {
     .where(and(
       eq(deliveriesTable.id, params.data.id),
       eq(deliveriesTable.driverUserId, driverUserId),
+      isNull(deliveriesTable.archivedAt),
     ))
     .returning();
   if (!updated) {
@@ -195,6 +201,7 @@ router.patch("/my/deliveries/:id/comment", async (req, res): Promise<void> => {
       eq(deliveriesTable.id, params.data.id),
       eq(deliveriesTable.driverUserId, driverUserId),
       isNull(deliveriesTable.actApprovedAt),
+      isNull(deliveriesTable.archivedAt),
     ))
     .returning();
   if (!updated) {
@@ -202,10 +209,15 @@ router.patch("/my/deliveries/:id/comment", async (req, res): Promise<void> => {
       .select({
         driverUserId: deliveriesTable.driverUserId,
         actApprovedAt: deliveriesTable.actApprovedAt,
+        archivedAt: deliveriesTable.archivedAt,
       })
       .from(deliveriesTable)
       .where(eq(deliveriesTable.id, params.data.id));
     if (!current) {
+      res.status(404).json({ error: "Доставка не найдена" });
+      return;
+    }
+    if (current.archivedAt) {
       res.status(404).json({ error: "Доставка не найдена" });
       return;
     }
@@ -256,7 +268,10 @@ router.get("/my/sites-summary", async (req, res): Promise<void> => {
     .from(sitesTable)
     .where(inArray(sitesTable.id, siteIds));
 
-  const conditions = [inArray(deliveriesTable.siteId, siteIds)];
+  const conditions = [
+    inArray(deliveriesTable.siteId, siteIds),
+    isNull(deliveriesTable.archivedAt),
+  ];
   if (query.data.from) {
     conditions.push(gte(deliveriesTable.plannedDate, query.data.from));
   }

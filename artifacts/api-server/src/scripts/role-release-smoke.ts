@@ -662,6 +662,11 @@ async function cleanupDriverAccessFixture(
   await withBoundedDatabaseClient(
     "delete driver access fixture",
     async (client) => {
+      await client.query(
+        `DELETE FROM deliveries
+          WHERE id = ANY($1::uuid[])`,
+        [[fixture.roleDriverDeliveryId, fixture.legacyDriverDeliveryId]],
+      );
       await client.query("DELETE FROM sites WHERE id = $1", [fixture.siteId]);
       const remaining = (await client.query(
         `SELECT count(*)::int AS count
@@ -765,6 +770,11 @@ async function cleanupLegacyMappingFixture(
   await withBoundedDatabaseClient(
     "delete legacy driver mapping fixture",
     async (client) => {
+      await client.query(
+        `DELETE FROM deliveries
+          WHERE site_id = ANY($1::uuid[])`,
+        [fixture.siteIds],
+      );
       const deleted = (await client.query(
         "DELETE FROM sites WHERE id = ANY($1::uuid[]) RETURNING id",
         [fixture.siteIds],

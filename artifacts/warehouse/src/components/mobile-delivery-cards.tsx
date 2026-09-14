@@ -1,6 +1,12 @@
 import React, { useState } from "react";
 import { Link } from "wouter";
-import { MessageSquareText, FileText, CheckCircle2, AlertTriangle, Loader2 } from "lucide-react";
+import {
+  MessageSquareText,
+  FileText,
+  CheckCircle2,
+  AlertTriangle,
+  Loader2,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { getMonthDateBounds, toDateInputValue, confirmPlannedDate } from "@/lib/delivery-workspace";
@@ -147,12 +153,14 @@ export function MobileLogisticianCard({
   onUpdateActualDate,
   onOpenPhotos,
   onOpenDriverComment,
+  onDelete,
 }: {
   delivery: JoinedDelivery;
   month: string;
   onUpdateActualDate: (id: string, date: string) => Promise<void>;
   onOpenPhotos: (delivery: JoinedDelivery) => void;
   onOpenDriverComment: (delivery: JoinedDelivery) => void;
+  onDelete?: (delivery: JoinedDelivery) => void;
 }) {
   const [dateDialogOpen, setDateDialogOpen] = useState(false);
 
@@ -233,6 +241,20 @@ export function MobileLogisticianCard({
           {hasPhotos ? `Акты (${delivery.photosCount})` : "Загрузить акт"}
         </Button>
       </div>
+
+      {onDelete && (
+        <div className="border-t bg-muted/10 p-2">
+          <Button
+            type="button"
+            variant="outline"
+            className="h-11 w-full border-destructive/50 text-sm font-medium text-destructive hover:bg-destructive/10 hover:text-destructive"
+            onClick={() => onDelete(delivery)}
+            data-testid={`mobile-card-button-delete-${delivery.id}`}
+          >
+            Удалить
+          </Button>
+        </div>
+      )}
 
       <MobileActualDateDialog
         delivery={delivery}

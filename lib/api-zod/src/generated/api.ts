@@ -1312,6 +1312,8 @@ export const DeleteSiteResponse = zod.void();
 /**
  * @summary List delivery schedule entries
  */
+export const listDeliveriesQueryArchivedDefault = false;
+
 export const ListDeliveriesQueryParams = zod.object({
   month: zod.coerce
     .string()
@@ -1332,6 +1334,12 @@ export const ListDeliveriesQueryParams = zod.object({
   siteId: zod.coerce.string().optional(),
   driverUserId: zod.coerce.string().optional(),
   status: zod.enum(["pending", "on_time", "late", "overdue"]).optional(),
+  archived: zod.coerce
+    .boolean()
+    .default(listDeliveriesQueryArchivedDefault)
+    .describe(
+      "Return archived deliveries only; restricted to delivery editors",
+    ),
 });
 
 export const listDeliveriesResponseScheduleMonthRegExp = new RegExp(
@@ -1410,6 +1418,8 @@ export const ListDeliveriesResponseItem = zod.object({
   rescheduledAt: zod.coerce.date().nullable(),
   photosCount: zod.number().describe("Количество приложенных фото-актов"),
   createdAt: zod.coerce.date(),
+  archivedAt: zod.coerce.date().nullable(),
+  archivedByName: zod.string().nullable(),
 });
 export const ListDeliveriesResponse = zod.array(ListDeliveriesResponseItem);
 
@@ -1517,6 +1527,8 @@ export const CreateDeliveryResponse = zod.object({
   rescheduledAt: zod.coerce.date().nullable(),
   photosCount: zod.number().describe("Количество приложенных фото-актов"),
   createdAt: zod.coerce.date(),
+  archivedAt: zod.coerce.date().nullable(),
+  archivedByName: zod.string().nullable(),
 });
 
 /**
@@ -1627,6 +1639,8 @@ export const CreateDeliveriesBulkResponseItem = zod.object({
   rescheduledAt: zod.coerce.date().nullable(),
   photosCount: zod.number().describe("Количество приложенных фото-актов"),
   createdAt: zod.coerce.date(),
+  archivedAt: zod.coerce.date().nullable(),
+  archivedByName: zod.string().nullable(),
 });
 export const CreateDeliveriesBulkResponse = zod.array(
   CreateDeliveriesBulkResponseItem,
@@ -1754,6 +1768,8 @@ export const ReplaceDeliveriesBulkResponseItem = zod.object({
   rescheduledAt: zod.coerce.date().nullable(),
   photosCount: zod.number().describe("Количество приложенных фото-актов"),
   createdAt: zod.coerce.date(),
+  archivedAt: zod.coerce.date().nullable(),
+  archivedByName: zod.string().nullable(),
 });
 export const ReplaceDeliveriesBulkResponse = zod.array(
   ReplaceDeliveriesBulkResponseItem,
@@ -1882,6 +1898,8 @@ export const UpdateDeliveryResponse = zod.object({
   rescheduledAt: zod.coerce.date().nullable(),
   photosCount: zod.number().describe("Количество приложенных фото-актов"),
   createdAt: zod.coerce.date(),
+  archivedAt: zod.coerce.date().nullable(),
+  archivedByName: zod.string().nullable(),
 });
 
 /**
@@ -1892,6 +1910,93 @@ export const DeleteDeliveryParams = zod.object({
 });
 
 export const DeleteDeliveryResponse = zod.void();
+
+/**
+ * @summary Restore an archived delivery
+ */
+export const RestoreDeliveryParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const restoreDeliveryResponseScheduleMonthRegExp = new RegExp(
+  "^\\d{4}-(0[1-9]|1[0-2])$",
+);
+
+export const RestoreDeliveryResponse = zod.object({
+  id: zod.string(),
+  siteId: zod.string(),
+  siteName: zod.string(),
+  siteAddress: zod.string(),
+  managerContact: zod
+    .string()
+    .nullish()
+    .describe("Телефон менеджера объекта для связи с водителем"),
+  driverUserId: zod.string().uuid().nullable(),
+  driver: zod.string(),
+  plannedDate: zod.coerce
+    .date()
+    .nullable()
+    .describe("Плановая дата доставки (null, если дата ещё не назначена)"),
+  correctedPlannedDate: zod.coerce
+    .date()
+    .nullish()
+    .describe(
+      "Уточнённая плановая дата только для отчётности; не изменяет исходный план, график или показатели",
+    ),
+  deliveryType: zod
+    .string()
+    .nullish()
+    .describe(
+      "Тип поставки для этой доставки; null означает использовать значение объекта",
+    ),
+  scheduleMonth: zod
+    .string()
+    .regex(restoreDeliveryResponseScheduleMonthRegExp)
+    .nullable()
+    .describe(
+      "Месяц владения строкой графика; null возможен только у legacy rows",
+    ),
+  actualDate: zod.coerce
+    .date()
+    .nullable()
+    .describe("Фактическая дата доставки (редактируемая)"),
+  actApprovedAt: zod.coerce.date().nullable(),
+  actApprovedBy: zod.string().uuid().nullable(),
+  workflowStatus: zod
+    .enum(["planned", "done", "closed"])
+    .describe(
+      "planned — not completed; done — actual date set but act unapproved; closed — act approved",
+    ),
+  note: zod
+    .string()
+    .nullable()
+    .describe("Комментарий водителя; логист видит его только для чтения"),
+  logisticianNote: zod
+    .string()
+    .nullable()
+    .describe(
+      "Примечание логиста для водителя; водитель видит его только для чтения",
+    ),
+  status: zod
+    .enum(["pending", "on_time", "late", "overdue"])
+    .describe(
+      "pending — план в будущем, факта нет; on_time — доставлено в срок или раньше;\nlate — доставлено позже плана; overdue — план уже прошёл, факта нет\n",
+    ),
+  lagDays: zod
+    .number()
+    .nullable()
+    .describe("Отклонение факта от плана в днях (положительное — отставание)"),
+  rescheduledFromDate: zod.coerce
+    .date()
+    .nullable()
+    .describe("Исходная плановая дата до переноса (null — переносов не было)"),
+  rescheduledBy: zod.string().nullable(),
+  rescheduledAt: zod.coerce.date().nullable(),
+  photosCount: zod.number().describe("Количество приложенных фото-актов"),
+  createdAt: zod.coerce.date(),
+  archivedAt: zod.coerce.date().nullable(),
+  archivedByName: zod.string().nullable(),
+});
 
 /**
  * @summary Перенести доставку на другую дату (сохраняет исходную дату и автора переноса)
@@ -1980,6 +2085,8 @@ export const RescheduleDeliveryResponse = zod.object({
   rescheduledAt: zod.coerce.date().nullable(),
   photosCount: zod.number().describe("Количество приложенных фото-актов"),
   createdAt: zod.coerce.date(),
+  archivedAt: zod.coerce.date().nullable(),
+  archivedByName: zod.string().nullable(),
 });
 
 /**
@@ -2074,6 +2181,8 @@ export const ApproveDeliveryActResponse = zod.object({
   rescheduledAt: zod.coerce.date().nullable(),
   photosCount: zod.number().describe("Количество приложенных фото-актов"),
   createdAt: zod.coerce.date(),
+  archivedAt: zod.coerce.date().nullable(),
+  archivedByName: zod.string().nullable(),
 });
 
 /**
@@ -3317,6 +3426,8 @@ export const ListMyDeliveriesResponseItem = zod.object({
   rescheduledAt: zod.coerce.date().nullable(),
   photosCount: zod.number().describe("Количество приложенных фото-актов"),
   createdAt: zod.coerce.date(),
+  archivedAt: zod.coerce.date().nullable(),
+  archivedByName: zod.string().nullable(),
 });
 export const ListMyDeliveriesResponse = zod.array(ListMyDeliveriesResponseItem);
 
@@ -3403,6 +3514,8 @@ export const MarkMyDeliveryDoneResponse = zod.object({
   rescheduledAt: zod.coerce.date().nullable(),
   photosCount: zod.number().describe("Количество приложенных фото-актов"),
   createdAt: zod.coerce.date(),
+  archivedAt: zod.coerce.date().nullable(),
+  archivedByName: zod.string().nullable(),
 });
 
 /**
@@ -3492,6 +3605,8 @@ export const UpdateMyDeliveryCommentResponse = zod.object({
   rescheduledAt: zod.coerce.date().nullable(),
   photosCount: zod.number().describe("Количество приложенных фото-актов"),
   createdAt: zod.coerce.date(),
+  archivedAt: zod.coerce.date().nullable(),
+  archivedByName: zod.string().nullable(),
 });
 
 /**
@@ -4377,6 +4492,8 @@ export const GetDeliveryDashboardSummaryResponse = zod.object({
       rescheduledAt: zod.coerce.date().nullable(),
       photosCount: zod.number().describe("Количество приложенных фото-актов"),
       createdAt: zod.coerce.date(),
+      archivedAt: zod.coerce.date().nullable(),
+      archivedByName: zod.string().nullable(),
     }),
   ),
   todayTotal: zod
@@ -4475,6 +4592,8 @@ export const GetDeliveryDashboardSummaryResponse = zod.object({
         rescheduledAt: zod.coerce.date().nullable(),
         photosCount: zod.number().describe("Количество приложенных фото-актов"),
         createdAt: zod.coerce.date(),
+        archivedAt: zod.coerce.date().nullable(),
+        archivedByName: zod.string().nullable(),
       }),
     )
     .describe("Все доставки, запланированные на сегодня"),

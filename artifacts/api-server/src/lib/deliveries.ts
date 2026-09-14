@@ -81,6 +81,8 @@ export function toDeliveryDto(
     rescheduledFromDate: row.rescheduledFromDate,
     rescheduledBy: row.rescheduledBy,
     rescheduledAt: row.rescheduledAt,
+    archivedAt: row.archivedAt,
+    archivedByName: row.archivedByName,
     photosCount,
     createdAt: row.createdAt,
   };

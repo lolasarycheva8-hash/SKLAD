@@ -461,6 +461,10 @@ export interface Delivery {
   /** Количество приложенных фото-актов */
   photosCount: number;
   createdAt: string;
+  /** @nullable */
+  archivedAt: string | null;
+  /** @nullable */
+  archivedByName: string | null;
 }
 
 export interface CreateDeliveryInput {
@@ -1212,6 +1216,10 @@ export type ListDeliveriesParams = {
   siteId?: string;
   driverUserId?: string;
   status?: DeliveryStatus;
+  /**
+   * Return archived deliveries only; restricted to delivery editors
+   */
+  archived?: boolean;
 };
 
 export type DownloadDeliveryActsForPeriodParams = {
@@ -1220,6 +1228,10 @@ export type DownloadDeliveryActsForPeriodParams = {
 };
 
 export type DeleteDelivery404 = {
+  error: string;
+};
+
+export type RestoreDelivery409 = {
   error: string;
 };
 

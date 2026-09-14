@@ -1,6 +1,10 @@
 import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { MobileActualDateDialog, MobileLogisticianCard, MobileManagerTable } from "../mobile-delivery-cards";
+import {
+  MobileActualDateDialog,
+  MobileLogisticianCard,
+  MobileManagerTable,
+} from "../mobile-delivery-cards";
 import { confirmPlannedDate } from "@/lib/delivery-workspace";
 import React from "react";
 
@@ -230,5 +234,22 @@ describe("MobileLogisticianCard", () => {
     
     const btn = screen.getByTestId("mobile-card-button-acts-1");
     expect((btn as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("exposes archive action on the touch card when provided", () => {
+    const onDelete = vi.fn();
+    render(
+      <MobileLogisticianCard
+        delivery={mockDelivery}
+        month="2024-05"
+        onUpdateActualDate={vi.fn()}
+        onOpenPhotos={vi.fn()}
+        onOpenDriverComment={vi.fn()}
+        onDelete={onDelete}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("mobile-card-button-delete-1"));
+    expect(onDelete).toHaveBeenCalledWith(mockDelivery);
   });
 });

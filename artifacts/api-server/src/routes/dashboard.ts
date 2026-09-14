@@ -35,12 +35,15 @@ router.get("/dashboard/delivery-summary", async (req, res): Promise<void> => {
     .from(deliveriesTable)
     .innerJoin(sitesTable, eq(deliveriesTable.siteId, sitesTable.id))
     .leftJoin(appUsersTable, eq(deliveriesTable.driverUserId, appUsersTable.id))
-    .where(or(
-      eq(deliveriesTable.scheduleMonth, month),
-      and(
-        isNull(deliveriesTable.scheduleMonth),
-        gte(deliveriesTable.plannedDate, start),
-        lt(deliveriesTable.plannedDate, end),
+    .where(and(
+      isNull(deliveriesTable.archivedAt),
+      or(
+        eq(deliveriesTable.scheduleMonth, month),
+        and(
+          isNull(deliveriesTable.scheduleMonth),
+          gte(deliveriesTable.plannedDate, start),
+          lt(deliveriesTable.plannedDate, end),
+        ),
       ),
     ))
     .orderBy(sql`${deliveriesTable.plannedDate} asc nulls last`);
@@ -100,7 +103,12 @@ router.get("/dashboard/delivery-summary", async (req, res): Promise<void> => {
     .from(deliveriesTable)
     .innerJoin(sitesTable, eq(deliveriesTable.siteId, sitesTable.id))
     .leftJoin(appUsersTable, eq(deliveriesTable.driverUserId, appUsersTable.id))
-    .where(eq(deliveriesTable.plannedDate, today));
+    .where(
+      and(
+        eq(deliveriesTable.plannedDate, today),
+        isNull(deliveriesTable.archivedAt),
+      ),
+    );
 
   const todayTotal = todayRows.length;
   const todayDeliveries = todayRows

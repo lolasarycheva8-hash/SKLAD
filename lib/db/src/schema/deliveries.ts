@@ -12,7 +12,7 @@ export const deliveriesTable = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     siteId: uuid("site_id")
       .notNull()
-      .references(() => sitesTable.id, { onDelete: "cascade" }),
+      .references(() => sitesTable.id, { onDelete: "restrict" }),
     // Preserve the old free-text assignment during the transition to users.
     legacyDriver: text("driver").notNull().default(""),
     driverUserId: uuid("driver_user_id").references(() => appUsersTable.id, {
@@ -33,20 +33,27 @@ export const deliveriesTable = pgTable(
     rescheduledBy: text("rescheduled_by"),
     rescheduledAt: timestamp("rescheduled_at", { withTimezone: true }),
     deletionPendingAt: timestamp("deletion_pending_at", { withTimezone: true }),
+    // Reversible archive metadata is intentionally separate from the
+    // irreversible storage cleanup marker above.
+    archivedAt: timestamp("archived_at", { withTimezone: true }),
+    archivedBy: uuid("archived_by").references(() => appUsersTable.id, {
+      onDelete: "set null",
+    }),
+    archivedByName: text("archived_by_name"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
   },
   (table) => [
-    uniqueIndex("deliveries_owned_dated_uq")
+    uniqueIndex("deliveries_owned_dated_active_uq")
       .on(table.siteId, table.scheduleMonth, table.plannedDate)
       .where(
-        sql`${table.scheduleMonth} is not null and ${table.plannedDate} is not null`,
+        sql`${table.archivedAt} is null and ${table.scheduleMonth} is not null and ${table.plannedDate} is not null`,
       ),
-    uniqueIndex("deliveries_owned_undated_uq")
+    uniqueIndex("deliveries_owned_undated_active_uq")
       .on(table.siteId, table.scheduleMonth)
       .where(
-        sql`${table.scheduleMonth} is not null and ${table.plannedDate} is null`,
+        sql`${table.archivedAt} is null and ${table.scheduleMonth} is not null and ${table.plannedDate} is null`,
       ),
   ],
 );
@@ -58,6 +65,9 @@ export const insertDeliverySchema = createInsertSchema(deliveriesTable).omit({
   actApprovedAt: true,
   actApprovedBy: true,
   deletionPendingAt: true,
+  archivedAt: true,
+  archivedBy: true,
+  archivedByName: true,
 });
 export type InsertDelivery = z.infer<typeof insertDeliverySchema>;
 export type Delivery = typeof deliveriesTable.$inferSelect;

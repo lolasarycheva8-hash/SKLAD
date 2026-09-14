@@ -23,4 +23,8 @@ export type ListDeliveriesParams = {
   siteId?: string;
   driverUserId?: string;
   status?: DeliveryStatus;
+  /**
+   * Return archived deliveries only; restricted to delivery editors
+   */
+  archived?: boolean;
 };

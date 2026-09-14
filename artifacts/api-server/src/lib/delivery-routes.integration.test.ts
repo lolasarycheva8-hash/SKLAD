@@ -29,6 +29,7 @@ import deliveriesRouter, {
   isDeliveryScheduleUniqueViolation,
 } from "../routes/deliveries.ts";
 import deliveryTypesRouter from "../routes/delivery-types.ts";
+import dashboardRouter from "../routes/dashboard.ts";
 import lookupsRouter from "../routes/lookups.ts";
 import myRouter from "../routes/my.ts";
 import ordersRouter from "../routes/orders.ts";
@@ -69,6 +70,7 @@ app.use((req, _res, next) => {
 });
 app.use(deliveriesRouter);
 app.use(deliveryTypesRouter);
+app.use(dashboardRouter);
 app.use(lookupsRouter);
 app.use(myRouter);
 app.use(ordersRouter);
@@ -246,6 +248,7 @@ before(async () => {
 
 after(async () => {
   if (siteId) {
+    await db.delete(deliveriesTable).where(eq(deliveriesTable.siteId, siteId));
     await db.delete(sitesTable).where(eq(sitesTable.id, siteId));
   }
   await db.delete(clientsTable).where(eq(clientsTable.id, integrationClientId));
@@ -1393,6 +1396,9 @@ test("администратор безопасно сопоставляет leg
     );
   } finally {
     if (createdSiteIds.length > 0) {
+      await db
+        .delete(deliveriesTable)
+        .where(inArray(deliveriesTable.siteId, createdSiteIds));
       await db.delete(sitesTable).where(inArray(sitesTable.id, createdSiteIds));
     }
   }
@@ -1735,6 +1741,9 @@ test("конкурирующие сопоставления не разделя�
     );
   } finally {
     if (createdSiteId) {
+      await db
+        .delete(deliveriesTable)
+        .where(eq(deliveriesTable.siteId, createdSiteId));
       await db.delete(sitesTable).where(eq(sitesTable.id, createdSiteId));
     }
   }
@@ -2364,10 +2373,9 @@ test("замена месяца сохраняет строки без даты 
     rows.some((row) => row.id === preserved.id),
     true,
   );
-  assert.equal(
-    rows.some((row) => row.id === replaced.id),
-    false,
-  );
+  const archivedReplaced = rows.find((row) => row.id === replaced.id);
+  assert.ok(archivedReplaced);
+  assert.ok(archivedReplaced.archivedAt);
   assert.equal(
     rows.some((row) => row.id === otherMonth.id),
     true,
@@ -2871,6 +2879,142 @@ test("подтверждение акта требует факт и файл, �
   assert.equal(afterDelete.actApprovedBy, null);
 });
 
+test("архивная доставка не выдаёт URL для нового upload", async () => {
+  const [delivery] = await db
+    .insert(deliveriesTable)
+    .values({ siteId, driverUserId: assignedDriver.id })
+    .returning({ id: deliveriesTable.id });
+  await db
+    .update(deliveriesTable)
+    .set({ archivedAt: new Date(), archivedByName: "Интеграционный тест" })
+    .where(eq(deliveriesTable.id, delivery.id));
+
+  actor = admin;
+  const response = await fetch(`${baseUrl}/storage/uploads/request-url`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      name: "архивный-акт.pdf",
+      size: 1024,
+      contentType: "application/pdf",
+      deliveryId: delivery.id,
+    }),
+  });
+  assert.equal(response.status, 409);
+});
+
+test("список и метрики по умолчанию исключают архивные доставки", async () => {
+  const [active, archived] = await db
+    .insert(deliveriesTable)
+    .values([
+      {
+        siteId,
+        driverUserId: assignedDriver.id,
+        plannedDate: "2099-11-10",
+        scheduleMonth: "2099-11",
+      },
+      {
+        siteId,
+        driverUserId: assignedDriver.id,
+        plannedDate: "2099-11-11",
+        scheduleMonth: "2099-11",
+        archivedAt: new Date(),
+        archivedByName: "Интеграционный тест",
+      },
+    ])
+    .returning({ id: deliveriesTable.id });
+
+  try {
+    actor = admin;
+    const activeList = await fetch(
+      `${baseUrl}/deliveries?month=2099-11&siteId=${siteId}`,
+    );
+    assert.equal(activeList.status, 200);
+    const activeRows = (await activeList.json()) as Array<{ id: string }>;
+    assert.equal(activeRows.some((row) => row.id === active.id), true);
+    assert.equal(activeRows.some((row) => row.id === archived.id), false);
+
+    const explicitActiveList = await fetch(
+      `${baseUrl}/deliveries?month=2099-11&siteId=${siteId}&archived=false`,
+    );
+    assert.equal(explicitActiveList.status, 200);
+    const explicitActiveRows = (await explicitActiveList.json()) as Array<{ id: string }>;
+    assert.equal(explicitActiveRows.some((row) => row.id === active.id), true);
+    assert.equal(explicitActiveRows.some((row) => row.id === archived.id), false);
+
+    const archivedList = await fetch(
+      `${baseUrl}/deliveries?month=2099-11&siteId=${siteId}&archived=true`,
+    );
+    assert.equal(archivedList.status, 200);
+    const archivedRows = (await archivedList.json()) as Array<{ id: string }>;
+    assert.equal(archivedRows.some((row) => row.id === active.id), false);
+    assert.equal(archivedRows.some((row) => row.id === archived.id), true);
+
+    const metrics = await fetch(
+      `${baseUrl}/dashboard/delivery-summary?month=2099-11`,
+    );
+    assert.equal(metrics.status, 200);
+    const metricsBody = (await metrics.json()) as {
+      totalScheduled: number;
+      todayDeliveries: Array<{ id: string }>;
+    };
+    assert.equal(metricsBody.totalScheduled, 1);
+    assert.equal(
+      metricsBody.todayDeliveries.some((row) => row.id === archived.id),
+      false,
+    );
+  } finally {
+    await db
+      .delete(deliveriesTable)
+      .where(inArray(deliveriesTable.id, [active.id, archived.id]));
+  }
+});
+
+test("восстановление возвращает 409 при занятом активном слоте", async () => {
+  const [active, archived] = await db
+    .insert(deliveriesTable)
+    .values([
+      {
+        siteId,
+        driverUserId: assignedDriver.id,
+        plannedDate: "2099-12-10",
+        scheduleMonth: "2099-12",
+      },
+      {
+        siteId,
+        driverUserId: assignedDriver.id,
+        plannedDate: "2099-12-10",
+        scheduleMonth: "2099-12",
+        archivedAt: new Date(),
+        archivedByName: "Интеграционный тест",
+      },
+    ])
+    .returning({ id: deliveriesTable.id });
+
+  try {
+    actor = admin;
+    const response = await fetch(
+      `${baseUrl}/deliveries/${archived.id}/restore`,
+      { method: "POST" },
+    );
+    assert.equal(response.status, 409);
+    const [archivedAfter] = await db
+      .select({ archivedAt: deliveriesTable.archivedAt })
+      .from(deliveriesTable)
+      .where(eq(deliveriesTable.id, archived.id));
+    assert.ok(archivedAfter.archivedAt);
+    const [activeAfter] = await db
+      .select({ archivedAt: deliveriesTable.archivedAt })
+      .from(deliveriesTable)
+      .where(eq(deliveriesTable.id, active.id));
+    assert.equal(activeAfter.archivedAt, null);
+  } finally {
+    await db
+      .delete(deliveriesTable)
+      .where(inArray(deliveriesTable.id, [active.id, archived.id]));
+  }
+});
+
 test("руководитель доставок не может редактировать доставку", async () => {
   actor = manager;
   const response = await fetch(`${baseUrl}/deliveries/${deliveryId}`, {
@@ -2879,6 +3023,15 @@ test("руководитель доставок не может редактир
     body: JSON.stringify({ note: "запрещённое изменение" }),
   });
   assert.equal(response.status, 403);
+});
+
+test("объект нельзя удалить, пока у него остаётся доставка", async () => {
+  actor = admin;
+  const response = await fetch(`${baseUrl}/sites/${siteId}`, {
+    method: "DELETE",
+  });
+  assert.equal(response.status, 409);
+  assert.match(String(((await response.json()) as { error?: string }).error), /доставки/);
 });
 
 test("маршрут отклоняет повторное прикрепление одного объекта", async () => {
@@ -3510,7 +3663,7 @@ test("ручное удаление блокирует повторное при
   assert.deepEqual(brokenReferences, []);
 });
 
-test("удаление доставки очищает все связанные акты", async () => {
+test("удаление доставки архивирует её и сохраняет связанные акты", async () => {
   actor = admin;
   const [delivery] = await db
     .insert(deliveriesTable)
@@ -3541,17 +3694,26 @@ test("удаление доставки очищает все связанные
 
   assert.equal(response.status, 204);
   assert.equal(
-    objectPaths.every((path) => deletedObjectPaths.includes(path)),
+    objectPaths.every((path) => !deletedObjectPaths.includes(path)),
     true,
   );
+  const [archivedDelivery] = await db
+    .select({
+      archivedAt: deliveriesTable.archivedAt,
+      deletionPendingAt: deliveriesTable.deletionPendingAt,
+    })
+    .from(deliveriesTable)
+    .where(eq(deliveriesTable.id, delivery.id));
+  assert.ok(archivedDelivery.archivedAt);
+  assert.equal(archivedDelivery.deletionPendingAt, null);
   const remainingPhotos = await db
     .select({ id: deliveryPhotosTable.id })
     .from(deliveryPhotosTable)
     .where(eq(deliveryPhotosTable.deliveryId, delivery.id));
-  assert.deepEqual(remainingPhotos, []);
+  assert.equal(remainingPhotos.length, 2);
 });
 
-test("частичная ошибка удаления не оставляет ссылку на уже удалённый файл", async () => {
+test("повторное удаление архивной доставки идемпотентно", async () => {
   actor = admin;
   const [delivery] = await db
     .insert(deliveriesTable)
@@ -3562,147 +3724,87 @@ test("частичная ошибка удаления не оставляет �
       actualDate: "2026-09-18",
     })
     .returning({ id: deliveriesTable.id });
-  const objectPaths = [
-    `/objects/uploads/${randomUUID()}`,
-    `/objects/uploads/${randomUUID()}`,
-  ];
-  await db.insert(deliveryPhotosTable).values(
-    objectPaths.map((objectPath, index) => ({
-      deliveryId: delivery.id,
-      objectPath,
-      fileName: `частичный-акт-${index + 1}.pdf`,
-      mimeType: "application/pdf",
-      uploadedBy: "Интеграционный тест",
-    })),
-  );
-
-  successfulDeletesBeforeError = 1;
-  const failedResponse = await fetch(`${baseUrl}/deliveries/${delivery.id}`, {
+  const firstResponse = await fetch(`${baseUrl}/deliveries/${delivery.id}`, {
     method: "DELETE",
   });
-  successfulDeletesBeforeError = null;
-
-  assert.equal(failedResponse.status, 502);
-  const remainingAfterFailure = await db
-    .select({
-      objectPath: deliveryPhotosTable.objectPath,
-      deletionPendingAt: deliveryPhotosTable.deletionPendingAt,
-    })
-    .from(deliveryPhotosTable)
-    .where(eq(deliveryPhotosTable.deliveryId, delivery.id));
-  assert.equal(remainingAfterFailure.length, 2);
-  assert.equal(
-    remainingAfterFailure.every((photo) => photo.deletionPendingAt !== null),
-    true,
-  );
-  const hiddenAfterFailure = await fetch(
-    `${baseUrl}/deliveries/${delivery.id}/photos`,
-  );
-  assert.equal(hiddenAfterFailure.status, 200);
-  assert.deepEqual(await hiddenAfterFailure.json(), []);
-
-  const retryResponse = await fetch(`${baseUrl}/deliveries/${delivery.id}`, {
+  const secondResponse = await fetch(`${baseUrl}/deliveries/${delivery.id}`, {
     method: "DELETE",
   });
-  assert.equal(retryResponse.status, 204);
-  const remainingAfterRetry = await db
-    .select({ id: deliveryPhotosTable.id })
-    .from(deliveryPhotosTable)
-    .where(eq(deliveryPhotosTable.deliveryId, delivery.id));
-  assert.deepEqual(remainingAfterRetry, []);
+  assert.equal(firstResponse.status, 204);
+  assert.equal(secondResponse.status, 204);
+  const [archived] = await db
+    .select({ archivedAt: deliveriesTable.archivedAt })
+    .from(deliveriesTable)
+    .where(eq(deliveriesTable.id, delivery.id));
+  assert.ok(archived.archivedAt);
 });
 
-test("ожидающее удаление завершает доставку после сбоя Storage у первого запроса", async () => {
+test("архивирование не удаляет внешние файлы и не создаёт tombstone", async () => {
   actor = admin;
   const [delivery] = await db
     .insert(deliveriesTable)
     .values({
       siteId,
       driverUserId: assignedDriver.id,
-      plannedDate: "2026-09-22",
-      actualDate: "2026-09-22",
+      plannedDate: "2026-09-19",
+      actualDate: "2026-09-19",
     })
     .returning({ id: deliveriesTable.id });
   const objectPath = `/objects/uploads/${randomUUID()}`;
   await db.insert(deliveryPhotosTable).values({
     deliveryId: delivery.id,
     objectPath,
-    fileName: "акт-повторного-конкурентного-удаления.pdf",
+    fileName: "сохраняемый-акт.pdf",
     mimeType: "application/pdf",
     uploadedBy: "Интеграционный тест",
   });
-
-  const attemptOffset = storageDeleteAttempts.length;
-  let releaseDelete!: () => void;
-  continueDelete = new Promise<void>((resolve) => {
-    releaseDelete = resolve;
-  });
-  const deleteStarted = new Promise<void>((resolve) => {
-    notifyDeleteStarted = resolve;
-  });
-  pausedDeletePath = objectPath;
-  pausedDeleteError = new Error("storage unavailable");
-
-  const firstDelete = fetch(`${baseUrl}/deliveries/${delivery.id}`, {
+  successfulDeletesBeforeError = 0;
+  const response = await fetch(`${baseUrl}/deliveries/${delivery.id}`, {
     method: "DELETE",
   });
-  await deleteStarted;
-  const secondDelete = fetch(`${baseUrl}/deliveries/${delivery.id}`, {
-    method: "DELETE",
-  });
-
-  try {
-    const secondState = await Promise.race([
-      secondDelete.then(() => "finished"),
-      new Promise<"blocked">((resolve) =>
-        setTimeout(() => resolve("blocked"), 100),
-      ),
-    ]);
-    assert.equal(secondState, "blocked");
-  } finally {
-    releaseDelete();
-  }
-
-  const responses = await Promise.race([
-    Promise.all([firstDelete, secondDelete]),
-    new Promise<never>((_, reject) =>
-      setTimeout(
-        () => reject(new Error("Waiting deletion remained blocked")),
-        5_000,
-      ),
-    ),
-  ]);
-  pausedDeletePath = null;
-  pausedDeleteError = null;
-  notifyDeleteStarted = null;
-  continueDelete = null;
-
-  assert.equal(responses[0].status, 502);
-  assert.equal(responses[1].status, 204);
-  assert.deepEqual(storageDeleteAttempts.slice(attemptOffset), [
-    objectPath,
-    objectPath,
-  ]);
-  assert.equal(
-    storageDeleteResults.filter((result) => result.objectPath === objectPath)
-      .length,
-    1,
-  );
-  const [remainingDelivery, remainingPhotos] = await Promise.all([
-    db
-      .select({ id: deliveriesTable.id })
-      .from(deliveriesTable)
-      .where(eq(deliveriesTable.id, delivery.id)),
-    db
-      .select({ id: deliveryPhotosTable.id })
-      .from(deliveryPhotosTable)
-      .where(eq(deliveryPhotosTable.deliveryId, delivery.id)),
-  ]);
-  assert.deepEqual(remainingDelivery, []);
-  assert.deepEqual(remainingPhotos, []);
+  successfulDeletesBeforeError = null;
+  assert.equal(response.status, 204);
+  assert.equal(deletedObjectPaths.includes(objectPath), false);
+  const [photo] = await db
+    .select({ deletionPendingAt: deliveryPhotosTable.deletionPendingAt })
+    .from(deliveryPhotosTable)
+    .where(eq(deliveryPhotosTable.deliveryId, delivery.id));
+  assert.equal(photo.deletionPendingAt, null);
 });
 
-test("два одновременных удаления доставки не удаляют акт повторно", async () => {
+test("архивирование отклоняется для доставки в физической очереди удаления", async () => {
+  actor = admin;
+  const [delivery] = await db
+    .insert(deliveriesTable)
+    .values({
+      siteId,
+      driverUserId: assignedDriver.id,
+      plannedDate: "2026-09-20",
+      actualDate: "2026-09-20",
+      deletionPendingAt: new Date(),
+    })
+    .returning({ id: deliveriesTable.id });
+
+  try {
+    const response = await fetch(`${baseUrl}/deliveries/${delivery.id}`, {
+      method: "DELETE",
+    });
+    assert.equal(response.status, 409);
+    const [unchanged] = await db
+      .select({
+        archivedAt: deliveriesTable.archivedAt,
+        deletionPendingAt: deliveriesTable.deletionPendingAt,
+      })
+      .from(deliveriesTable)
+      .where(eq(deliveriesTable.id, delivery.id));
+    assert.equal(unchanged.archivedAt, null);
+    assert.ok(unchanged.deletionPendingAt);
+  } finally {
+    await db.delete(deliveriesTable).where(eq(deliveriesTable.id, delivery.id));
+  }
+});
+
+test("два одновременных удаления доставки сохраняют архив и акты", async () => {
   actor = admin;
   const [delivery] = await db
     .insert(deliveriesTable)
@@ -3713,85 +3815,27 @@ test("два одновременных удаления доставки не �
       actualDate: "2026-09-21",
     })
     .returning({ id: deliveriesTable.id });
-  const objectPath = `/objects/uploads/${randomUUID()}`;
   await db.insert(deliveryPhotosTable).values({
     deliveryId: delivery.id,
-    objectPath,
+    objectPath: `/objects/uploads/${randomUUID()}`,
     fileName: "акт-конкурентного-удаления.pdf",
     mimeType: "application/pdf",
     uploadedBy: "Интеграционный тест",
   });
-
-  let releaseDelete!: () => void;
-  continueDelete = new Promise<void>((resolve) => {
-    releaseDelete = resolve;
-  });
-  const deleteStarted = new Promise<void>((resolve) => {
-    notifyDeleteStarted = resolve;
-  });
-  pausedDeletePath = objectPath;
-  const firstDelete = fetch(`${baseUrl}/deliveries/${delivery.id}`, {
-    method: "DELETE",
-  });
-  await deleteStarted;
-
-  const secondDelete = fetch(`${baseUrl}/deliveries/${delivery.id}`, {
-    method: "DELETE",
-  });
-  try {
-    const secondState = await Promise.race([
-      secondDelete.then(() => "finished"),
-      new Promise<"blocked">((resolve) =>
-        setTimeout(() => resolve("blocked"), 100),
-      ),
-    ]);
-    assert.equal(secondState, "blocked");
-  } finally {
-    releaseDelete();
-  }
-
   const [firstResponse, secondResponse] = await Promise.all([
-    firstDelete,
-    secondDelete,
+    fetch(`${baseUrl}/deliveries/${delivery.id}`, { method: "DELETE" }),
+    fetch(`${baseUrl}/deliveries/${delivery.id}`, { method: "DELETE" }),
   ]);
-  pausedDeletePath = null;
-  notifyDeleteStarted = null;
-  continueDelete = null;
-
   assert.equal(firstResponse.status, 204);
-  assert.equal(secondResponse.status, 404);
-  assert.deepEqual(await secondResponse.json(), {
-    error: "Доставка не найдена",
-  });
-  assert.equal(
-    storageDeleteResults.filter((result) => result.objectPath === objectPath)
-      .length,
-    1,
-  );
-
-  const [remainingDelivery, remainingPhotos] = await Promise.all([
-    db
-      .select({
-        id: deliveriesTable.id,
-        deletionPendingAt: deliveriesTable.deletionPendingAt,
-      })
-      .from(deliveriesTable)
-      .where(eq(deliveriesTable.id, delivery.id)),
-    db
-      .select({
-        id: deliveryPhotosTable.id,
-        deletionPendingAt: deliveryPhotosTable.deletionPendingAt,
-      })
-      .from(deliveryPhotosTable)
-      .where(eq(deliveryPhotosTable.deliveryId, delivery.id)),
-  ]);
-  assert.deepEqual(remainingDelivery, []);
-  assert.deepEqual(remainingPhotos, []);
+  assert.equal(secondResponse.status, 204);
+  const [archived] = await db
+    .select({ archivedAt: deliveriesTable.archivedAt })
+    .from(deliveriesTable)
+    .where(eq(deliveriesTable.id, delivery.id));
+  assert.ok(archived.archivedAt);
 });
 
-test("cleanup завершает удаление доставки после сбоя БД вслед за Storage", async () => {
-  actor = admin;
-  const deleteResultOffset = storageDeleteResults.length;
+test("cleanup завершает tombstone доставки после сбоя БД вслед за Storage", async () => {
   const [delivery] = await db
     .insert(deliveriesTable)
     .values({
@@ -3821,64 +3865,14 @@ test("cleanup завершает удаление доставки после с
       uploadedBy: "Интеграционный тест",
     },
   ]);
-
-  await db.execute(sql`
-    create or replace function test_fail_parent_delivery_photo_delete()
-    returns trigger
-    language plpgsql
-    as $$
-    begin
-      if old.file_name = 'test-parent-db-failure-after-storage-delete' then
-        raise exception 'injected parent delivery delete failure';
-      end if;
-      return old;
-    end;
-    $$
-  `);
-  await db.execute(sql`
-    create trigger test_fail_parent_delivery_photo_delete_trigger
-    before delete on delivery_photos
-    for each row execute function test_fail_parent_delivery_photo_delete()
-  `);
-
-  try {
-    const failedResponse = await fetch(`${baseUrl}/deliveries/${delivery.id}`, {
-      method: "DELETE",
-    });
-    assert.equal(failedResponse.status, 500);
-    assert.equal(
-      objectPaths.every((path) => deletedObjectPaths.includes(path)),
-      true,
-    );
-
-    const [pendingDelivery] = await db
-      .select({ deletionPendingAt: deliveriesTable.deletionPendingAt })
-      .from(deliveriesTable)
-      .where(eq(deliveriesTable.id, delivery.id));
-    assert.ok(pendingDelivery?.deletionPendingAt);
-    const pendingPhotos = await db
-      .select({ deletionPendingAt: deliveryPhotosTable.deletionPendingAt })
-      .from(deliveryPhotosTable)
-      .where(eq(deliveryPhotosTable.deliveryId, delivery.id));
-    assert.equal(pendingPhotos.length, 2);
-    assert.equal(
-      pendingPhotos.every((photo) => photo.deletionPendingAt !== null),
-      true,
-    );
-
-    const hiddenResponse = await fetch(
-      `${baseUrl}/deliveries/${delivery.id}/photos`,
-    );
-    assert.equal(hiddenResponse.status, 200);
-    assert.deepEqual(await hiddenResponse.json(), []);
-  } finally {
-    await db.execute(
-      sql`drop trigger if exists test_fail_parent_delivery_photo_delete_trigger on delivery_photos`,
-    );
-    await db.execute(
-      sql`drop function if exists test_fail_parent_delivery_photo_delete()`,
-    );
-  }
+  await db
+    .update(deliveriesTable)
+    .set({ deletionPendingAt: new Date() })
+    .where(eq(deliveriesTable.id, delivery.id));
+  await db
+    .update(deliveryPhotosTable)
+    .set({ deletionPendingAt: new Date() })
+    .where(eq(deliveryPhotosTable.deliveryId, delivery.id));
 
   const cleanupDependenciesWithoutListedObjects =
     createProductionDeliveryUploadCleanupDependencies(
@@ -3898,16 +3892,10 @@ test("cleanup завершает удаление доставки после с
   assert.ok(recoverySummary);
   assert.equal(recoverySummary.resumedPhotoDeletions, 0);
   assert.equal(recoverySummary.resumedDeliveryDeletions, 1);
-  assert.deepEqual(storageDeleteResults.slice(deleteResultOffset), [
-    ...objectPaths
-      .slice()
-      .sort()
-      .map((objectPath) => ({ objectPath, deleted: true })),
-    ...objectPaths
-      .slice()
-      .sort()
-      .map((objectPath) => ({ objectPath, deleted: false })),
-  ]);
+  assert.equal(
+    objectPaths.every((path) => deletedObjectPaths.includes(path)),
+    true,
+  );
   const [remainingDelivery] = await db
     .select({ id: deliveriesTable.id })
     .from(deliveriesTable)
@@ -4175,7 +4163,7 @@ test("cleanup после таймаута Storage продолжает друг�
   }
 });
 
-test("прикрепление не может проскочить во время удаления доставки", async () => {
+test("прикрепление не может проскочить после архивирования доставки", async () => {
   actor = admin;
   const [delivery] = await db
     .insert(deliveriesTable)
@@ -4196,21 +4184,10 @@ test("прикрепление не может проскочить во вре�
     uploadedBy: "Интеграционный тест",
   });
 
-  let releaseDelete!: () => void;
-  continueDelete = new Promise<void>((resolve) => {
-    releaseDelete = resolve;
-  });
-  const deleteStarted = new Promise<void>((resolve) => {
-    notifyDeleteStarted = resolve;
-  });
-  pausedDeletePath = existingObjectPath;
-
-  const deleteRequest = fetch(`${baseUrl}/deliveries/${delivery.id}`, {
+  const deleteResponse = await fetch(`${baseUrl}/deliveries/${delivery.id}`, {
     method: "DELETE",
   });
-  await deleteStarted;
-
-  const attachRequest = fetch(`${baseUrl}/deliveries/${delivery.id}/photos`, {
+  const attachResponse = await fetch(`${baseUrl}/deliveries/${delivery.id}/photos`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -4219,35 +4196,24 @@ test("прикрепление не может проскочить во вре�
       mimeType: "application/pdf",
     }),
   });
-  const stateWhileDeleting = await Promise.race([
-    attachRequest.then(() => "finished"),
-    new Promise<"blocked">((resolve) =>
-      setTimeout(() => resolve("blocked"), 100),
-    ),
-  ]);
-  assert.equal(stateWhileDeleting, "blocked");
-
-  releaseDelete();
-  const [deleteResponse, attachResponse] = await Promise.all([
-    deleteRequest,
-    attachRequest,
-  ]);
-  pausedDeletePath = null;
-  notifyDeleteStarted = null;
-  continueDelete = null;
-
   assert.equal(deleteResponse.status, 204);
-  assert.equal(attachResponse.status, 404);
-  assert.equal(deletedObjectPaths.includes(existingObjectPath), true);
-  assert.equal(deletedObjectPaths.includes(concurrentObjectPath), false);
+  assert.equal(attachResponse.status, 409);
+  assert.equal(deletedObjectPaths.includes(existingObjectPath), false);
+  // The rejected, unattached upload is cleaned up; the archived act is retained.
+  assert.equal(deletedObjectPaths.includes(concurrentObjectPath), true);
+  const [archivedDelivery] = await db
+    .select({ archivedAt: deliveriesTable.archivedAt })
+    .from(deliveriesTable)
+    .where(eq(deliveriesTable.id, delivery.id));
+  assert.ok(archivedDelivery.archivedAt);
   const remainingPhotos = await db
-    .select({ id: deliveryPhotosTable.id })
+    .select({ objectPath: deliveryPhotosTable.objectPath })
     .from(deliveryPhotosTable)
     .where(eq(deliveryPhotosTable.deliveryId, delivery.id));
-  assert.deepEqual(remainingPhotos, []);
+  assert.deepEqual(remainingPhotos, [{ objectPath: existingObjectPath }]);
 });
 
-test("cleanup ждёт удаление доставки и не удаляет тот же объект параллельно", async () => {
+test("cleanup не удаляет акт архивированной доставки", async () => {
   actor = admin;
   const [delivery] = await db
     .insert(deliveriesTable)
@@ -4267,20 +4233,9 @@ test("cleanup ждёт удаление доставки и не удаляет 
     uploadedBy: "Интеграционный тест",
   });
 
-  let releaseDelete!: () => void;
-  continueDelete = new Promise<void>((resolve) => {
-    releaseDelete = resolve;
-  });
-  const deleteStarted = new Promise<void>((resolve) => {
-    notifyDeleteStarted = resolve;
-  });
-  pausedDeletePath = objectPath;
-
-  const deleteRequest = fetch(`${baseUrl}/deliveries/${delivery.id}`, {
+  const deleteResponse = await fetch(`${baseUrl}/deliveries/${delivery.id}`, {
     method: "DELETE",
   });
-  await deleteStarted;
-
   const cleanupRun = runLiveDeliveryUploadCleanup(
     createProductionDeliveryUploadCleanupDependencies(
       db,
@@ -4303,35 +4258,16 @@ test("cleanup ждёт удаление доставки и не удаляет 
     ),
     { minimumAgeHours: 1 },
   );
-  const cleanupState = await Promise.race([
-    cleanupRun.then(() => "finished"),
-    new Promise<"blocked">((resolve) =>
-      setTimeout(() => resolve("blocked"), 100),
-    ),
-  ]);
-  assert.equal(cleanupState, "blocked");
-
-  releaseDelete();
-  const [deleteResponse, cleanupSummary] = await Promise.all([
-    deleteRequest,
-    cleanupRun,
-  ]);
-  pausedDeletePath = null;
-  notifyDeleteStarted = null;
-  continueDelete = null;
-
   assert.equal(deleteResponse.status, 204);
+  const cleanupSummary = await cleanupRun;
   assert.ok(cleanupSummary);
-  assert.equal(
-    storageDeleteResults.filter((result) => result.objectPath === objectPath)
-      .length,
-    1,
-  );
+  assert.equal(deletedObjectPaths.includes(objectPath), false);
   const [remainingDelivery] = await db
-    .select({ id: deliveriesTable.id })
+    .select({ id: deliveriesTable.id, archivedAt: deliveriesTable.archivedAt })
     .from(deliveriesTable)
     .where(eq(deliveriesTable.id, delivery.id));
-  assert.equal(remainingDelivery, undefined);
+  assert.equal(remainingDelivery.id, delivery.id);
+  assert.ok(remainingDelivery.archivedAt);
 });
 
 test("второй экземпляр API пропускает уборку, пока первый удерживает global lock", async () => {

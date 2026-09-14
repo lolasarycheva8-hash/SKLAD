@@ -101,6 +101,7 @@ export * from "./product";
 export * from "./receiptProductLookup";
 export * from "./replaceDeliveriesBulkInput";
 export * from "./rescheduleDeliveryInput";
+export * from "./restoreDelivery409";
 export * from "./section";
 export * from "./shipment";
 export * from "./shipmentItem";

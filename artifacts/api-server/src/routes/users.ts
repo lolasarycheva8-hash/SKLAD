@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { and, eq, ne, or, sql } from "drizzle-orm";
+import { and, eq, isNull, ne, or, sql } from "drizzle-orm";
 import { clerkClient } from "@clerk/express";
 import {
   db,
@@ -233,7 +233,12 @@ router.patch("/users/:id", requireAdmin, async (req, res): Promise<void> => {
         await tx
           .update(deliveriesTable)
           .set({ driverUserId: null })
-          .where(eq(deliveriesTable.driverUserId, row.id));
+          .where(
+            and(
+              eq(deliveriesTable.driverUserId, row.id),
+              isNull(deliveriesTable.archivedAt),
+            ),
+          );
         await tx
           .update(shipmentsTable)
           .set({ driverUserId: null })

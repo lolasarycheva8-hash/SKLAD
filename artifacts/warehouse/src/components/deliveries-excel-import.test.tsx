@@ -21,7 +21,10 @@ const { updateActualBulkRequest, deliveryTestState, downloadFileResponse, toast 
 
 vi.mock("@workspace/api-client-react", () => ({
   getGetDeliveryDashboardSummaryQueryKey: () => ["delivery-dashboard"],
+  getGetDashboardSummaryQueryKey: () => ["dashboard-summary"],
   getListDeliveriesQueryKey: () => ["deliveries"],
+  getListMyDeliveriesQueryKey: () => ["my-deliveries"],
+  getListDriversQueryKey: () => ["drivers"],
   useApproveDeliveryAct: () => noopMutation,
   useCreateDelivery: () => ({
     isPending: false,
@@ -32,6 +35,7 @@ vi.mock("@workspace/api-client-react", () => ({
     mutate: createBulkRequest,
   }),
   useDeleteDelivery: () => noopMutation,
+  useRestoreDelivery: () => noopMutation,
   useListDeliveries: () => ({ data: deliveryTestState.deliveries }),
   useListDeliverySiteLookup: () => ({
     data: [
@@ -293,9 +297,14 @@ describe("рабочее место логиста: импорт и фильтр
     expect(cells[3].textContent).toBe("Адрес Альфа");
     expect(cells[11].textContent).toBe("Комментарий для проверки");
     expect(cells[12].textContent).toBe("+3");
-    const mobile = within(screen.getByTestId("mobile-row-delivery-column-order")).getAllByRole("cell");
-    expect(mobile[0].classList.contains("sticky")).toBe(true);
-    expect(mobile[1].textContent).toBe("Иван Водитель");
+    const mobile = within(screen.getByTestId("mobile-card-delivery-column-order"));
+    expect(mobile.getByText("Объект Альфа")).toBeTruthy();
+    expect(mobile.getByText("Иван Водитель")).toBeTruthy();
+    expect(mobile.getByText("Выполнена")).toBeTruthy();
+    expect(mobile.getByTestId("mobile-card-button-fact-column-order")).toBeTruthy();
+    expect(mobile.getByTestId("mobile-card-button-acts-column-order")).toBeTruthy();
+    expect(mobile.getByTestId("mobile-card-button-comment-column-order")).toBeTruthy();
+    expect(mobile.getByTestId("mobile-card-button-delete-column-order")).toBeTruthy();
     fireEvent.click(screen.getByTestId("button-filter-no-deliveries"));
     const missing = within(screen.getByTestId("row-site-without-delivery-site-beta")).getAllByRole("cell");
     expect(missing).toHaveLength(14);
@@ -334,23 +343,23 @@ describe("рабочее место логиста: импорт и фильтр
     await user.click(summaryTab);
     const row = within(screen.getByTestId("driver-summary-row-driver-1"));
     const cells = row.getAllByRole("cell");
-    expect(within(cells[1]).getByTitle("План: 3")).toBeTruthy();
-    expect(within(cells[1]).getByTitle("Не выполнено: 1")).toBeTruthy();
-    expect(within(cells[2]).getByTitle("Выполнено: 1")).toBeTruthy();
-    expect(within(cells[2]).getByTitle("Закрыто: 1")).toBeTruthy();
-    expect(within(cells[3]).getByTitle("План: 0")).toBeTruthy();
+    expect(within(cells[1]).getByLabelText("План за месяц, шт: 3")).toBeTruthy();
+    expect(within(cells[1]).getByLabelText("Не выполнено за месяц, шт: 1")).toBeTruthy();
+    expect(within(cells[2]).getByLabelText("Выполнено за месяц, %: 33,3%")).toBeTruthy();
+    expect(within(cells[2]).getByLabelText("Закрыто за месяц, %: 33,3%")).toBeTruthy();
+    expect(within(cells[3]).getByLabelText("План: 3")).toBeTruthy();
 
     deliveryTestState.deliveries = deliveryTestState.deliveries.map((item) => ({
       ...item, actualDate: "2026-09-02", workflowStatus: "closed",
     }));
     rerender(<Deliveries />);
     expect(within(within(screen.getByTestId("driver-summary-row-driver-1")).getAllByRole("cell")[2])
-      .getByTitle("Закрыто: 3")).toBeTruthy();
+      .getByLabelText("Закрыто за месяц, %: 100%")).toBeTruthy();
 
     fireEvent.change(screen.getByTestId("input-month-selector"), { target: { value: "2026-02" } });
     const february = within(screen.getByTestId("driver-summary-row-driver-1")).getAllByRole("cell");
-    expect(february).toHaveLength(29);
-    expect(within(february[1]).getByTitle("План: 0")).toBeTruthy();
+    expect(february).toHaveLength(31);
+    expect(within(february[1]).getByLabelText("План за месяц, шт: 0")).toBeTruthy();
     await user.click(screen.getByTestId("tab-schedule"));
     expect(screen.queryByTestId("driver-summary-sheet")).toBeNull();
     expect(screen.getByTestId("counter-schedule-rows")).toBeTruthy();

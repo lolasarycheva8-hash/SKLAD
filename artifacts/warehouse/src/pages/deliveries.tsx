@@ -1,4 +1,8 @@
-import { MobileManagerTable, MobileLogisticianCard } from "@/components/mobile-delivery-cards";
+import {
+  MobileManagerTable,
+  MobileLogisticianCard,
+} from "@/components/mobile-delivery-cards";
+import { ArchivedDeliveriesPanel } from "@/components/archived-deliveries-panel";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
@@ -22,13 +26,17 @@ import {
   useReplaceDeliveriesBulk,
   useUpdateDelivery,
   useDeleteDelivery,
+  useRestoreDelivery,
   useListDeliverySiteLookup,
   useListDrivers,
+  getListDriversQueryKey,
   useRescheduleDelivery,
   useApproveDeliveryAct,
   updateDeliveriesActualBulk,
   getListDeliveriesQueryKey,
+  getListMyDeliveriesQueryKey,
   getGetDeliveryDashboardSummaryQueryKey,
+  getGetDashboardSummaryQueryKey,
   type Delivery,
 } from "@workspace/api-client-react";
 import {
@@ -493,7 +501,9 @@ export default function Deliveries() {
     () => new URLSearchParams(window.location.search),
     [],
   );
-  const [activeTab, setActiveTab] = useState<"workspace" | "drivers" | "schedule">("workspace");
+  const [activeTab, setActiveTab] = useState<
+    "workspace" | "drivers" | "schedule" | "archived"
+  >("workspace");
   const [month, setMonth] = useState(() => {
     const requestedMonth = initialParams.get("month");
     return requestedMonth && /^\d{4}-(0[1-9]|1[0-2])$/.test(requestedMonth)
@@ -556,6 +566,9 @@ export default function Deliveries() {
     useState<DeliveryImportReview | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Delivery | null>(null);
   const [photosDelivery, setPhotosDelivery] = useState<Delivery | null>(null);
+  const [photosReadOnly, setPhotosReadOnly] = useState(false);
+  const [restoreTargetId, setRestoreTargetId] = useState<string | null>(null);
+  const [restoreError, setRestoreError] = useState<string | null>(null);
   const [rescheduleDeliveryTarget, setRescheduleDeliveryTarget] =
     useState<Delivery | null>(null);
   const [rescheduleDate, setRescheduleDate] = useState<string>("");
@@ -577,6 +590,7 @@ export default function Deliveries() {
   const [importingFacts, setImportingFacts] = useState(false);
   const { user, canEdit, isAdmin, canApproveDeliveryActs } = usePermissions();
   const canEditDeliveries = canEdit("deliveries");
+  const canViewArchivedDeliveries = canEditDeliveries;
   const canEditCorrectedPlan =
     canEditDeliveries && (isAdmin || user?.role === "logistician");
   const canEditLogisticianNote =
@@ -620,7 +634,26 @@ export default function Deliveries() {
     }
   }
 
-  const { data: deliveries, isLoading: deliveriesLoading, isError: deliveriesError, refetch: refetchDeliveries } = useListDeliveries({ month });
+  const {
+    data: deliveries,
+    isLoading: deliveriesLoading,
+    isError: deliveriesError,
+    refetch: refetchDeliveries,
+  } = useListDeliveries({ month, archived: false });
+  const {
+    data: archivedDeliveries,
+    isLoading: archivedDeliveriesLoading,
+    isError: archivedDeliveriesError,
+    refetch: refetchArchivedDeliveries,
+  } = useListDeliveries(
+    { month, archived: true },
+    {
+      query: {
+        enabled: canViewArchivedDeliveries,
+        queryKey: getListDeliveriesQueryKey({ month, archived: true }),
+      },
+    },
+  );
   const { data: sites } = useListDeliverySiteLookup();
   const { data: drivers = [], isLoading: driversLoading, isError: driversError, refetch: refetchDrivers } = useListDrivers();
 
@@ -844,7 +877,20 @@ export default function Deliveries() {
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: getListDeliveriesQueryKey() });
     queryClient.invalidateQueries({
+      queryKey: getListDeliveriesQueryKey({ month, archived: false }),
+    });
+    queryClient.invalidateQueries({
+      queryKey: getListDeliveriesQueryKey({ month, archived: true }),
+    });
+    queryClient.invalidateQueries({ queryKey: getListDriversQueryKey() });
+    queryClient.invalidateQueries({
       queryKey: getGetDeliveryDashboardSummaryQueryKey(),
+    });
+    queryClient.invalidateQueries({
+      queryKey: getGetDashboardSummaryQueryKey(),
+    });
+    queryClient.invalidateQueries({
+      queryKey: getListMyDeliveriesQueryKey(),
     });
   };
 
@@ -962,7 +1008,10 @@ export default function Deliveries() {
       onSuccess: () => {
         invalidate();
         setDeleteTarget(null);
-        toast({ title: "Запись удалена" });
+        toast({
+          title: "Доставка перемещена в удалённые",
+          description: "Её можно вернуть во вкладке «Удалённые доставки».",
+        });
       },
       onError: (error) => {
         if (
@@ -977,6 +1026,33 @@ export default function Deliveries() {
         toast({
           title: "Ошибка",
           description: error.message,
+          variant: "destructive",
+        });
+      },
+    },
+  });
+
+  const restoreDelivery = useRestoreDelivery({
+    mutation: {
+      onSuccess: () => {
+        invalidate();
+        setRestoreTargetId(null);
+        setRestoreError(null);
+        toast({ title: "Доставка возвращена в график доставок" });
+      },
+      onError: (error: any) => {
+        invalidate();
+        setRestoreTargetId(null);
+        const isConflict = error?.status === 409;
+        const message = isConflict
+          ? "Доставка уже находится в архиве. Обновите список и повторите попытку, если это необходимо."
+          : error?.message || "Не удалось вернуть доставку в график.";
+        setRestoreError(message);
+        toast({
+          title: isConflict
+            ? "Доставка уже удалена"
+            : "Не удалось вернуть доставку",
+          description: message,
           variant: "destructive",
         });
       },
@@ -1168,6 +1244,22 @@ export default function Deliveries() {
       id: delivery.id,
       data: { actualDate: value || null },
     });
+  }
+
+  function openDeliveryPhotos(delivery: Delivery, readOnly = false) {
+    setPhotosReadOnly(readOnly);
+    setPhotosDelivery(delivery);
+  }
+
+  function openArchivedDeliveryPhotos(delivery: Delivery) {
+    openDeliveryPhotos(delivery, true);
+  }
+
+  function requestRestore(delivery: Delivery) {
+    if (restoreDelivery.isPending) return;
+    setRestoreError(null);
+    setRestoreTargetId(delivery.id);
+    restoreDelivery.mutate({ id: delivery.id });
   }
 
   function handleDriverChange(delivery: Delivery, driverUserId: string | null) {
@@ -1371,8 +1463,32 @@ export default function Deliveries() {
   ]);
 
   useEffect(() => {
+    if (!canViewArchivedDeliveries && activeTab === "archived") {
+      setActiveTab("workspace");
+    }
+  }, [activeTab, canViewArchivedDeliveries]);
+
+  useEffect(() => {
     setScheduleDayFilter(null);
   }, [month]);
+
+  useEffect(() => {
+    const workspacePages = Math.max(
+      1,
+      Math.ceil(workspaceTotal / TABLE_PAGE_SIZE),
+    );
+    const schedulePages = Math.max(
+      1,
+      Math.ceil(matrixRows.length / TABLE_PAGE_SIZE),
+    );
+    setWorkspacePage((page) => Math.min(page, workspacePages));
+    setSchedulePage((page) => Math.min(page, schedulePages));
+  }, [
+    matrixRows.length,
+    schedulePage,
+    workspacePage,
+    workspaceTotal,
+  ]);
 
   function toggleScheduleDayFilter(
     day: number,
@@ -1443,7 +1559,7 @@ export default function Deliveries() {
           Доставки
         </h1>
         <div className="flex items-center gap-2 flex-wrap justify-end">
-          {undatedCount > 0 && (
+          {activeTab !== "archived" && undatedCount > 0 && (
             <Button
               type="button"
               variant="outline"
@@ -1686,9 +1802,23 @@ export default function Deliveries() {
         >
           График доставок
         </button>
+        {canViewArchivedDeliveries && (
+          <button
+            className={cn(
+              "px-4 py-2 border-b-2 font-medium transition-colors outline-none",
+              activeTab === "archived"
+                ? "border-primary text-primary"
+                : "border-transparent text-muted-foreground hover:text-foreground hover:border-border",
+            )}
+            onClick={() => setActiveTab("archived")}
+            data-testid="tab-archived-deliveries"
+          >
+            Удалённые доставки
+          </button>
+        )}
       </div>
 
-      {activeTab !== "drivers" && (
+      {activeTab !== "drivers" && activeTab !== "archived" && (
         <DeliverySummaryBadges {...deliverySummary} />
       )}
 
@@ -1702,6 +1832,24 @@ export default function Deliveries() {
             void refetchDeliveries();
             void refetchDrivers();
           }}
+        />
+      )}
+
+      {activeTab === "archived" && canViewArchivedDeliveries && (
+        <ArchivedDeliveriesPanel
+          data={archivedDeliveries ?? []}
+          search={search}
+          onSearchChange={setSearch}
+          isLoading={archivedDeliveriesLoading}
+          isError={archivedDeliveriesError}
+          onRetry={() => {
+            void refetchArchivedDeliveries();
+          }}
+          onOpenPhotos={openArchivedDeliveryPhotos}
+          onRestore={requestRestore}
+          restorePendingId={restoreTargetId}
+          restoreError={restoreError}
+          onDismissRestoreError={() => setRestoreError(null)}
         />
       )}
 
@@ -1972,8 +2120,13 @@ export default function Deliveries() {
                         await updateDelivery.mutateAsync({ id, data: { actualDate: date || null }});
                         toast({ title: date ? "Факт доставки сохранён" : "Фактическая дата очищена" });
                       }}
-                      onOpenPhotos={(d) => setPhotosDelivery(d)}
+                      onOpenPhotos={(d) => openDeliveryPhotos(d)}
                       onOpenDriverComment={(d) => setDriverCommentTarget(d)}
+                      onDelete={
+                        canEditDeliveries
+                          ? (d) => setDeleteTarget(d)
+                          : undefined
+                      }
                     />
                   ))}
                   {visibleSitesWithoutDeliveries.length > 0 && (
@@ -2241,7 +2394,7 @@ export default function Deliveries() {
                                 d.photosCount > 0 &&
                                   "border-emerald-500 text-emerald-700 hover:bg-emerald-50"
                               )}
-                              onClick={() => setPhotosDelivery(d)}
+                              onClick={() => openDeliveryPhotos(d)}
                               data-testid={`btn-acts-${d.id}`}
                             >
                               {d.photosCount > 0
@@ -2349,7 +2502,7 @@ export default function Deliveries() {
                                   водителя
                                 </DropdownMenuItem>
                               )}
-                              {isAdmin && (
+                              {canEditDeliveries && (
                                 <>
                                   <DropdownMenuSeparator />
                                   <DropdownMenuItem
@@ -2796,9 +2949,15 @@ export default function Deliveries() {
       <DeliveryPhotosDialog
         delivery={photosDelivery}
         open={!!photosDelivery}
-        onOpenChange={(open) => !open && setPhotosDelivery(null)}
-        canEdit={canEditDeliveries}
-        canApprove={canApproveDeliveryActs}
+        onOpenChange={(open) => {
+          if (!open) {
+            setPhotosDelivery(null);
+            setPhotosReadOnly(false);
+          }
+        }}
+        canEdit={!photosReadOnly && canEditDeliveries}
+        canApprove={!photosReadOnly && canApproveDeliveryActs}
+        canDelete={!photosReadOnly && canEditDeliveries}
         canDownload={canApproveDeliveryActs}
       />
 
@@ -2872,26 +3031,34 @@ export default function Deliveries() {
 
       <AlertDialog
         open={!!deleteTarget}
-        onOpenChange={(open) => !open && setDeleteTarget(null)}
+        onOpenChange={(open) =>
+          !open && !deleteDelivery.isPending && setDeleteTarget(null)
+        }
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Удалить доставку?</AlertDialogTitle>
+            <AlertDialogTitle>Переместить доставку в удалённые?</AlertDialogTitle>
             <AlertDialogDescription>
-              Это действие нельзя отменить. Запись о доставке будет удалена из
-              системы.
+              Доставка будет перемещена во вкладку «Удалённые доставки». Это не
+              окончательное удаление: её можно будет вернуть в график.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Отмена</AlertDialogCancel>
+            <AlertDialogCancel disabled={deleteDelivery.isPending}>
+              Отмена
+            </AlertDialogCancel>
             <AlertDialogAction
-              onClick={() =>
-                deleteTarget && deleteDelivery.mutate({ id: deleteTarget.id })
-              }
+              onClick={(event) => {
+                event.preventDefault();
+                if (deleteTarget) {
+                  deleteDelivery.mutate({ id: deleteTarget.id });
+                }
+              }}
+              disabled={deleteDelivery.isPending}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               data-testid="btn-confirm-delete"
             >
-              Удалить
+              {deleteDelivery.isPending ? "Перемещение…" : "Удалить"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

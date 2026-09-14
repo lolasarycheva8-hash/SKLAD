@@ -13,6 +13,7 @@ import {
 } from "../lib/objectStorage";
 import {
   canAccessDeliveryActs,
+  canEditDeliveries,
   canUploadDeliveryActs,
 } from "../lib/delivery-acts";
 import { createStorageFailureLogFields } from "../lib/storage-log-sanitizer";
@@ -52,7 +53,10 @@ router.post(
     try {
       const { name, size, contentType, deliveryId } = parsed.data;
       const [delivery] = await db
-        .select({ driverUserId: deliveriesTable.driverUserId })
+        .select({
+          driverUserId: deliveriesTable.driverUserId,
+          archivedAt: deliveriesTable.archivedAt,
+        })
         .from(deliveriesTable)
         .where(eq(deliveriesTable.id, deliveryId))
         .limit(1);
@@ -60,7 +64,15 @@ router.post(
         res.status(404).json({ error: "Доставка не найдена" });
         return;
       }
-      if (!canUploadDeliveryActs(req.appUser, delivery.driverUserId)) {
+      if (delivery.archivedAt) {
+        res
+          .status(409)
+          .json({ error: "Архивная доставка недоступна для загрузки актов" });
+        return;
+      }
+      if (
+        !canUploadDeliveryActs(req.appUser, delivery.driverUserId)
+      ) {
         res
           .status(403)
           .json({ error: "Нет прав загружать акты этой доставки" });
@@ -169,6 +181,7 @@ router.get("/storage/objects/*path", async (req: Request, res: Response) => {
       .select({
         id: deliveryPhotosTable.id,
         driverUserId: deliveriesTable.driverUserId,
+        archivedAt: deliveriesTable.archivedAt,
       })
       .from(deliveryPhotosTable)
       .innerJoin(
@@ -186,7 +199,11 @@ router.get("/storage/objects/*path", async (req: Request, res: Response) => {
       res.status(404).json({ error: "Object not found" });
       return;
     }
-    if (!canAccessDeliveryActs(req.appUser, registered.driverUserId)) {
+    if (
+      registered.archivedAt
+        ? !canEditDeliveries(req.appUser)
+        : !canAccessDeliveryActs(req.appUser, registered.driverUserId)
+    ) {
       res.status(404).json({ error: "Object not found" });
       return;
     }

@@ -66,6 +66,7 @@ async function listUnresolvedLegacyDriverCandidates() {
       .where(
         and(
           isNull(deliveriesTable.driverUserId),
+          isNull(deliveriesTable.archivedAt),
           sql`${normalizedDeliveryDriver} <> ''`,
         ),
       )
@@ -257,6 +258,7 @@ router.post(
           .where(
             and(
               isNull(deliveriesTable.driverUserId),
+              isNull(deliveriesTable.archivedAt),
               sql`${normalizedLegacyDriverSql(deliveriesTable.legacyDriver)} = ${mapping.legacyName}`,
             ),
           )

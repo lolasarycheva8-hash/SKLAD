@@ -63,4 +63,8 @@ export interface Delivery {
   /** Количество приложенных фото-актов */
   photosCount: number;
   createdAt: Date;
+  /** @nullable */
+  archivedAt: Date | null;
+  /** @nullable */
+  archivedByName: string | null;
 }
