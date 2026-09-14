@@ -94,6 +94,11 @@ import { downloadFileResponse } from "@/lib/download-file";
 import { usePermissions } from "@/hooks/use-permissions";
 import { cn } from "@/lib/utils";
 import {
+  getPlannedDayTotals,
+  getPlannedDeliveryStatus,
+  matchesPlannedDeliveryDay,
+} from "@/lib/planned-delivery-summary";
+import {
   canRescheduleDelivery,
   buildDeliveryImportReview,
   confirmPlannedDate,
@@ -748,21 +753,9 @@ export default function Deliveries() {
     if (!scheduleDayFilter) return filteredData;
 
     const dayStr = `${month}-${String(scheduleDayFilter.day).padStart(2, "0")}`;
-    return filteredData.filter((delivery) => {
-      const plannedForDay =
-        toDateInputValue(delivery.plannedDate) === dayStr;
-      const completedOnDay =
-        toDateInputValue(delivery.actualDate) === dayStr;
-
-      if (scheduleDayFilter.status === "plan") return plannedForDay;
-      if (scheduleDayFilter.status === "failed") {
-        return plannedForDay && !delivery.actualDate;
-      }
-      if (scheduleDayFilter.status === "closed") {
-        return completedOnDay && delivery.photosCount > 0;
-      }
-      return completedOnDay && delivery.photosCount === 0;
-    });
+    return filteredData.filter((delivery) =>
+      matchesPlannedDeliveryDay(delivery, dayStr, scheduleDayFilter.status),
+    );
   }, [filteredData, month, scheduleDayFilter]);
 
   const sitesWithoutDeliveries = useMemo(() => {
@@ -1401,15 +1394,13 @@ export default function Deliveries() {
     let failed = 0;
 
     for (const delivery of filteredData) {
-      if (!delivery.plannedDate) continue;
+      const status = getPlannedDeliveryStatus(delivery);
+      if (!status) continue;
       plan++;
 
-      if (!delivery.actualDate) {
+      if (status === "failed") {
         failed++;
-      } else if (
-        delivery.workflowStatus === "closed" ||
-        delivery.photosCount > 0
-      ) {
+      } else if (status === "closed") {
         closed++;
       } else {
         done++;
@@ -1504,21 +1495,7 @@ export default function Deliveries() {
   const dayTotals = useMemo(() => {
     return Array.from({ length: daysInMonth }, (_, i) => {
       const dayStr = `${month}-${String(i + 1).padStart(2, "0")}`;
-      let plan = 0,
-        done = 0,
-        closed = 0,
-        failed = 0;
-      filteredData.forEach((d) => {
-        if (toDateInputValue(d.plannedDate) === dayStr) {
-          plan++;
-          if (!d.actualDate) failed++;
-        }
-        if (d.actualDate && toDateInputValue(d.actualDate) === dayStr) {
-          if (d.photosCount === 0) done++;
-          else closed++;
-        }
-      });
-      return { plan, done, closed, failed };
+      return getPlannedDayTotals(filteredData, dayStr);
     });
   }, [filteredData, month, daysInMonth]);
 
@@ -2680,7 +2657,7 @@ export default function Deliveries() {
                   <th className="sticky left-[160px] z-40 w-[180px] min-w-[180px] bg-muted p-1"></th>
                   <th className="sticky left-[340px] z-40 w-[130px] min-w-[130px] bg-muted p-1 text-right font-normal shadow-[1px_0_0_0_var(--color-border)]">
                     <div className="flex flex-col gap-0.5 whitespace-nowrap text-xs leading-4 pr-1">
-                      <div className="text-amber-600 dark:text-amber-400">Выполнено, %</div>
+                      <div className="text-amber-600 dark:text-amber-400" title="Выполнение плана дня: выполненные и закрытые доставки с этой плановой датой">Выполнено, %</div>
                       <div className="text-muted-foreground">План</div>
                       <div className="text-amber-600 dark:text-amber-400">
                         Выполнено
@@ -2730,11 +2707,11 @@ export default function Deliveries() {
                           <span
                             className="text-amber-600 dark:text-amber-400 tabular-nums"
                             data-testid={`schedule-done-percent-${d}`}
-                            title={`Выполнено за ${d}-е число ÷ план за ${d}-е число × 100%`}
-                            aria-label={`Выполнено, % за ${d}-е число: ${t.plan > 0 ? (t.done / t.plan * 100).toLocaleString("ru-RU", { maximumFractionDigits: 1 }) + "%" : "нет плана"}`}
+                            title={`Выполненные и закрытые доставки с плановой датой ${d}-го числа ÷ план этого дня × 100%`}
+                            aria-label={`Выполнено, % за ${d}-е число: ${t.completedPercent !== null ? t.completedPercent.toLocaleString("ru-RU", { maximumFractionDigits: 1 }) + "%" : "нет плана"}`}
                           >
-                            {t.plan > 0
-                              ? `${(t.done / t.plan * 100).toLocaleString("ru-RU", { maximumFractionDigits: 1 })}%`
+                            {t.completedPercent !== null
+                              ? `${t.completedPercent.toLocaleString("ru-RU", { maximumFractionDigits: 1 })}%`
                               : "—"}
                           </span>
                           {dayValues.map((item) => {
@@ -2754,7 +2731,7 @@ export default function Deliveries() {
                                 onClick={() =>
                                   toggleScheduleDayFilter(d, item.status)
                                 }
-                                title={`${item.label} за ${d}-е число — показать только эти доставки`}
+                                title={`${item.label}: доставки с плановой датой ${d}-го числа — показать только эти доставки`}
                                 aria-label={`${item.label} за ${d}-е число: ${item.value}`}
                                 aria-pressed={isActive}
                                 data-testid={`button-schedule-${item.status}-${d}`}

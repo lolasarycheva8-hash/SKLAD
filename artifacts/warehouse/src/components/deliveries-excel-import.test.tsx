@@ -365,6 +365,39 @@ describe("рабочее место логиста: импорт и фильтр
     expect(screen.getByTestId("counter-schedule-rows")).toBeTruthy();
   });
 
+  it("считает дневную сводку и её фильтры по одной плановой дате, включая закрытые в процент", async () => {
+    const user = userEvent.setup();
+    deliveryTestState.deliveries = [
+      { plannedDate: "2026-09-11", actualDate: null, workflowStatus: "planned", photosCount: 0 },
+      { plannedDate: "2026-09-11", actualDate: "2026-09-14", workflowStatus: "done", photosCount: 2 },
+      { plannedDate: "2026-09-11", actualDate: "2026-09-12", workflowStatus: "closed", photosCount: 1 },
+      { plannedDate: "2026-09-10", actualDate: "2026-09-11", workflowStatus: "closed", photosCount: 1 },
+    ].map((fields, index) => ({
+      id: `planned-cohort-${index}`,
+      siteId: `planned-site-${index}`,
+      siteName: `Плановый объект ${index}`,
+      driver: "Иван Водитель",
+      driverUserId: "driver-1",
+      scheduleMonth: "2026-09",
+      lagDays: 0,
+      ...fields,
+    }));
+    render(<Deliveries />);
+    fireEvent.change(screen.getByTestId("input-month-selector"), { target: { value: "2026-09" } });
+    await user.click(screen.getByTestId("tab-schedule"));
+    expect(screen.getByTestId("button-schedule-plan-11").textContent).toBe("3");
+    expect(screen.getByTestId("button-schedule-done-11").textContent).toBe("1");
+    expect(screen.getByTestId("button-schedule-closed-11").textContent).toBe("1");
+    expect(screen.getByTestId("button-schedule-failed-11").textContent).toBe("1");
+    expect(screen.getByTestId("schedule-done-percent-11").textContent).toBe("66,7%");
+    expect(screen.getByTestId("schedule-done-percent-30").textContent).toBe("—");
+    await user.click(screen.getByTestId("button-schedule-closed-11"));
+    expect(screen.getByRole("link", { name: "Плановый объект 2" })).toBeTruthy();
+    expect(screen.queryByRole("link", { name: "Плановый объект 3" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Плановый объект 1" })).toBeNull();
+    expect(screen.getByTestId("schedule-done-percent-11").textContent).toBe("66,7%");
+  });
+
   it("добавляет доставку из полной формы с датами и данными объекта без их изменения", async () => {
     deliveryTestState.adminAccess = true;
     const user = userEvent.setup();
