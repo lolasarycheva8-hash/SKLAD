@@ -573,6 +573,19 @@ export const ListSitesResponseItem = zod.object({
       "Закрыт ли объект на текущую дату (учитывает closedFrom\/reopenDate)",
     ),
   createdAt: zod.coerce.date(),
+  pendingClosureRequest: zod
+    .object({
+      id: zod.string().uuid(),
+      siteId: zod.string().uuid(),
+      siteName: zod.string(),
+      authorName: zod.string(),
+      closedFrom: zod.coerce.date(),
+      reopenDate: zod.coerce.date().nullable(),
+      closureReason: zod.string().nullable(),
+      createdAt: zod.coerce.date(),
+    })
+    .nullable()
+    .describe("Ожидающее подтверждения предложение закрытия объекта"),
 });
 export const ListSitesResponse = zod.array(ListSitesResponseItem);
 
@@ -659,6 +672,19 @@ export const CreateSiteResponse = zod.object({
       "Закрыт ли объект на текущую дату (учитывает closedFrom\/reopenDate)",
     ),
   createdAt: zod.coerce.date(),
+  pendingClosureRequest: zod
+    .object({
+      id: zod.string().uuid(),
+      siteId: zod.string().uuid(),
+      siteName: zod.string(),
+      authorName: zod.string(),
+      closedFrom: zod.coerce.date(),
+      reopenDate: zod.coerce.date().nullable(),
+      closureReason: zod.string().nullable(),
+      createdAt: zod.coerce.date(),
+    })
+    .nullable()
+    .describe("Ожидающее подтверждения предложение закрытия объекта"),
 });
 
 /**
@@ -743,6 +769,19 @@ export const CreateSitesBulkResponseItem = zod.object({
       "Закрыт ли объект на текущую дату (учитывает closedFrom\/reopenDate)",
     ),
   createdAt: zod.coerce.date(),
+  pendingClosureRequest: zod
+    .object({
+      id: zod.string().uuid(),
+      siteId: zod.string().uuid(),
+      siteName: zod.string(),
+      authorName: zod.string(),
+      closedFrom: zod.coerce.date(),
+      reopenDate: zod.coerce.date().nullable(),
+      closureReason: zod.string().nullable(),
+      createdAt: zod.coerce.date(),
+    })
+    .nullable()
+    .describe("Ожидающее подтверждения предложение закрытия объекта"),
 });
 export const CreateSitesBulkResponse = zod.array(CreateSitesBulkResponseItem);
 
@@ -760,32 +799,49 @@ export const ListSiteChangeRequestsResponseItem = zod.object({
   authorUserId: zod.string().uuid().nullable(),
   authorName: zod.string(),
   authorEmail: zod.string(),
-  payload: zod.object({
-    name: zod.string().optional(),
-    address: zod.string().optional(),
-    branch: zod.string().optional(),
-    customer: zod.string().optional(),
-    clientId: zod.string().uuid().optional(),
-    manager: zod.string().optional(),
-    managerContact: zod.string().optional(),
-    director: zod.string().optional(),
-    project: zod.string().optional(),
-    driverUserId: zod.string().uuid().nullish(),
-    deliveryType: zod.string().optional(),
-  }),
-  originalPayload: zod.object({
-    name: zod.string().optional(),
-    address: zod.string().optional(),
-    branch: zod.string().optional(),
-    customer: zod.string().optional(),
-    clientId: zod.string().uuid().optional(),
-    manager: zod.string().optional(),
-    managerContact: zod.string().optional(),
-    director: zod.string().optional(),
-    project: zod.string().optional(),
-    driverUserId: zod.string().uuid().nullish(),
-    deliveryType: zod.string().optional(),
-  }),
+  kind: zod.enum(["edit", "closure"]),
+  payload: zod.union([
+    zod.object({
+      kind: zod.enum(["closure"]),
+      closedFrom: zod.coerce.date(),
+      reopenDate: zod.coerce.date().nullable(),
+      closureReason: zod.string().nullable(),
+    }),
+    zod.object({
+      name: zod.string().optional(),
+      address: zod.string().optional(),
+      branch: zod.string().optional(),
+      customer: zod.string().optional(),
+      clientId: zod.string().uuid().optional(),
+      manager: zod.string().optional(),
+      managerContact: zod.string().optional(),
+      director: zod.string().optional(),
+      project: zod.string().optional(),
+      driverUserId: zod.string().uuid().nullish(),
+      deliveryType: zod.string().optional(),
+    }),
+  ]),
+  originalPayload: zod.union([
+    zod.object({
+      kind: zod.enum(["closure"]),
+      closedFrom: zod.coerce.date().nullable(),
+      reopenDate: zod.coerce.date().nullable(),
+      closureReason: zod.string().nullable(),
+    }),
+    zod.object({
+      name: zod.string().optional(),
+      address: zod.string().optional(),
+      branch: zod.string().optional(),
+      customer: zod.string().optional(),
+      clientId: zod.string().uuid().optional(),
+      manager: zod.string().optional(),
+      managerContact: zod.string().optional(),
+      director: zod.string().optional(),
+      project: zod.string().optional(),
+      driverUserId: zod.string().uuid().nullish(),
+      deliveryType: zod.string().optional(),
+    }),
+  ]),
   status: zod.enum(["pending", "approved", "rejected"]),
   createdAt: zod.coerce.date(),
   decidedAt: zod.coerce.date().nullable(),
@@ -825,32 +881,49 @@ export const CreateSiteChangeRequestResponse = zod.object({
   authorUserId: zod.string().uuid().nullable(),
   authorName: zod.string(),
   authorEmail: zod.string(),
-  payload: zod.object({
-    name: zod.string().optional(),
-    address: zod.string().optional(),
-    branch: zod.string().optional(),
-    customer: zod.string().optional(),
-    clientId: zod.string().uuid().optional(),
-    manager: zod.string().optional(),
-    managerContact: zod.string().optional(),
-    director: zod.string().optional(),
-    project: zod.string().optional(),
-    driverUserId: zod.string().uuid().nullish(),
-    deliveryType: zod.string().optional(),
-  }),
-  originalPayload: zod.object({
-    name: zod.string().optional(),
-    address: zod.string().optional(),
-    branch: zod.string().optional(),
-    customer: zod.string().optional(),
-    clientId: zod.string().uuid().optional(),
-    manager: zod.string().optional(),
-    managerContact: zod.string().optional(),
-    director: zod.string().optional(),
-    project: zod.string().optional(),
-    driverUserId: zod.string().uuid().nullish(),
-    deliveryType: zod.string().optional(),
-  }),
+  kind: zod.enum(["edit", "closure"]),
+  payload: zod.union([
+    zod.object({
+      kind: zod.enum(["closure"]),
+      closedFrom: zod.coerce.date(),
+      reopenDate: zod.coerce.date().nullable(),
+      closureReason: zod.string().nullable(),
+    }),
+    zod.object({
+      name: zod.string().optional(),
+      address: zod.string().optional(),
+      branch: zod.string().optional(),
+      customer: zod.string().optional(),
+      clientId: zod.string().uuid().optional(),
+      manager: zod.string().optional(),
+      managerContact: zod.string().optional(),
+      director: zod.string().optional(),
+      project: zod.string().optional(),
+      driverUserId: zod.string().uuid().nullish(),
+      deliveryType: zod.string().optional(),
+    }),
+  ]),
+  originalPayload: zod.union([
+    zod.object({
+      kind: zod.enum(["closure"]),
+      closedFrom: zod.coerce.date().nullable(),
+      reopenDate: zod.coerce.date().nullable(),
+      closureReason: zod.string().nullable(),
+    }),
+    zod.object({
+      name: zod.string().optional(),
+      address: zod.string().optional(),
+      branch: zod.string().optional(),
+      customer: zod.string().optional(),
+      clientId: zod.string().uuid().optional(),
+      manager: zod.string().optional(),
+      managerContact: zod.string().optional(),
+      director: zod.string().optional(),
+      project: zod.string().optional(),
+      driverUserId: zod.string().uuid().nullish(),
+      deliveryType: zod.string().optional(),
+    }),
+  ]),
   status: zod.enum(["pending", "approved", "rejected"]),
   createdAt: zod.coerce.date(),
   decidedAt: zod.coerce.date().nullable(),
@@ -921,6 +994,19 @@ export const UpdateSiteFeaturesResponse = zod.object({
       "Закрыт ли объект на текущую дату (учитывает closedFrom\/reopenDate)",
     ),
   createdAt: zod.coerce.date(),
+  pendingClosureRequest: zod
+    .object({
+      id: zod.string().uuid(),
+      siteId: zod.string().uuid(),
+      siteName: zod.string(),
+      authorName: zod.string(),
+      closedFrom: zod.coerce.date(),
+      reopenDate: zod.coerce.date().nullable(),
+      closureReason: zod.string().nullable(),
+      createdAt: zod.coerce.date(),
+    })
+    .nullable()
+    .describe("Ожидающее подтверждения предложение закрытия объекта"),
 });
 
 /**
@@ -937,32 +1023,49 @@ export const ApproveSiteChangeRequestResponse = zod.object({
   authorUserId: zod.string().uuid().nullable(),
   authorName: zod.string(),
   authorEmail: zod.string(),
-  payload: zod.object({
-    name: zod.string().optional(),
-    address: zod.string().optional(),
-    branch: zod.string().optional(),
-    customer: zod.string().optional(),
-    clientId: zod.string().uuid().optional(),
-    manager: zod.string().optional(),
-    managerContact: zod.string().optional(),
-    director: zod.string().optional(),
-    project: zod.string().optional(),
-    driverUserId: zod.string().uuid().nullish(),
-    deliveryType: zod.string().optional(),
-  }),
-  originalPayload: zod.object({
-    name: zod.string().optional(),
-    address: zod.string().optional(),
-    branch: zod.string().optional(),
-    customer: zod.string().optional(),
-    clientId: zod.string().uuid().optional(),
-    manager: zod.string().optional(),
-    managerContact: zod.string().optional(),
-    director: zod.string().optional(),
-    project: zod.string().optional(),
-    driverUserId: zod.string().uuid().nullish(),
-    deliveryType: zod.string().optional(),
-  }),
+  kind: zod.enum(["edit", "closure"]),
+  payload: zod.union([
+    zod.object({
+      kind: zod.enum(["closure"]),
+      closedFrom: zod.coerce.date(),
+      reopenDate: zod.coerce.date().nullable(),
+      closureReason: zod.string().nullable(),
+    }),
+    zod.object({
+      name: zod.string().optional(),
+      address: zod.string().optional(),
+      branch: zod.string().optional(),
+      customer: zod.string().optional(),
+      clientId: zod.string().uuid().optional(),
+      manager: zod.string().optional(),
+      managerContact: zod.string().optional(),
+      director: zod.string().optional(),
+      project: zod.string().optional(),
+      driverUserId: zod.string().uuid().nullish(),
+      deliveryType: zod.string().optional(),
+    }),
+  ]),
+  originalPayload: zod.union([
+    zod.object({
+      kind: zod.enum(["closure"]),
+      closedFrom: zod.coerce.date().nullable(),
+      reopenDate: zod.coerce.date().nullable(),
+      closureReason: zod.string().nullable(),
+    }),
+    zod.object({
+      name: zod.string().optional(),
+      address: zod.string().optional(),
+      branch: zod.string().optional(),
+      customer: zod.string().optional(),
+      clientId: zod.string().uuid().optional(),
+      manager: zod.string().optional(),
+      managerContact: zod.string().optional(),
+      director: zod.string().optional(),
+      project: zod.string().optional(),
+      driverUserId: zod.string().uuid().nullish(),
+      deliveryType: zod.string().optional(),
+    }),
+  ]),
   status: zod.enum(["pending", "approved", "rejected"]),
   createdAt: zod.coerce.date(),
   decidedAt: zod.coerce.date().nullable(),
@@ -985,32 +1088,49 @@ export const RejectSiteChangeRequestResponse = zod.object({
   authorUserId: zod.string().uuid().nullable(),
   authorName: zod.string(),
   authorEmail: zod.string(),
-  payload: zod.object({
-    name: zod.string().optional(),
-    address: zod.string().optional(),
-    branch: zod.string().optional(),
-    customer: zod.string().optional(),
-    clientId: zod.string().uuid().optional(),
-    manager: zod.string().optional(),
-    managerContact: zod.string().optional(),
-    director: zod.string().optional(),
-    project: zod.string().optional(),
-    driverUserId: zod.string().uuid().nullish(),
-    deliveryType: zod.string().optional(),
-  }),
-  originalPayload: zod.object({
-    name: zod.string().optional(),
-    address: zod.string().optional(),
-    branch: zod.string().optional(),
-    customer: zod.string().optional(),
-    clientId: zod.string().uuid().optional(),
-    manager: zod.string().optional(),
-    managerContact: zod.string().optional(),
-    director: zod.string().optional(),
-    project: zod.string().optional(),
-    driverUserId: zod.string().uuid().nullish(),
-    deliveryType: zod.string().optional(),
-  }),
+  kind: zod.enum(["edit", "closure"]),
+  payload: zod.union([
+    zod.object({
+      kind: zod.enum(["closure"]),
+      closedFrom: zod.coerce.date(),
+      reopenDate: zod.coerce.date().nullable(),
+      closureReason: zod.string().nullable(),
+    }),
+    zod.object({
+      name: zod.string().optional(),
+      address: zod.string().optional(),
+      branch: zod.string().optional(),
+      customer: zod.string().optional(),
+      clientId: zod.string().uuid().optional(),
+      manager: zod.string().optional(),
+      managerContact: zod.string().optional(),
+      director: zod.string().optional(),
+      project: zod.string().optional(),
+      driverUserId: zod.string().uuid().nullish(),
+      deliveryType: zod.string().optional(),
+    }),
+  ]),
+  originalPayload: zod.union([
+    zod.object({
+      kind: zod.enum(["closure"]),
+      closedFrom: zod.coerce.date().nullable(),
+      reopenDate: zod.coerce.date().nullable(),
+      closureReason: zod.string().nullable(),
+    }),
+    zod.object({
+      name: zod.string().optional(),
+      address: zod.string().optional(),
+      branch: zod.string().optional(),
+      customer: zod.string().optional(),
+      clientId: zod.string().uuid().optional(),
+      manager: zod.string().optional(),
+      managerContact: zod.string().optional(),
+      director: zod.string().optional(),
+      project: zod.string().optional(),
+      driverUserId: zod.string().uuid().nullish(),
+      deliveryType: zod.string().optional(),
+    }),
+  ]),
   status: zod.enum(["pending", "approved", "rejected"]),
   createdAt: zod.coerce.date(),
   decidedAt: zod.coerce.date().nullable(),
@@ -1077,6 +1197,19 @@ export const GetSiteResponse = zod.object({
       "Закрыт ли объект на текущую дату (учитывает closedFrom\/reopenDate)",
     ),
   createdAt: zod.coerce.date(),
+  pendingClosureRequest: zod
+    .object({
+      id: zod.string().uuid(),
+      siteId: zod.string().uuid(),
+      siteName: zod.string(),
+      authorName: zod.string(),
+      closedFrom: zod.coerce.date(),
+      reopenDate: zod.coerce.date().nullable(),
+      closureReason: zod.string().nullable(),
+      createdAt: zod.coerce.date(),
+    })
+    .nullable()
+    .describe("Ожидающее подтверждения предложение закрытия объекта"),
 });
 
 /**
@@ -1152,6 +1285,19 @@ export const UpdateSiteResponse = zod.object({
       "Закрыт ли объект на текущую дату (учитывает closedFrom\/reopenDate)",
     ),
   createdAt: zod.coerce.date(),
+  pendingClosureRequest: zod
+    .object({
+      id: zod.string().uuid(),
+      siteId: zod.string().uuid(),
+      siteName: zod.string(),
+      authorName: zod.string(),
+      closedFrom: zod.coerce.date(),
+      reopenDate: zod.coerce.date().nullable(),
+      closureReason: zod.string().nullable(),
+      createdAt: zod.coerce.date(),
+    })
+    .nullable()
+    .describe("Ожидающее подтверждения предложение закрытия объекта"),
 });
 
 /**
@@ -2056,6 +2202,19 @@ export const CloseSiteResponse = zod.object({
       "Закрыт ли объект на текущую дату (учитывает closedFrom\/reopenDate)",
     ),
   createdAt: zod.coerce.date(),
+  pendingClosureRequest: zod
+    .object({
+      id: zod.string().uuid(),
+      siteId: zod.string().uuid(),
+      siteName: zod.string(),
+      authorName: zod.string(),
+      closedFrom: zod.coerce.date(),
+      reopenDate: zod.coerce.date().nullable(),
+      closureReason: zod.string().nullable(),
+      createdAt: zod.coerce.date(),
+    })
+    .nullable()
+    .describe("Ожидающее подтверждения предложение закрытия объекта"),
 });
 
 /**
@@ -2116,6 +2275,19 @@ export const ReopenSiteResponse = zod.object({
       "Закрыт ли объект на текущую дату (учитывает closedFrom\/reopenDate)",
     ),
   createdAt: zod.coerce.date(),
+  pendingClosureRequest: zod
+    .object({
+      id: zod.string().uuid(),
+      siteId: zod.string().uuid(),
+      siteName: zod.string(),
+      authorName: zod.string(),
+      closedFrom: zod.coerce.date(),
+      reopenDate: zod.coerce.date().nullable(),
+      closureReason: zod.string().nullable(),
+      createdAt: zod.coerce.date(),
+    })
+    .nullable()
+    .describe("Ожидающее подтверждения предложение закрытия объекта"),
 });
 
 /**

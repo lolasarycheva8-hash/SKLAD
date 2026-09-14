@@ -5,6 +5,7 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
+import type { PendingClosureRequest } from "./pendingClosureRequest";
 
 export interface Site {
   id: string;
@@ -47,4 +48,6 @@ export interface Site {
   /** Закрыт ли объект на текущую дату (учитывает closedFrom/reopenDate) */
   isClosed: boolean;
   createdAt: Date;
+  /** Ожидающее подтверждения предложение закрытия объекта */
+  pendingClosureRequest: PendingClosureRequest | null;
 }

@@ -1,3 +1,4 @@
+- [Permissive response unions](permissive-response-unions.md) — an all-optional object first in a Zod union can silently strip fields from more specific response variants.
 - [Git and connector authorization](git-connector-authorization.md) — native Git authentication can fail while the GitHub connector still has write access; verify separately before reconnecting.
 - [Verifying async DESIGN subagent completion](design-subagent-verification.md) — "success" status doesn't mean UI is finished; always inspect actual page files before trusting the summary.
 - [Clerk routing="path" blank page](clerk-signin-blank-page.md) — gating an entire internal app behind Clerk requires redirecting to /sign-in, not rendering <SignIn> inline elsewhere.

@@ -961,6 +961,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Site"
+        "201":
+          description: Closure request created; the site remains active until approval
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Site"
 
   /sites/{id}/reopen:
     post:
@@ -2650,6 +2656,11 @@ components:
         createdAt:
           type: string
           format: date-time
+        pendingClosureRequest:
+          allOf:
+            - $ref: "#/components/schemas/PendingClosureRequest"
+          nullable: true
+          description: Ожидающее подтверждения предложение закрытия объекта
       required:
         - id
         - name
@@ -2672,6 +2683,7 @@ components:
         - closedBy
         - isClosed
         - createdAt
+        - pendingClosureRequest
 
     SiteBranchLookup:
       type: object
@@ -2840,6 +2852,68 @@ components:
         deliveryType:
           type: string
 
+    SiteClosurePayload:
+      type: object
+      additionalProperties: false
+      required: [kind, closedFrom, reopenDate, closureReason]
+      properties:
+        kind:
+          type: string
+          enum: [closure]
+        closedFrom:
+          type: string
+          format: date
+        reopenDate:
+          type: [string, "null"]
+          format: date
+        closureReason:
+          type: [string, "null"]
+
+    SiteClosureBaselinePayload:
+      type: object
+      additionalProperties: false
+      required: [kind, closedFrom, reopenDate, closureReason]
+      properties:
+        kind:
+          type: string
+          enum: [closure]
+        closedFrom:
+          type: [string, "null"]
+          format: date
+        reopenDate:
+          type: [string, "null"]
+          format: date
+        closureReason:
+          type: [string, "null"]
+
+    PendingClosureRequest:
+      type: object
+      additionalProperties: false
+      required:
+        [id, siteId, siteName, authorName, closedFrom, reopenDate, closureReason, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        siteId:
+          type: string
+          format: uuid
+        siteName:
+          type: string
+        authorName:
+          type: string
+        closedFrom:
+          type: string
+          format: date
+        reopenDate:
+          type: [string, "null"]
+          format: date
+        closureReason:
+          type: [string, "null"]
+        createdAt:
+          type: string
+          format: date-time
+
     SiteChangeRequestStatus:
       type: string
       enum: [pending, approved, rejected]
@@ -2853,6 +2927,7 @@ components:
         - authorUserId
         - authorName
         - authorEmail
+        - kind
         - payload
         - originalPayload
         - status
@@ -2877,10 +2952,17 @@ components:
           type: string
         authorEmail:
           type: string
+        kind:
+          type: string
+          enum: [edit, closure]
         payload:
-          $ref: "#/components/schemas/SiteChangeProposal"
+          oneOf:
+            - $ref: "#/components/schemas/SiteClosurePayload"
+            - $ref: "#/components/schemas/SiteChangeProposal"
         originalPayload:
-          $ref: "#/components/schemas/SiteChangeProposal"
+          oneOf:
+            - $ref: "#/components/schemas/SiteClosureBaselinePayload"
+            - $ref: "#/components/schemas/SiteChangeProposal"
         status:
           $ref: "#/components/schemas/SiteChangeRequestStatus"
         createdAt:

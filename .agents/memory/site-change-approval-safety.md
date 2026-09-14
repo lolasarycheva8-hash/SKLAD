@@ -13,4 +13,10 @@ Logisticians with object-section access save object-card changes directly, witho
 
 **Why:** On 2026-09-10, after clarification of direct saving versus approval, the user explicitly confirmed that logisticians should keep editing without administrator approval. They did not request deletion of existing proposals or review history.
 
-**How to apply:** Do not reinstate mandatory approval merely because legacy proposal endpoints still exist. Keep their stale-baseline protections so an old proposal cannot overwrite a newer direct edit.
+**How to apply:** Do not reinstate mandatory approval for ordinary field edits merely because legacy proposal endpoints still exist. Keep their stale-baseline protections so an old proposal cannot overwrite a newer direct edit.
+
+Closure requested by a logistician is an exception: it requires an administrator's final approval. Until then, keep the site active and visibly mark the pending closure request.
+
+**Why:** The user explicitly requested administrative confirmation for logistician closures, separately from ordinary object editing.
+
+**How to apply:** Preserve direct ordinary edits and existing administrator closure rights. Do not automatically delete scheduled deliveries when requesting or approving closure; that was not requested.

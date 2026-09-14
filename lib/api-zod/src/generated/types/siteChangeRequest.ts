@@ -6,7 +6,10 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { SiteChangeProposal } from "./siteChangeProposal";
+import type { SiteChangeRequestKind } from "./siteChangeRequestKind";
 import type { SiteChangeRequestStatus } from "./siteChangeRequestStatus";
+import type { SiteClosureBaselinePayload } from "./siteClosureBaselinePayload";
+import type { SiteClosurePayload } from "./siteClosurePayload";
 
 export interface SiteChangeRequest {
   id: string;
@@ -17,8 +20,9 @@ export interface SiteChangeRequest {
   authorUserId: string | null;
   authorName: string;
   authorEmail: string;
-  payload: SiteChangeProposal;
-  originalPayload: SiteChangeProposal;
+  kind: SiteChangeRequestKind;
+  payload: SiteClosurePayload | SiteChangeProposal;
+  originalPayload: SiteClosureBaselinePayload | SiteChangeProposal;
   status: SiteChangeRequestStatus;
   createdAt: Date;
   /** @nullable */

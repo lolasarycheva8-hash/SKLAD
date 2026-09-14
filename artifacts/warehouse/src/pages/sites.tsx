@@ -32,7 +32,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import type { Site } from "@workspace/api-client-react";
+import type { Site, SiteChangeRequest } from "@workspace/api-client-react";
 import {
   parseExcelFile,
   readSheetHeaders,
@@ -209,6 +209,10 @@ export default function Sites() {
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [deleteTarget, setDeleteTarget] = useState<Site | null>(null);
   const [closeTarget, setCloseTarget] = useState<Site | null>(null);
+  const [closureDecision, setClosureDecision] = useState<{
+    request: SiteChangeRequest;
+    decision: "approved" | "rejected";
+  } | null>(null);
   const [fieldFilters, setFieldFilters] = useState<Record<string, string>>({});
   const [openFilter, setOpenFilter] = useState<string | null>(null);
   const [showClosed, setShowClosed] = useState(false);
@@ -586,6 +590,7 @@ export default function Sites() {
   const approveChangeRequest = useApproveSiteChangeRequest({
     mutation: {
       onSuccess: () => {
+        setClosureDecision(null);
         invalidateChangeRequests();
         toast({ title: "Предложение принято" });
       },
@@ -596,6 +601,7 @@ export default function Sites() {
   const rejectChangeRequest = useRejectSiteChangeRequest({
     mutation: {
       onSuccess: () => {
+        setClosureDecision(null);
         invalidateChangeRequests();
         toast({ title: "Предложение отклонено" });
       },
@@ -928,6 +934,15 @@ export default function Sites() {
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div>
                         <strong>{request.siteName}</strong>
+                        {request.kind === "closure" && (
+                          <Badge
+                            variant="outline"
+                            className="ml-2 border-amber-400 text-amber-700"
+                            data-testid={`badge-closure-request-${request.id}`}
+                          >
+                            Закрытие
+                          </Badge>
+                        )}
                         <span className="text-muted-foreground">
                           {" "}— {request.authorName} ({request.authorEmail}),{" "}
                           {new Date(request.createdAt).toLocaleString("ru-RU")}
@@ -936,21 +951,60 @@ export default function Sites() {
                       <div className="flex gap-2">
                         <Button
                           size="sm"
-                          onClick={() => approveChangeRequest.mutate({ id: request.id })}
+                          onClick={() =>
+                            request.kind === "closure"
+                              ? setClosureDecision({
+                                  request,
+                                  decision: "approved",
+                                })
+                              : approveChangeRequest.mutate({ id: request.id })
+                          }
                           disabled={approveChangeRequest.isPending || rejectChangeRequest.isPending}
+                          data-testid={`button-approve-site-request-${request.id}`}
                         >
                           Принять
                         </Button>
                         <Button
                           size="sm"
                           variant="outline"
-                          onClick={() => rejectChangeRequest.mutate({ id: request.id })}
+                          onClick={() =>
+                            request.kind === "closure"
+                              ? setClosureDecision({
+                                  request,
+                                  decision: "rejected",
+                                })
+                              : rejectChangeRequest.mutate({ id: request.id })
+                          }
                           disabled={approveChangeRequest.isPending || rejectChangeRequest.isPending}
+                          data-testid={`button-reject-site-request-${request.id}`}
                         >
                           Отклонить
                         </Button>
                       </div>
                     </div>
+                    {request.kind === "closure" &&
+                    "closedFrom" in request.payload ? (
+                      <div
+                        className="grid gap-1"
+                        data-testid={`details-closure-request-${request.id}`}
+                      >
+                        <div>
+                          <span className="font-medium">Дата закрытия:</span>{" "}
+                          {request.payload.closedFrom}
+                        </div>
+                        <div>
+                          <span className="font-medium">Дата открытия:</span>{" "}
+                          {request.payload.reopenDate ?? "Не указана"}
+                        </div>
+                        <div>
+                          <span className="font-medium">Причина:</span>{" "}
+                          {request.payload.closureReason ?? "Не указана"}
+                        </div>
+                        <p className="text-amber-700">
+                          Объект останется активным до подтверждения.
+                        </p>
+                      </div>
+                    ) : (
                     <div className="grid gap-1">
                       {Object.entries(request.payload).map(([field, after]) => {
                         const before = request.originalPayload[field as keyof typeof request.originalPayload];
@@ -974,6 +1028,7 @@ export default function Sites() {
                         );
                       })}
                     </div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -1201,6 +1256,15 @@ export default function Sites() {
                           Закрыт
                         </Badge>
                       )}
+                      {site.pendingClosureRequest && (
+                        <Badge
+                          variant="outline"
+                          className="h-auto border-amber-400 px-1 py-0 text-[10px] text-amber-700"
+                          data-testid={`status-pending-site-closure-${site.id}`}
+                        >
+                          Закрытие ожидает подтверждения администратора
+                        </Badge>
+                      )}
                     </div>
                     {site.isClosed && site.closureReason && (
                       <div className="text-[10px] text-muted-foreground mt-0.5">
@@ -1328,9 +1392,9 @@ export default function Sites() {
                     className="py-1.5"
                     onClick={(e) => e.stopPropagation()}
                   >
-                    {isAdmin && (
+                    {(isAdmin || canEditSites) && (
                       <div className="flex items-center justify-end gap-1">
-                        {!site.isClosed ? (
+                        {isAdmin && !site.isClosed && !site.pendingClosureRequest ? (
                           <Button
                             variant="ghost"
                             size="icon"
@@ -1340,7 +1404,7 @@ export default function Sites() {
                           >
                             <Lock className="h-3.5 w-3.5" />
                           </Button>
-                        ) : (
+                        ) : isAdmin && site.isClosed ? (
                           <Button
                             variant="ghost"
                             size="icon"
@@ -1351,8 +1415,19 @@ export default function Sites() {
                           >
                             <Unlock className="h-3.5 w-3.5" />
                           </Button>
-                        )}
-                        <Button
+                        ) : canEditSites && !site.isClosed && !site.pendingClosureRequest ? (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7 text-muted-foreground"
+                            onClick={() => setCloseTarget(site)}
+                            title="Запросить закрытие объекта"
+                            data-testid={`button-request-close-site-${site.id}`}
+                          >
+                            <Lock className="h-3.5 w-3.5" />
+                          </Button>
+                        ) : null}
+                        {isAdmin && <Button
                           variant="ghost"
                           size="icon"
                           className="h-7 w-7"
@@ -1360,8 +1435,8 @@ export default function Sites() {
                           data-testid={`button-edit-site-${site.id}`}
                         >
                           <Pencil className="h-3.5 w-3.5" />
-                        </Button>
-                        <Button
+                        </Button>}
+                        {isAdmin && <Button
                           variant="ghost"
                           size="icon"
                           className="h-7 w-7"
@@ -1369,7 +1444,7 @@ export default function Sites() {
                           data-testid={`button-delete-site-${site.id}`}
                         >
                           <Trash2 className="h-3.5 w-3.5 text-destructive" />
-                        </Button>
+                        </Button>}
                       </div>
                     )}
                   </TableCell>
@@ -1745,6 +1820,72 @@ export default function Sites() {
               data-testid="button-confirm-delete-site"
             >
               Удалить
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog
+        open={!!closureDecision}
+        onOpenChange={(open) => !open && setClosureDecision(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {closureDecision?.decision === "approved"
+                ? "Подтвердить закрытие объекта?"
+                : "Отклонить запрос на закрытие?"}
+            </AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-2">
+                <p>
+                  Объект:{" "}
+                  <strong>{closureDecision?.request.siteName}</strong>
+                </p>
+                {closureDecision &&
+                  "closedFrom" in closureDecision.request.payload && (
+                    <>
+                      <p>
+                        Дата закрытия:{" "}
+                        <strong>{closureDecision.request.payload.closedFrom}</strong>
+                      </p>
+                      <p>
+                        Дата открытия:{" "}
+                        <strong>
+                          {closureDecision.request.payload.reopenDate ?? "Не указана"}
+                        </strong>
+                      </p>
+                      <p>
+                        Причина:{" "}
+                        <strong>
+                          {closureDecision.request.payload.closureReason ?? "Не указана"}
+                        </strong>
+                      </p>
+                    </>
+                  )}
+                <p>
+                  {closureDecision?.decision === "approved"
+                    ? "После подтверждения объект будет закрыт."
+                    : "После отклонения объект останется активным, а отметка ожидания исчезнет."}
+                </p>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Отмена</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (!closureDecision) return;
+                if (closureDecision.decision === "approved") {
+                  approveChangeRequest.mutate({ id: closureDecision.request.id });
+                } else {
+                  rejectChangeRequest.mutate({ id: closureDecision.request.id });
+                }
+              }}
+              disabled={approveChangeRequest.isPending || rejectChangeRequest.isPending}
+              data-testid="button-confirm-site-closure-decision"
+            >
+              {closureDecision?.decision === "approved" ? "Подтвердить" : "Отклонить"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

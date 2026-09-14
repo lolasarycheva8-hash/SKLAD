@@ -153,6 +153,19 @@ export interface UpdateProductInput {
   supplierContact?: string | null;
 }
 
+export interface PendingClosureRequest {
+  id: string;
+  siteId: string;
+  siteName: string;
+  authorName: string;
+  closedFrom: string;
+  /** @nullable */
+  reopenDate: string | null;
+  /** @nullable */
+  closureReason: string | null;
+  createdAt: string;
+}
+
 export interface Site {
   id: string;
   /** Unique site name */
@@ -194,6 +207,8 @@ export interface Site {
   /** Закрыт ли объект на текущую дату (учитывает closedFrom/reopenDate) */
   isClosed: boolean;
   createdAt: string;
+  /** Ожидающее подтверждения предложение закрытия объекта */
+  pendingClosureRequest: PendingClosureRequest | null;
 }
 
 export interface SiteBranchLookup {
@@ -291,6 +306,39 @@ export interface SiteChangeProposal {
   deliveryType?: string;
 }
 
+export type SiteClosurePayloadKind =
+  (typeof SiteClosurePayloadKind)[keyof typeof SiteClosurePayloadKind];
+
+export const SiteClosurePayloadKind = {
+  closure: "closure",
+} as const;
+
+export interface SiteClosurePayload {
+  kind: SiteClosurePayloadKind;
+  closedFrom: string;
+  /** @nullable */
+  reopenDate: string | null;
+  /** @nullable */
+  closureReason: string | null;
+}
+
+export type SiteClosureBaselinePayloadKind =
+  (typeof SiteClosureBaselinePayloadKind)[keyof typeof SiteClosureBaselinePayloadKind];
+
+export const SiteClosureBaselinePayloadKind = {
+  closure: "closure",
+} as const;
+
+export interface SiteClosureBaselinePayload {
+  kind: SiteClosureBaselinePayloadKind;
+  /** @nullable */
+  closedFrom: string | null;
+  /** @nullable */
+  reopenDate: string | null;
+  /** @nullable */
+  closureReason: string | null;
+}
+
 export type SiteChangeRequestStatus =
   (typeof SiteChangeRequestStatus)[keyof typeof SiteChangeRequestStatus];
 
@@ -298,6 +346,14 @@ export const SiteChangeRequestStatus = {
   pending: "pending",
   approved: "approved",
   rejected: "rejected",
+} as const;
+
+export type SiteChangeRequestKind =
+  (typeof SiteChangeRequestKind)[keyof typeof SiteChangeRequestKind];
+
+export const SiteChangeRequestKind = {
+  edit: "edit",
+  closure: "closure",
 } as const;
 
 export interface SiteChangeRequest {
@@ -309,8 +365,9 @@ export interface SiteChangeRequest {
   authorUserId: string | null;
   authorName: string;
   authorEmail: string;
-  payload: SiteChangeProposal;
-  originalPayload: SiteChangeProposal;
+  kind: SiteChangeRequestKind;
+  payload: SiteClosurePayload | SiteChangeProposal;
+  originalPayload: SiteClosureBaselinePayload | SiteChangeProposal;
   status: SiteChangeRequestStatus;
   createdAt: string;
   /** @nullable */

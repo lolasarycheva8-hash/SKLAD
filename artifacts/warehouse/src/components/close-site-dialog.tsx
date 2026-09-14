@@ -1,8 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   useCloseSite,
-  useReopenSite,
   getListSitesQueryKey,
   getGetSiteQueryKey,
 } from "@workspace/api-client-react";
@@ -18,6 +17,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
+import { usePermissions } from "@/hooks/use-permissions";
 import { format } from "date-fns";
 
 interface CloseSiteDialogProps {
@@ -33,10 +33,18 @@ export function CloseSiteDialog({
 }: CloseSiteDialogProps) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const { isAdmin } = usePermissions();
 
   const [closedFrom, setClosedFrom] = useState(format(new Date(), "yyyy-MM-dd"));
   const [reopenDate, setReopenDate] = useState("");
   const [reason, setReason] = useState("");
+
+  useEffect(() => {
+    if (!open || !site?.id) return;
+    setClosedFrom(format(new Date(), "yyyy-MM-dd"));
+    setReopenDate("");
+    setReason("");
+  }, [open, site?.id]);
 
   const closeSite = useCloseSite({
     mutation: {
@@ -45,7 +53,15 @@ export function CloseSiteDialog({
           queryClient.invalidateQueries({ queryKey: getListSitesQueryKey() });
           queryClient.invalidateQueries({ queryKey: getGetSiteQueryKey(site.id) });
         }
-        toast({ title: "Объект закрыт" });
+        toast(
+          isAdmin
+            ? { title: "Объект закрыт" }
+            : {
+                title: "Запрос на закрытие отправлен",
+                description:
+                  "Объект остаётся активным до подтверждения администратора.",
+              },
+        );
         onOpenChange(false);
       },
       onError: (error: any) => {
@@ -61,6 +77,36 @@ export function CloseSiteDialog({
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!site?.id) return;
+    const closed = new Date(`${closedFrom}T00:00:00`);
+    if (
+      !/^\d{4}-\d{2}-\d{2}$/.test(closedFrom) ||
+      Number.isNaN(closed.getTime()) ||
+      closed.toISOString().slice(0, 10) !== closedFrom
+    ) {
+      toast({
+        title: "Некорректная дата",
+        description: "Укажите действительную дату закрытия.",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (reopenDate) {
+      const reopen = new Date(`${reopenDate}T00:00:00`);
+      if (
+        !/^\d{4}-\d{2}-\d{2}$/.test(reopenDate) ||
+        Number.isNaN(reopen.getTime()) ||
+        reopen.toISOString().slice(0, 10) !== reopenDate ||
+        reopenDate <= closedFrom
+      ) {
+        toast({
+          title: "Некорректная дата",
+          description:
+            "Дата открытия должна быть действительной и позже даты закрытия.",
+          variant: "destructive",
+        });
+        return;
+      }
+    }
 
     closeSite.mutate({
       id: site.id,
@@ -78,6 +124,15 @@ export function CloseSiteDialog({
         <DialogHeader>
           <DialogTitle>Закрыть объект {site?.name}</DialogTitle>
         </DialogHeader>
+        {!isAdmin && site?.pendingClosureRequest ? (
+          <p
+            className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-950"
+            data-testid="status-pending-site-closure-dialog"
+          >
+            Закрытие ожидает подтверждения администратора. Объект остаётся
+            активным до подтверждения.
+          </p>
+        ) : (
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-2">
             <Label htmlFor="closedFrom">Дата закрытия (с)*</Label>
@@ -110,11 +165,13 @@ export function CloseSiteDialog({
             <Button
               type="submit"
               disabled={!closedFrom || closeSite.isPending}
+              data-testid="button-submit-site-closure"
             >
-              Сохранить
+              {isAdmin ? "Закрыть объект" : "Отправить запрос"}
             </Button>
           </DialogFooter>
         </form>
+        )}
       </DialogContent>
     </Dialog>
   );

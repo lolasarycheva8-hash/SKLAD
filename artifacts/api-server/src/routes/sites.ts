@@ -10,6 +10,9 @@ import {
   normalizeClientNameWhitespace,
   sitesTable,
   siteChangeRequestsTable,
+  type SiteChangeRequestClosureBaselinePayload,
+  type SiteChangeRequestClosurePayload,
+  type SiteChangeRequestOriginalPayload,
   type SiteChangeRequestPayload,
   tradeNamesTable,
 } from "@workspace/db";
@@ -167,6 +170,7 @@ function isClosedToday(row: typeof sitesTable.$inferSelect): boolean {
 function toSiteDto(
   row: typeof sitesTable.$inferSelect,
   driver = "Не назначен",
+  pendingClosureRequest: ReturnType<typeof toPendingClosureDto> = null,
 ) {
   return {
     id: row.id,
@@ -190,13 +194,59 @@ function toSiteDto(
     closedBy: row.closedBy,
     isClosed: isClosedToday(row),
     createdAt: row.createdAt,
+    pendingClosureRequest,
+  };
+}
+
+function isClosurePayload(
+  payload: unknown,
+): payload is SiteChangeRequestClosurePayload {
+  if (typeof payload !== "object" || payload === null) return false;
+  const value = payload as Record<string, unknown>;
+  return (
+    value.kind === "closure" &&
+    typeof value.closedFrom === "string" &&
+    (typeof value.reopenDate === "string" || value.reopenDate === null) &&
+    (typeof value.closureReason === "string" || value.closureReason === null)
+  );
+}
+
+function isClosureBaselinePayload(
+  payload: unknown,
+): payload is SiteChangeRequestClosureBaselinePayload {
+  if (typeof payload !== "object" || payload === null) return false;
+  const value = payload as Record<string, unknown>;
+  return (
+    value.kind === "closure" &&
+    (typeof value.closedFrom === "string" || value.closedFrom === null) &&
+    (typeof value.reopenDate === "string" || value.reopenDate === null) &&
+    (typeof value.closureReason === "string" || value.closureReason === null)
+  );
+}
+
+function toPendingClosureDto(
+  row: typeof siteChangeRequestsTable.$inferSelect,
+) {
+  if (!isClosurePayload(row.payload) || !row.siteId) return null;
+  return {
+    id: row.id,
+    siteId: row.siteId,
+    siteName: row.siteName,
+    authorName: row.authorName,
+    closedFrom: row.payload.closedFrom,
+    reopenDate: row.payload.reopenDate,
+    closureReason: row.payload.closureReason,
+    createdAt: row.createdAt,
   };
 }
 
 function toChangeRequestDto(
   row: typeof siteChangeRequestsTable.$inferSelect,
 ) {
-  return row;
+  return {
+    ...row,
+    kind: isClosurePayload(row.payload) ? "closure" : "edit",
+  };
 }
 
 const CHANGEABLE_SITE_KEYS = [
@@ -215,17 +265,68 @@ const CHANGEABLE_SITE_KEYS = [
 
 function siteChangedSinceProposal(
   site: typeof sitesTable.$inferSelect,
-  originalPayload: SiteChangeRequestPayload,
+  originalPayload: SiteChangeRequestOriginalPayload,
 ): boolean {
+  if (isClosureBaselinePayload(originalPayload)) {
+    return (
+      site.closedFrom !== originalPayload.closedFrom ||
+      site.reopenDate !== originalPayload.reopenDate ||
+      site.closureReason !== originalPayload.closureReason
+    );
+  }
   return Object.entries(originalPayload).some(
     ([key, value]) => site[key as keyof typeof site] !== value,
   );
 }
 
+async function loadPendingClosureRequests(
+  database: DbOrTx,
+  siteIds?: string[],
+): Promise<Map<string, NonNullable<ReturnType<typeof toPendingClosureDto>>>> {
+  if (siteIds && siteIds.length === 0) return new Map();
+  const rows = await database
+    .select()
+    .from(siteChangeRequestsTable)
+    .where(
+      and(
+        eq(siteChangeRequestsTable.status, "pending"),
+        sql`${siteChangeRequestsTable.payload}->>'kind' = 'closure'`,
+        siteIds ? inArray(siteChangeRequestsTable.siteId, siteIds) : undefined,
+      ),
+    );
+  const pendingBySite = new Map<
+    string,
+    NonNullable<ReturnType<typeof toPendingClosureDto>>
+  >();
+  for (const row of rows) {
+    const pending = toPendingClosureDto(row);
+    if (pending && !pendingBySite.has(pending.siteId)) {
+      pendingBySite.set(pending.siteId, pending);
+    }
+  }
+  return pendingBySite;
+}
+
+function dateOnlyFromInput(value: unknown): string | null {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return null;
+  }
+  const [year, month, day] = value.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  ) {
+    return null;
+  }
+  return value;
+}
+
 function originalPayloadFor(
   site: typeof sitesTable.$inferSelect,
   payload: SiteChangeRequestPayload,
-): SiteChangeRequestPayload {
+): SiteChangeRequestOriginalPayload {
   return Object.fromEntries(
     CHANGEABLE_SITE_KEYS.filter((key) => key in payload).map((key) => [
       key,
@@ -336,8 +437,16 @@ router.get("/sites", async (req, res): Promise<void> => {
     )
     .orderBy(sitesTable.name);
 
+  const pendingClosures = await loadPendingClosureRequests(
+    db,
+    rows.map((row) => row.site.id),
+  );
   res.json(ListSitesResponse.parse(rows.map((row) =>
-    toSiteDto(row.site, row.driverName || row.driverEmail || "Не назначен"))));
+    toSiteDto(
+      row.site,
+      row.driverName || row.driverEmail || "Не назначен",
+      pendingClosures.get(row.site.id) ?? null,
+    ))));
 });
 
 router.post("/sites", requirePermission("sites"), async (req, res): Promise<void> => {
@@ -820,6 +929,24 @@ router.post(
       res.status(400).json({ error: parsed.error.message });
       return;
     }
+    const closureKeys = [
+      "kind",
+      "closedFrom",
+      "reopenDate",
+      "closureReason",
+      "reason",
+    ];
+    if (
+      typeof req.body === "object" &&
+      req.body !== null &&
+      closureKeys.some((key) => Object.prototype.hasOwnProperty.call(req.body, key))
+    ) {
+      res.status(400).json({
+        error:
+          "Для предложения закрытия используйте специальный запрос закрытия объекта",
+      });
+      return;
+    }
     try {
       const outcome = await db.transaction(async (tx) => {
         await lockSiteClientWrites(tx);
@@ -940,6 +1067,36 @@ async function decideSiteChangeRequest(
           };
         }
         const payload = request.payload;
+        if (isClosurePayload(payload)) {
+          if (!isClosureBaselinePayload(request.originalPayload)) {
+            return {
+              status: 409 as const,
+              error: "Предложение закрытия повреждено и больше не может быть применено",
+            };
+          }
+          if (
+            !dateOnlyFromInput(payload.closedFrom) ||
+            (payload.reopenDate !== null &&
+              !dateOnlyFromInput(payload.reopenDate))
+          ) {
+            return {
+              status: 400 as const,
+              error: "Предложение содержит некорректную дату",
+            };
+          }
+          if (payload.reopenDate && payload.reopenDate <= payload.closedFrom) {
+            return {
+              status: 400 as const,
+              error: "Дата открытия должна быть позже даты закрытия",
+            };
+          }
+          siteUpdateValues = {
+            closedFrom: payload.closedFrom,
+            reopenDate: payload.reopenDate,
+            closureReason: payload.closureReason,
+            closedBy: actor.name || actor.email,
+          };
+        } else {
         if (payload.customer !== undefined) {
           const unknown = await findUnknownTradeNames([payload.customer], tx);
           if (unknown.length) {
@@ -992,6 +1149,7 @@ async function decideSiteChangeRequest(
           }
         }
         siteUpdateValues = updateValues;
+        }
       }
 
       const [updatedRequest] = await tx
@@ -1082,7 +1240,16 @@ router.get("/sites/:id", async (req, res): Promise<void> => {
     return;
   }
 
-  res.json(GetSiteResponse.parse(toSiteDto(site, await getDriverName(site.driverUserId))));
+  const pendingClosures = await loadPendingClosureRequests(db, [site.id]);
+  res.json(
+    GetSiteResponse.parse(
+      toSiteDto(
+        site,
+        await getDriverName(site.driverUserId),
+        pendingClosures.get(site.id) ?? null,
+      ),
+    ),
+  );
 });
 
 router.patch("/sites/:id/features", async (req, res): Promise<void> => {
@@ -1240,10 +1407,18 @@ router.patch("/sites/:id", requirePermission("sites"), async (req, res): Promise
   ));
 });
 
-router.post("/sites/:id/close", requireAdmin, async (req, res): Promise<void> => {
+router.post("/sites/:id/close", async (req, res): Promise<void> => {
   const params = CloseSiteParams.safeParse(req.params);
   if (!params.success) {
     res.status(400).json({ error: params.error.message });
+    return;
+  }
+  const user = req.appUser;
+  const canRequestClosure =
+    user?.role === "logistician" && user.editableSections.includes("sites");
+  const canCloseDirectly = user?.role === "admin";
+  if (!canRequestClosure && !canCloseDirectly) {
+    res.status(403).json({ error: "Недостаточно прав для закрытия объекта" });
     return;
   }
   const parsed = CloseSiteBody.safeParse(req.body);
@@ -1252,32 +1427,148 @@ router.post("/sites/:id/close", requireAdmin, async (req, res): Promise<void> =>
     return;
   }
 
-  const closedFrom = parsed.data.closedFrom.toISOString().slice(0, 10);
-  const reopenDate = parsed.data.reopenDate
-    ? parsed.data.reopenDate.toISOString().slice(0, 10)
-    : null;
+  const closedFrom = dateOnlyFromInput(req.body?.closedFrom);
+  const reopenDate =
+    req.body?.reopenDate === null || req.body?.reopenDate === undefined
+      ? null
+      : dateOnlyFromInput(req.body?.reopenDate);
+  if (!closedFrom || (req.body?.reopenDate != null && !reopenDate)) {
+    res.status(400).json({ error: "Укажите корректную дату закрытия и открытия" });
+    return;
+  }
   if (reopenDate && reopenDate <= closedFrom) {
     res.status(400).json({ error: "Дата открытия должна быть позже даты закрытия" });
     return;
   }
 
-  const [site] = await db
-    .update(sitesTable)
-    .set({
-      closedFrom,
-      reopenDate,
-      closureReason: parsed.data.reason ?? null,
-      closedBy: req.appUser?.name ?? req.appUser?.email ?? "неизвестно",
-    })
-    .where(eq(sitesTable.id, params.data.id))
-    .returning();
+  const closureReason = parsed.data.reason ?? null;
+  const outcome = await db.transaction(async (tx) => {
+    await lockSiteClientWrites(tx);
+    const [site] = await tx
+      .select()
+      .from(sitesTable)
+      .where(eq(sitesTable.id, params.data.id))
+      .for("update");
+    if (!site) return { status: 404 as const };
 
-  if (!site) {
+    if (canRequestClosure) {
+      const today = todayLocalISO();
+      const hasActiveOrScheduledClosure =
+        isClosedToday(site) ||
+        (site.closedFrom !== null &&
+          site.closedFrom > today &&
+          (!site.reopenDate || site.reopenDate > today));
+      if (hasActiveOrScheduledClosure) {
+        return {
+          status: 409 as const,
+          error: "Объект уже закрыт или для него запланировано закрытие",
+        };
+      }
+      const [authorPendingRequest] = await tx
+        .select({ id: siteChangeRequestsTable.id })
+        .from(siteChangeRequestsTable)
+        .where(
+          and(
+            eq(siteChangeRequestsTable.siteId, site.id),
+            eq(siteChangeRequestsTable.authorUserId, user.id),
+            eq(siteChangeRequestsTable.status, "pending"),
+          ),
+        )
+        .limit(1);
+      if (authorPendingRequest) {
+        return {
+          status: 409 as const,
+          error: "У вас уже есть ожидающее предложение для этого объекта",
+        };
+      }
+      const pending = await loadPendingClosureRequests(tx, [site.id]);
+      if (pending.has(site.id)) {
+        return {
+          status: 409 as const,
+          error: "Для объекта уже ожидает подтверждения запрос на закрытие",
+        };
+      }
+      const [request] = await tx
+        .insert(siteChangeRequestsTable)
+        .values({
+          siteId: site.id,
+          siteName: site.name,
+          authorUserId: user.id,
+          authorName: user.name || user.email,
+          authorEmail: user.email,
+          payload: {
+            kind: "closure",
+            closedFrom,
+            reopenDate,
+            closureReason,
+          },
+          originalPayload: {
+            kind: "closure",
+            closedFrom: site.closedFrom,
+            reopenDate: site.reopenDate,
+            closureReason: site.closureReason,
+          },
+        })
+        .returning();
+      return {
+        status: 201 as const,
+        site,
+        request,
+      };
+    }
+
+    await tx
+      .update(siteChangeRequestsTable)
+      .set({
+        status: "rejected",
+        decidedAt: new Date(),
+        decidedByUserId: user.id,
+        decidedByName: user.name || user.email,
+        decidedByEmail: user.email,
+      })
+      .where(
+        and(
+          eq(siteChangeRequestsTable.siteId, site.id),
+          eq(siteChangeRequestsTable.status, "pending"),
+          sql`${siteChangeRequestsTable.payload}->>'kind' = 'closure'`,
+        ),
+      );
+    const [updatedSite] = await tx
+      .update(sitesTable)
+      .set({
+        closedFrom,
+        reopenDate,
+        closureReason,
+        closedBy: user.name || user.email,
+      })
+      .where(eq(sitesTable.id, site.id))
+      .returning();
+    return { status: 200 as const, site: updatedSite };
+  });
+
+  if (outcome.status === 404) {
     res.status(404).json({ error: "Site not found" });
     return;
   }
-
-  res.json(CloseSiteResponse.parse(toSiteDto(site, await getDriverName(site.driverUserId))));
+  if (outcome.status !== 200 && outcome.status !== 201) {
+    res.status(outcome.status).json({ error: outcome.error });
+    return;
+  }
+  const pendingClosureRequest =
+    outcome.status === 201
+      ? toPendingClosureDto(outcome.request)
+      : null;
+  res
+    .status(outcome.status)
+    .json(
+      CloseSiteResponse.parse(
+        toSiteDto(
+          outcome.site,
+          await getDriverName(outcome.site.driverUserId),
+          pendingClosureRequest,
+        ),
+      ),
+    );
 });
 
 router.post("/sites/:id/reopen", requireAdmin, async (req, res): Promise<void> => {
@@ -1287,18 +1578,49 @@ router.post("/sites/:id/reopen", requireAdmin, async (req, res): Promise<void> =
     return;
   }
 
-  const [site] = await db
-    .update(sitesTable)
-    .set({ closedFrom: null, reopenDate: null, closureReason: null, closedBy: null })
-    .where(eq(sitesTable.id, params.data.id))
-    .returning();
+  const actor = req.appUser;
+  const site = await db.transaction(async (tx) => {
+    await lockSiteClientWrites(tx);
+    const [currentSite] = await tx
+      .select()
+      .from(sitesTable)
+      .where(eq(sitesTable.id, params.data.id))
+      .for("update");
+    if (!currentSite) return undefined;
+    await tx
+      .update(siteChangeRequestsTable)
+      .set({
+        status: "rejected",
+        decidedAt: new Date(),
+        decidedByUserId: actor?.id ?? null,
+        decidedByName: actor?.name ?? actor?.email ?? null,
+        decidedByEmail: actor?.email ?? null,
+      })
+      .where(
+        and(
+          eq(siteChangeRequestsTable.siteId, currentSite.id),
+          eq(siteChangeRequestsTable.status, "pending"),
+          sql`${siteChangeRequestsTable.payload}->>'kind' = 'closure'`,
+        ),
+      );
+    const [reopened] = await tx
+      .update(sitesTable)
+      .set({ closedFrom: null, reopenDate: null, closureReason: null, closedBy: null })
+      .where(eq(sitesTable.id, currentSite.id))
+      .returning();
+    return reopened;
+  });
 
   if (!site) {
     res.status(404).json({ error: "Site not found" });
     return;
   }
 
-  res.json(ReopenSiteResponse.parse(toSiteDto(site, await getDriverName(site.driverUserId))));
+  res.json(
+    ReopenSiteResponse.parse(
+      toSiteDto(site, await getDriverName(site.driverUserId), null),
+    ),
+  );
 });
 
 router.delete("/sites/:id", requireAdmin, async (req, res): Promise<void> => {

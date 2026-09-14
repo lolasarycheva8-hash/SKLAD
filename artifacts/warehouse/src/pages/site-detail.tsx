@@ -159,30 +159,43 @@ export default function SiteDetail() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="w-full min-w-0 space-y-6">
       <div>
         <Button variant="ghost" onClick={() => setLocation("/sites")} data-testid="button-back-sites">
           <ArrowLeft className="h-4 w-4 mr-2" />
           Назад к объектам
         </Button>
-        <div className="flex items-center justify-between mt-2">
-          <div>
-            <h1 className="text-2xl font-bold text-blue-900 bg-[#f5ecd9] rounded-md px-4 py-2 inline-flex items-center gap-2" data-testid="text-page-title">
-              {site.name}
+        <div className="flex flex-col items-start gap-3 md:flex-row md:items-center md:justify-between mt-2">
+          <div className="min-w-0 max-w-full">
+            <h1 className="max-w-full text-2xl font-bold text-blue-900 bg-[#f5ecd9] rounded-md px-4 py-2 inline-flex flex-wrap items-center gap-2" data-testid="text-page-title">
+              <span className="min-w-0 max-w-full break-words">{site.name}</span>
               {site.isClosed && (
                 <Badge variant="destructive" className="ml-2">Закрыт</Badge>
               )}
+              {site.pendingClosureRequest && (
+                <Badge
+                  variant="outline"
+                  className="max-w-full whitespace-normal break-words border-amber-400 text-amber-700"
+                  data-testid="status-pending-site-closure"
+                >
+                  Закрытие ожидает подтверждения администратора
+                </Badge>
+              )}
             </h1>
-            <p className="text-muted-foreground text-sm mt-1">{site.address}</p>
+            <p className="break-words text-muted-foreground text-sm mt-1">{site.address}</p>
           </div>
-          {isAdmin && (
-            <div>
-              {!site.isClosed ? (
-                <Button variant="outline" onClick={() => setCloseDialogOpen(true)}>
+          {(isAdmin || canEditSites) && (
+            <div className="shrink-0 max-w-full [&>button]:min-h-11">
+              {isAdmin && !site.isClosed && !site.pendingClosureRequest ? (
+                <Button
+                  variant="outline"
+                  onClick={() => setCloseDialogOpen(true)}
+                  data-testid="button-close-site"
+                >
                   <Lock className="h-4 w-4 mr-2" />
                   Закрыть объект
                 </Button>
-              ) : (
+              ) : isAdmin && site.isClosed ? (
                 <Button 
                   variant="outline" 
                   className="text-green-600 border-green-200 hover:bg-green-50"
@@ -192,19 +205,28 @@ export default function SiteDetail() {
                   <Unlock className="h-4 w-4 mr-2" />
                   Открыть объект
                 </Button>
-              )}
+              ) : canEditSites && !site.isClosed && !site.pendingClosureRequest ? (
+                <Button
+                  variant="outline"
+                  onClick={() => setCloseDialogOpen(true)}
+                  data-testid="button-request-close-site"
+                >
+                  <Lock className="h-4 w-4 mr-2" />
+                  Запросить закрытие
+                </Button>
+              ) : null}
             </div>
           )}
         </div>
       </div>
 
-      <Card>
+      <Card className="min-w-0">
         <CardHeader>
           <CardTitle className="text-base">Данные объекта</CardTitle>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 [&>div]:min-w-0">
               <div className="space-y-2">
                 <Label htmlFor="name">Название</Label>
                  <Input id="name" required value={form.name} disabled={!canEditSites} onChange={(e) => setForm({ ...form, name: e.target.value })} data-testid="input-site-name" />
@@ -214,7 +236,7 @@ export default function SiteDetail() {
                  <Input id="address" required value={form.address} disabled={!canEditSites} onChange={(e) => setForm({ ...form, address: e.target.value })} data-testid="input-site-address" />
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 [&>div]:min-w-0">
               <div className="space-y-2">
                 <Label htmlFor="branch">Куст</Label>
                 <Input
@@ -253,7 +275,7 @@ export default function SiteDetail() {
                 </Select>
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 [&>div]:min-w-0">
               <div className="space-y-2">
                 <Label>Торговое название объекта (необязательно)</Label>
                 <Select
@@ -290,7 +312,7 @@ export default function SiteDetail() {
                 />
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 [&>div]:min-w-0">
               <div className="space-y-2">
                 <Label htmlFor="director">Закреплённый руководитель</Label>
                 <Input
@@ -314,7 +336,7 @@ export default function SiteDetail() {
                 />
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 [&>div]:min-w-0">
               <div className="space-y-2">
                 <Label htmlFor="driver">Закреплённый водитель</Label>
                 <Select

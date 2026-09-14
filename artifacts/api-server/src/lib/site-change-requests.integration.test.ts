@@ -39,6 +39,7 @@ let deliveryType = "";
 const createdSiteIds: string[] = [];
 let admin: AuthenticatedAppUser;
 let logistician: AuthenticatedAppUser;
+const closureAuthorIds: string[] = [];
 
 function asAuthenticated(
   row: typeof appUsersTable.$inferSelect,
@@ -141,6 +142,11 @@ after(async () => {
       .delete(siteChangeRequestsTable)
       .where(eq(siteChangeRequestsTable.authorUserId, logistician.id));
   }
+  for (const authorId of closureAuthorIds) {
+    await db
+      .delete(siteChangeRequestsTable)
+      .where(eq(siteChangeRequestsTable.authorUserId, authorId));
+  }
   for (const id of createdSiteIds) {
     await db.delete(sitesTable).where(eq(sitesTable.id, id));
   }
@@ -161,6 +167,9 @@ after(async () => {
   if (admin && logistician) {
     await db.delete(appUsersTable).where(eq(appUsersTable.id, admin.id));
     await db.delete(appUsersTable).where(eq(appUsersTable.id, logistician.id));
+  }
+  for (const authorId of closureAuthorIds) {
+    await db.delete(appUsersTable).where(eq(appUsersTable.id, authorId));
   }
   if (driverUserId) {
     await db.delete(appUsersTable).where(eq(appUsersTable.id, driverUserId));
@@ -338,7 +347,7 @@ test("логист с правом на объекты напрямую изме
   assert.equal((await request("/sites/bulk", "POST", {})).status, 403);
   assert.equal(
     (await request(`/sites/${siteId}/close`, "POST", {})).status,
-    403,
+    400,
   );
   assert.equal((await request(`/sites/${siteId}/reopen`, "POST")).status, 403);
   assert.equal((await request(`/sites/${siteId}`, "DELETE")).status, 403);
@@ -485,4 +494,160 @@ test("логист с правом на объекты напрямую изме
   assert.equal(preservedRequest.status, "rejected");
   assert.equal(preservedRequest.siteId, null);
   assert.equal(preservedRequest.siteName, deletableSite.name);
+});
+
+test("закрытие логиста ждёт администратора, блокирует конкурентов и учитывает повторно открытый объект", async () => {
+  const [closureSite] = await db
+    .insert(sitesTable)
+    .values({
+      name: `Объект закрытия ${randomUUID()}`,
+      address: "Адрес закрытия",
+      branch: "Куст закрытия",
+      client: clientName,
+      clientId,
+      manager: "Менеджер",
+      director: "Руководитель",
+      project: "Проект",
+    })
+    .returning();
+  createdSiteIds.push(closureSite.id);
+
+  actor = logistician;
+  const ordinaryProposal = await request(
+    `/sites/${closureSite.id}/change-requests`,
+    "POST",
+    { manager: "Ожидающая обычная правка" },
+  );
+  assert.equal(ordinaryProposal.status, 201);
+  const ordinaryCloseConflict = await request(
+    `/sites/${closureSite.id}/close`,
+    "POST",
+    { closedFrom: "2027-02-01", reopenDate: null, reason: "Проверка" },
+  );
+  assert.equal(ordinaryCloseConflict.status, 409);
+  assert.match(
+    String(
+      ((await ordinaryCloseConflict.json()) as { error?: unknown }).error,
+    ),
+    /ожидающее предложение/,
+  );
+  actor = admin;
+  const ordinaryRequest = (await ordinaryProposal.json()) as { id: string };
+  assert.equal(
+    (await request(`/site-change-requests/${ordinaryRequest.id}/reject`, "POST"))
+      .status,
+    200,
+  );
+
+  actor = logistician;
+  const closureResponse = await request(
+    `/sites/${closureSite.id}/close`,
+    "POST",
+    {
+      closedFrom: "2027-02-01",
+      reopenDate: "2027-03-01",
+      reason: "Проверка закрытия",
+    },
+  );
+  assert.equal(closureResponse.status, 201);
+  const closureDto = (await closureResponse.json()) as Record<string, any>;
+  assert.equal(closureDto.isClosed, false);
+  assert.equal(
+    closureDto.pendingClosureRequest.closureReason,
+    "Проверка закрытия",
+  );
+  assert.equal(closureDto.closedFrom, null);
+
+  const [secondAuthor] = await db
+    .insert(appUsersTable)
+    .values({
+      clerkUserId: `site-change-closure-author-${randomUUID()}`,
+      email: `closure-author-${randomUUID()}@example.test`,
+      name: "Второй логист закрытия",
+      role: "logistician",
+      editableSections: ["sites"],
+    })
+    .returning();
+  closureAuthorIds.push(secondAuthor.id);
+  actor = asAuthenticated(secondAuthor);
+  const competingClosure = await request(
+    `/sites/${closureSite.id}/close`,
+    "POST",
+    { closedFrom: "2027-04-01", reopenDate: null, reason: "Конкурирующий" },
+  );
+  assert.equal(competingClosure.status, 409);
+  assert.match(
+    String(((await competingClosure.json()) as { error?: unknown }).error),
+    /ожидает подтверждения/,
+  );
+
+  actor = admin;
+  const pending = (
+    (await (
+      await request("/site-change-requests?status=pending", "GET")
+    ).json()) as Array<{ siteId: string; kind: string }>
+  ).find((item) => item.siteId === closureSite.id);
+  assert.ok(pending);
+  assert.equal(pending.kind, "closure");
+  const closureRequest = (
+    (await db
+      .select()
+      .from(siteChangeRequestsTable)
+      .where(eq(siteChangeRequestsTable.siteId, closureSite.id)))
+  ).find((item) => item.status === "pending");
+  assert.ok(closureRequest);
+  assert.equal(
+    (await request(`/site-change-requests/${closureRequest!.id}/approve`, "POST"))
+      .status,
+    200,
+  );
+  const approvedSite = await request(`/sites/${closureSite.id}`, "GET");
+  assert.equal(approvedSite.status, 200);
+  const approvedDto = (await approvedSite.json()) as Record<string, any>;
+  assert.equal(approvedDto.pendingClosureRequest, null);
+  assert.match(String(approvedDto.closedFrom), /^2027-02-01/);
+
+  const [reopenedSite] = await db
+    .insert(sitesTable)
+    .values({
+      name: `Объект повторного открытия ${randomUUID()}`,
+      address: "Адрес",
+      branch: "Куст",
+      client: clientName,
+      clientId,
+      manager: "Менеджер",
+      director: "Руководитель",
+      project: "Проект",
+      closedFrom: "2020-01-01",
+      reopenDate: "2020-02-01",
+      closureReason: "Старое закрытие",
+    })
+    .returning();
+  createdSiteIds.push(reopenedSite.id);
+  actor = logistician;
+  const afterReopen = await request(
+    `/sites/${reopenedSite.id}/close`,
+    "POST",
+    { closedFrom: "2027-05-01", reopenDate: null, reason: "Новое закрытие" },
+  );
+  assert.equal(afterReopen.status, 201);
+  actor = admin;
+  const directClose = await request(`/sites/${reopenedSite.id}/close`, "POST", {
+    closedFrom: "2027-06-01",
+    reopenDate: null,
+    reason: "Решение администратора",
+  });
+  assert.equal(directClose.status, 200);
+  const invalidatedClosure = (
+    (await db
+      .select()
+      .from(siteChangeRequestsTable)
+      .where(eq(siteChangeRequestsTable.siteId, reopenedSite.id)))
+  ).find((item) => item.payload && "kind" in item.payload);
+  assert.ok(invalidatedClosure);
+  assert.equal(invalidatedClosure!.status, "rejected");
+  assert.equal(
+    (await request(`/sites/${reopenedSite.id}/reopen`, "POST")).status,
+    200,
+  );
 });

@@ -11,7 +11,7 @@
 - `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
 - `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
 - Required env: `DATABASE_URL` — Postgres connection string
-- После каждого созданного Git-коммита сразу отправлять текущую ветку в подключённый GitHub-репозиторий и сообщать пользователю об успешной отправке; секреты и локальные служебные файлы не коммитить.
+- После каждого созданного Git-коммита отправлять изменения в подключённый GitHub-репозиторий, ветка `replit-sync-2026-09-12`, и сообщать пользователю об успешной отправке. Не перезаписывать `main`: истории Replit и GitHub различаются. Секреты и локальные служебные файлы не коммитить.
 
 ## Stack
 

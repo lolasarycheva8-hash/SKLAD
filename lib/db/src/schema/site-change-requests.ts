@@ -19,7 +19,7 @@ export const siteChangeRequestStatusEnum = pgEnum(
   ["pending", "approved", "rejected"],
 );
 
-export type SiteChangeRequestPayload = Partial<{
+export type SiteChangeRequestEditPayload = Partial<{
   name: string;
   address: string;
   branch: string;
@@ -32,6 +32,28 @@ export type SiteChangeRequestPayload = Partial<{
   driverUserId: string | null;
   deliveryType: string;
 }>;
+
+export type SiteChangeRequestClosurePayload = {
+  kind: "closure";
+  closedFrom: string;
+  reopenDate: string | null;
+  closureReason: string | null;
+};
+
+export type SiteChangeRequestClosureBaselinePayload = {
+  kind: "closure";
+  closedFrom: string | null;
+  reopenDate: string | null;
+  closureReason: string | null;
+};
+
+export type SiteChangeRequestPayload =
+  | SiteChangeRequestEditPayload
+  | SiteChangeRequestClosurePayload;
+
+export type SiteChangeRequestOriginalPayload =
+  | SiteChangeRequestEditPayload
+  | SiteChangeRequestClosureBaselinePayload;
 
 export const siteChangeRequestsTable = pgTable(
   "site_change_requests",
@@ -49,7 +71,7 @@ export const siteChangeRequestsTable = pgTable(
     authorEmail: text("author_email").notNull(),
     payload: jsonb("payload").$type<SiteChangeRequestPayload>().notNull(),
     originalPayload: jsonb("original_payload")
-      .$type<SiteChangeRequestPayload>()
+    .$type<SiteChangeRequestOriginalPayload>()
       .notNull(),
     status: siteChangeRequestStatusEnum("status").notNull().default("pending"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
