@@ -2642,14 +2642,17 @@ export default function Deliveries() {
           <div className="flex-1 overflow-auto border rounded-md relative bg-background">
             <table
               className="table-fixed text-sm text-left border-collapse"
-              style={{ width: 470 + daysInMonth * 40 }}
+              style={{
+                width: 470 + daysInMonth * 72,
+                minWidth: 470 + daysInMonth * 72,
+              }}
             >
               <colgroup>
                 <col className="w-[160px]" />
                 <col className="w-[180px]" />
                 <col className="w-[130px]" />
                 {days.map((day) => (
-                  <col key={day} className="w-[40px]" />
+                  <col key={day} className="w-[72px]" />
                 ))}
               </colgroup>
               <thead className="sticky top-0 z-30 bg-muted shadow-[0_1px_0_0_var(--color-border)]">
@@ -2666,7 +2669,7 @@ export default function Deliveries() {
                   {days.map((d) => (
                     <th
                       key={d}
-                      className="p-1 min-w-[40px] border-l text-center font-medium text-xs"
+                      className="p-1 min-w-[72px] border-l text-center font-medium text-xs"
                     >
                       {d}
                     </th>
@@ -2676,7 +2679,7 @@ export default function Deliveries() {
                   <th className="sticky left-0 z-40 w-[160px] min-w-[160px] bg-muted p-1"></th>
                   <th className="sticky left-[160px] z-40 w-[180px] min-w-[180px] bg-muted p-1"></th>
                   <th className="sticky left-[340px] z-40 w-[130px] min-w-[130px] bg-muted p-1 text-right font-normal shadow-[1px_0_0_0_var(--color-border)]">
-                    <div className="flex flex-col gap-[1px] text-[10px] leading-none pr-1">
+                    <div className="flex flex-col gap-0.5 whitespace-nowrap text-xs leading-4 pr-1">
                       <div className="text-amber-600 dark:text-amber-400">Выполнено, %</div>
                       <div className="text-muted-foreground">План</div>
                       <div className="text-amber-600 dark:text-amber-400">
@@ -2721,9 +2724,9 @@ export default function Deliveries() {
                     return (
                       <th
                         key={d}
-                        className="min-w-[40px] border-l bg-muted p-0.5 align-top font-normal"
+                        className="min-w-[72px] border-l bg-muted px-2 py-1 align-top font-normal"
                       >
-                        <div className="flex flex-col gap-[1px] text-[10px] leading-none text-center">
+                        <div className="flex flex-col gap-0.5 whitespace-nowrap text-xs leading-4 text-center tabular-nums">
                           <span
                             className="text-amber-600 dark:text-amber-400 tabular-nums"
                             data-testid={`schedule-done-percent-${d}`}
@@ -2805,7 +2808,7 @@ export default function Deliveries() {
                         <td
                           key={d}
                           className={cn(
-                            "p-0 border-l relative h-12 min-w-[40px] transition-colors",
+                            "p-0 border-l relative h-12 min-w-[72px] transition-colors",
                             (state.hasClosed || state.hasDoneWithAct) &&
                               "bg-emerald-600",
                             !state.hasClosed &&
