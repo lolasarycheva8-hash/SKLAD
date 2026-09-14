@@ -391,6 +391,10 @@ describe("рабочее место логиста: импорт и фильтр
     expect(screen.getByTestId("button-schedule-failed-11").textContent).toBe("1");
     expect(screen.getByTestId("schedule-done-percent-11").textContent).toBe("66,7%");
     expect(screen.getByTestId("schedule-done-percent-30").textContent).toBe("—");
+    const scheduleTable = screen.getByTestId("schedule-done-percent-11").closest("table")!;
+    expect(scheduleTable.style.width).toBe("100%");
+    expect(scheduleTable.style.minWidth).toBe(`${470 + 30 * 44}px`);
+    expect(scheduleTable.querySelectorAll("col")).toHaveLength(33);
     await user.click(screen.getByTestId("button-schedule-closed-11"));
     expect(screen.getByRole("link", { name: "Плановый объект 2" })).toBeTruthy();
     expect(screen.queryByRole("link", { name: "Плановый объект 3" })).toBeNull();

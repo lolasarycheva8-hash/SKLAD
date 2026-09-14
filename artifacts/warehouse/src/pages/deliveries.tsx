@@ -2616,12 +2616,12 @@ export default function Deliveries() {
             )}
           </div>
 
-          <div className="flex-1 overflow-auto border rounded-md relative bg-background">
+          <div className="flex-1 min-w-0 max-w-full overflow-auto border rounded-md relative bg-background">
             <table
               className="table-fixed text-sm text-left border-collapse"
               style={{
-                width: 470 + daysInMonth * 72,
-                minWidth: 470 + daysInMonth * 72,
+                width: "100%",
+                minWidth: 470 + daysInMonth * 44,
               }}
             >
               <colgroup>
@@ -2629,7 +2629,7 @@ export default function Deliveries() {
                 <col className="w-[180px]" />
                 <col className="w-[130px]" />
                 {days.map((day) => (
-                  <col key={day} className="w-[72px]" />
+                  <col key={day} />
                 ))}
               </colgroup>
               <thead className="sticky top-0 z-30 bg-muted shadow-[0_1px_0_0_var(--color-border)]">
@@ -2646,7 +2646,7 @@ export default function Deliveries() {
                   {days.map((d) => (
                     <th
                       key={d}
-                      className="p-1 min-w-[72px] border-l text-center font-medium text-xs"
+                      className="p-1 min-w-[44px] border-l text-center font-medium text-xs"
                     >
                       {d}
                     </th>
@@ -2701,7 +2701,7 @@ export default function Deliveries() {
                     return (
                       <th
                         key={d}
-                        className="min-w-[72px] border-l bg-muted px-2 py-1 align-top font-normal"
+                        className="min-w-[44px] border-l bg-muted px-0.5 py-1 align-top font-normal"
                       >
                         <div className="flex flex-col gap-0.5 whitespace-nowrap text-xs leading-4 text-center tabular-nums">
                           <span
@@ -2785,7 +2785,7 @@ export default function Deliveries() {
                         <td
                           key={d}
                           className={cn(
-                            "p-0 border-l relative h-12 min-w-[72px] transition-colors",
+                            "p-0 border-l relative h-12 min-w-[44px] transition-colors",
                             (state.hasClosed || state.hasDoneWithAct) &&
                               "bg-emerald-600",
                             !state.hasClosed &&
