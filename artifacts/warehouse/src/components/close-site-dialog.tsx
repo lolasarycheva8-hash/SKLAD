@@ -77,7 +77,7 @@ export function CloseSiteDialog({
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!site?.id) return;
-    const closed = new Date(`${closedFrom}T00:00:00`);
+    const closed = new Date(`${closedFrom}T00:00:00Z`);
     if (
       !/^\d{4}-\d{2}-\d{2}$/.test(closedFrom) ||
       Number.isNaN(closed.getTime()) ||
@@ -91,7 +91,7 @@ export function CloseSiteDialog({
       return;
     }
     if (reopenDate) {
-      const reopen = new Date(`${reopenDate}T00:00:00`);
+      const reopen = new Date(`${reopenDate}T00:00:00Z`);
       if (
         !/^\d{4}-\d{2}-\d{2}$/.test(reopenDate) ||
         Number.isNaN(reopen.getTime()) ||
