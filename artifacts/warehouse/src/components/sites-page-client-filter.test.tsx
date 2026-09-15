@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   setLocation: vi.fn(),
   createSite: vi.fn(),
   createTradeName: vi.fn(),
+  reopenSite: vi.fn(),
   isAdmin: false,
   role: "manager",
   canEditSites: false,
@@ -82,7 +83,10 @@ vi.mock("@workspace/api-client-react", () => {
       refetch: vi.fn(),
     }),
     useRejectSiteChangeRequest: mutation,
-    useReopenSite: mutation,
+    useReopenSite: () => ({
+      isPending: false,
+      mutate: mocks.reopenSite,
+    }),
     useUpdateSite: mutation,
   };
 });
@@ -148,7 +152,6 @@ function site(
     driver: "Не назначен",
     deliveryType: "",
     closedFrom: isClosed ? "2026-09-01" : null,
-    reopenDate: null,
     closureReason: isClosed ? "Тест" : null,
     closedBy: null,
     isClosed,
@@ -200,9 +203,10 @@ afterEach(() => {
   mocks.canEditSites = false;
   mocks.search = "?clientId=client-1&clientName=%D0%9F%D0%B5%D1%80%D0%B2%D1%8B%D0%B9%20%D0%BA%D0%BB%D0%B8%D0%B5%D0%BD%D1%82";
   mocks.setLocation.mockClear();
+  mocks.reopenSite.mockClear();
 });
 
-it("показывает по ссылке только связанные, закрытые и legacy-объекты клиента", async () => {
+it("показывает активные объекты клиента по умолчанию и сохраняет фильтр для архива", async () => {
   render(<Sites />);
 
   expect(
@@ -210,11 +214,35 @@ it("показывает по ссылке только связанные, за
   ).toContain("Клиент: Первый клиент");
   await waitFor(() => {
     expect(screen.getByTestId("row-site-linked-open")).toBeTruthy();
-    expect(screen.getByTestId("row-site-linked-closed")).toBeTruthy();
-    expect(screen.getByTestId("row-site-legacy-closed")).toBeTruthy();
   });
   expect(screen.queryByTestId("row-site-other")).toBeNull();
-  expect(screen.getByTestId("text-sites-count").textContent).toContain("3");
+  expect(screen.queryByTestId("row-site-linked-closed")).toBeNull();
+  expect(screen.queryByTestId("row-site-legacy-closed")).toBeNull();
+  expect(screen.getByTestId("text-sites-count").textContent).toContain("1");
+
+  fireEvent.click(screen.getByTestId("button-sites-archive"));
+  expect(screen.getByTestId("row-site-linked-closed")).toBeTruthy();
+  expect(screen.getByTestId("row-site-legacy-closed")).toBeTruthy();
+  expect(screen.queryByTestId("row-site-linked-open")).toBeNull();
+  expect(screen.queryByTestId("row-site-other")).toBeNull();
+  expect(screen.getByTestId("filter-sites-client").textContent).toContain(
+    "Клиент: Первый клиент",
+  );
+  expect(screen.getByTestId("text-sites-count").textContent).toContain("2");
+});
+
+it("администратор может вернуть архивный объект на обслуживание из строки", () => {
+  mocks.isAdmin = true;
+  mocks.role = "admin";
+  render(<Sites />);
+
+  fireEvent.click(screen.getByTestId("button-sites-archive"));
+  fireEvent.click(screen.getByTestId("button-return-site-linked-closed"));
+
+  expect(mocks.reopenSite).toHaveBeenCalledWith({ id: "linked-closed" });
+  expect(screen.getByTestId("button-return-site-linked-closed").textContent).toContain(
+    "Вернуть на обслуживание",
+  );
 });
 
 it("не показывает администратору ручную привязку клиентов", () => {

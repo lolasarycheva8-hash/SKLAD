@@ -18,6 +18,8 @@ import {
   useCreateTradeName,
   useDeleteTradeName,
   getListTradeNamesQueryKey,
+  getGetSiteQueryKey,
+  getListDeliverySiteLookupQueryKey,
   useGetLegacyDriverAssignments,
   getGetLegacyDriverAssignmentsQueryKey,
   useListSiteChangeRequests,
@@ -66,7 +68,6 @@ import {
   SortableHeader,
   type SortDirection,
 } from "@/components/sortable-header";
-import { Checkbox } from "@/components/ui/checkbox";
 import {
   Plus,
   Pencil,
@@ -215,7 +216,7 @@ export default function Sites() {
   } | null>(null);
   const [fieldFilters, setFieldFilters] = useState<Record<string, string>>({});
   const [openFilter, setOpenFilter] = useState<string | null>(null);
-  const [showClosed, setShowClosed] = useState(false);
+  const [siteView, setSiteView] = useState<"active" | "archived">("active");
   const [sortField, setSortField] = useState<SortField>("name");
   const [sortDir, setSortDir] = useState<SortDirection>("asc");
   const [mappingDialogOpen, setMappingDialogOpen] = useState(false);
@@ -368,9 +369,9 @@ export default function Sites() {
 
   const reopenSite = useReopenSite({
     mutation: {
-      onSuccess: () => {
-        invalidate();
-        toast({ title: "Объект открыт" });
+      onSuccess: (_site, variables) => {
+        invalidateSiteCaches(variables.id);
+        toast({ title: "Объект возвращён на обслуживание" });
       },
       onError: (error) => {
         toast({
@@ -384,10 +385,10 @@ export default function Sites() {
 
   const filteredSites = useMemo(() => {
     let filtered = sites ?? [];
-    
-    if (!showClosed) {
-      filtered = filtered.filter(site => !site.isClosed);
-    }
+
+    filtered = filtered.filter((site) =>
+      siteView === "archived" ? site.isClosed : !site.isClosed,
+    );
 
     if (clientIdFilter) {
       filtered = filtered.filter(
@@ -446,7 +447,7 @@ export default function Sites() {
     clientIdFilter,
     clientNameFilter,
     fieldFilters,
-    showClosed,
+    siteView,
     sortField,
     sortDir,
   ]);
@@ -484,11 +485,7 @@ export default function Sites() {
 
   useEffect(() => {
     setPage(1);
-  }, [debouncedSearch, fieldFilters, showClosed, sortField, sortDir]);
-
-  useEffect(() => {
-    if (clientIdFilter) setShowClosed(true);
-  }, [clientIdFilter]);
+  }, [debouncedSearch, fieldFilters, siteView, sortField, sortDir]);
 
   function handleSort(field: SortField) {
     if (field === sortField) {
@@ -504,6 +501,14 @@ export default function Sites() {
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: getListSitesQueryKey() });
+  };
+
+  const invalidateSiteCaches = (siteId: string) => {
+    queryClient.invalidateQueries({ queryKey: getListSitesQueryKey() });
+    queryClient.invalidateQueries({ queryKey: getGetSiteQueryKey(siteId) });
+    queryClient.invalidateQueries({
+      queryKey: getListDeliverySiteLookupQueryKey(),
+    });
   };
 
   const createSite = useCreateSite({
@@ -938,9 +943,9 @@ export default function Sites() {
                           <Badge
                             variant="outline"
                             className="ml-2 border-amber-400 text-amber-700"
-                            data-testid={`badge-closure-request-${request.id}`}
+                            data-testid={`badge-site-removal-request-${request.id}`}
                           >
-                            Закрытие
+                            Снятие с обслуживания
                           </Badge>
                         )}
                         <span className="text-muted-foreground">
@@ -988,20 +993,16 @@ export default function Sites() {
                         className="grid gap-1"
                         data-testid={`details-closure-request-${request.id}`}
                       >
-                        <div>
-                          <span className="font-medium">Дата закрытия:</span>{" "}
+                         <div>
+                           <span className="font-medium">Дата снятия с обслуживания:</span>{" "}
                           {request.payload.closedFrom}
-                        </div>
-                        <div>
-                          <span className="font-medium">Дата открытия:</span>{" "}
-                          {request.payload.reopenDate ?? "Не указана"}
                         </div>
                         <div>
                           <span className="font-medium">Причина:</span>{" "}
                           {request.payload.closureReason ?? "Не указана"}
                         </div>
                         <p className="text-amber-700">
-                          Объект останется активным до подтверждения.
+                           Снятие с обслуживания ожидает подтверждения администратора.
                         </p>
                       </div>
                     ) : (
@@ -1035,6 +1036,34 @@ export default function Sites() {
             )}
           </div>
         )}
+
+        <div
+          className="flex flex-wrap items-center gap-2"
+          role="tablist"
+          aria-label="Состояние объектов"
+          data-testid="site-view-tabs"
+        >
+          <Button
+            type="button"
+            variant={siteView === "active" ? "default" : "outline"}
+            role="tab"
+            aria-selected={siteView === "active"}
+            onClick={() => setSiteView("active")}
+            data-testid="button-sites-active"
+          >
+            На обслуживании
+          </Button>
+          <Button
+            type="button"
+            variant={siteView === "archived" ? "default" : "outline"}
+            role="tab"
+            aria-selected={siteView === "archived"}
+            onClick={() => setSiteView("archived")}
+            data-testid="button-sites-archive"
+          >
+            Архив объектов
+          </Button>
+        </div>
 
         <div className="flex items-center gap-2 flex-wrap">
           <div
@@ -1113,16 +1142,6 @@ export default function Sites() {
               )}
             </Select>
             ))}
-            <div className="flex h-10 items-center gap-2 rounded-md border px-3">
-            <Checkbox
-              id="showClosed"
-              checked={showClosed}
-              onCheckedChange={(c) => setShowClosed(!!c)}
-            />
-            <Label htmlFor="showClosed" className="whitespace-nowrap">
-              Показывать закрытые
-            </Label>
-            </div>
             {clientIdFilter && (
             <Badge variant="secondary" data-testid="filter-sites-client">
               Клиент: {filteredClientName ?? clientIdFilter}
@@ -1253,19 +1272,25 @@ export default function Sites() {
                       {site.name}
                       {site.isClosed && (
                         <Badge variant="destructive" className="h-5 px-1 py-0 text-[10px]">
-                          Закрыт
+                          В архиве
                         </Badge>
                       )}
                       {site.pendingClosureRequest && (
                         <Badge
                           variant="outline"
                           className="h-auto border-amber-400 px-1 py-0 text-[10px] text-amber-700"
-                          data-testid={`status-pending-site-closure-${site.id}`}
+                          data-testid={`status-pending-site-removal-${site.id}`}
                         >
-                          Закрытие ожидает подтверждения администратора
+                          Снятие с обслуживания ожидает подтверждения администратора
                         </Badge>
                       )}
                     </div>
+                    {site.isClosed && site.closedFrom && (
+                      <div className="text-[10px] text-muted-foreground mt-0.5">
+                        Снято с обслуживания:{" "}
+                        {dateFormatter.format(new Date(site.closedFrom))}
+                      </div>
+                    )}
                     {site.isClosed && site.closureReason && (
                       <div className="text-[10px] text-muted-foreground mt-0.5">
                         {site.closureReason}
@@ -1400,20 +1425,24 @@ export default function Sites() {
                             size="icon"
                             className="h-7 w-7 text-muted-foreground"
                             onClick={() => setCloseTarget(site)}
-                            title="Закрыть объект"
+                            title="Снять с обслуживания"
+                            aria-label="Снять с обслуживания"
                           >
                             <Lock className="h-3.5 w-3.5" />
                           </Button>
                         ) : isAdmin && site.isClosed ? (
                           <Button
                             variant="ghost"
-                            size="icon"
-                            className="h-7 w-7 text-green-600"
+                            size="sm"
+                            className="h-8 text-green-600"
                             onClick={() => reopenSite.mutate({ id: site.id })}
-                            title="Открыть объект"
+                            title="Вернуть на обслуживание"
+                            aria-label="Вернуть на обслуживание"
+                            data-testid={`button-return-site-${site.id}`}
                             disabled={reopenSite.isPending}
                           >
                             <Unlock className="h-3.5 w-3.5" />
+                            <span className="ml-1">Вернуть на обслуживание</span>
                           </Button>
                         ) : canEditSites && !site.isClosed && !site.pendingClosureRequest ? (
                           <Button
@@ -1421,8 +1450,9 @@ export default function Sites() {
                             size="icon"
                             className="h-7 w-7 text-muted-foreground"
                             onClick={() => setCloseTarget(site)}
-                            title="Запросить закрытие объекта"
-                            data-testid={`button-request-close-site-${site.id}`}
+                            title="Запросить снятие с обслуживания"
+                            aria-label="Запросить снятие с обслуживания"
+                            data-testid={`button-request-site-removal-${site.id}`}
                           >
                             <Lock className="h-3.5 w-3.5" />
                           </Button>
@@ -1833,8 +1863,8 @@ export default function Sites() {
           <AlertDialogHeader>
             <AlertDialogTitle>
               {closureDecision?.decision === "approved"
-                ? "Подтвердить закрытие объекта?"
-                : "Отклонить запрос на закрытие?"}
+                ? "Подтвердить снятие с обслуживания?"
+                : "Отклонить запрос на снятие с обслуживания?"}
             </AlertDialogTitle>
             <AlertDialogDescription asChild>
               <div className="space-y-2">
@@ -1846,14 +1876,8 @@ export default function Sites() {
                   "closedFrom" in closureDecision.request.payload && (
                     <>
                       <p>
-                        Дата закрытия:{" "}
+                        Дата снятия с обслуживания:{" "}
                         <strong>{closureDecision.request.payload.closedFrom}</strong>
-                      </p>
-                      <p>
-                        Дата открытия:{" "}
-                        <strong>
-                          {closureDecision.request.payload.reopenDate ?? "Не указана"}
-                        </strong>
                       </p>
                       <p>
                         Причина:{" "}
@@ -1865,8 +1889,8 @@ export default function Sites() {
                   )}
                 <p>
                   {closureDecision?.decision === "approved"
-                    ? "После подтверждения объект будет закрыт."
-                    : "После отклонения объект останется активным, а отметка ожидания исчезнет."}
+                    ? "После подтверждения объект будет снят с обслуживания и помещён в архив."
+                    : "После отклонения объект останется на обслуживании, а отметка ожидания исчезнет."}
                 </p>
               </div>
             </AlertDialogDescription>

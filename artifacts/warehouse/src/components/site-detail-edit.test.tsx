@@ -11,6 +11,7 @@ const state = vi.hoisted(() => ({
   refetchBranches: vi.fn(),
   save: vi.fn(),
   propose: vi.fn(),
+  reopen: vi.fn(),
   invalidate: vi.fn(),
   toast: vi.fn(),
   callbacks: {} as { onSuccess?: () => void; onError?: (error: Error) => void },
@@ -20,6 +21,8 @@ const state = vi.hoisted(() => ({
     manager: "Менеджер", managerContact: "+7 (999) 000-00-00",
     director: "Руководитель", project: "Проект",
     driverUserId: "driver-test", deliveryType: "", features: "Вход со двора",
+    closedFrom: null as string | null,
+    closureReason: null as string | null,
     isClosed: false,
   },
 }));
@@ -47,7 +50,7 @@ vi.mock("@workspace/api-client-react", () => ({
   },
   useCreateSiteChangeRequest: () => ({ mutate: state.propose, isPending: false }),
   useUpdateSiteFeatures: () => ({ mutate: vi.fn(), isPending: false }),
-  useReopenSite: () => ({ mutate: vi.fn(), isPending: false }),
+  useReopenSite: () => ({ mutate: state.reopen, isPending: false }),
   useListTradeNames: () => ({ data: [] }),
   useListDeliveryTypes: () => ({ data: [] }),
   useListDrivers: () => ({ data: [{ id: "driver-test", name: "Водитель" }] }),
@@ -72,8 +75,12 @@ afterEach(() => {
   state.role = "logistician";
   state.hasSites = true;
   state.pending = false;
+  state.reopen.mockReset();
   state.branchesLoading = false;
   state.branchesError = false;
+  state.site.isClosed = false;
+  state.site.closedFrom = null;
+  state.site.closureReason = null;
 });
 
 it.each(["logistician", "admin"])("%s сохраняет карточку напрямую без согласования", (role) => {
@@ -102,6 +109,22 @@ it.each(["logistician", "admin"])("%s сохраняет карточку нап
   expect(state.invalidate).toHaveBeenCalledWith({ queryKey: ["sites"] });
   expect(state.invalidate).toHaveBeenCalledWith({ queryKey: ["delivery-site-lookup"] });
   if (role === "logistician") expect(screen.queryByText("Закрыть объект")).toBeNull();
+});
+
+it("администратор видит архивный статус и возвращает объект на обслуживание", () => {
+  state.role = "admin";
+  state.site.isClosed = true;
+  state.site.closedFrom = "2026-09-01";
+  state.site.closureReason = "Сезонное закрытие";
+
+  render(<SiteDetail />);
+
+  expect(screen.getByText("В архиве")).toBeTruthy();
+  expect(screen.getByText("Снято с обслуживания: 01.09.2026")).toBeTruthy();
+  expect(screen.getByText("Причина: Сезонное закрытие")).toBeTruthy();
+  fireEvent.click(screen.getByTestId("button-return-site-to-service"));
+
+  expect(state.reopen).toHaveBeenCalledWith({ id: "site-test" });
 });
 
 it.each(["manager", "driver", "logistician"])("%s без права редактировать не может сохранить карточку", (role) => {

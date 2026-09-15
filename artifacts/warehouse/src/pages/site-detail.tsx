@@ -127,7 +127,8 @@ export default function SiteDetail() {
       onSuccess: () => {
         queryClient.invalidateQueries({ queryKey: getListSitesQueryKey() });
         queryClient.invalidateQueries({ queryKey: getGetSiteQueryKey(params.id) });
-        toast({ title: "Объект открыт" });
+        queryClient.invalidateQueries({ queryKey: getListDeliverySiteLookupQueryKey() });
+        toast({ title: "Объект возвращён на обслуживание" });
       },
       onError: (error) => {
         toast({ title: "Ошибка", description: error.message, variant: "destructive" });
@@ -179,19 +180,32 @@ export default function SiteDetail() {
             <h1 className="max-w-full text-2xl font-bold text-blue-900 bg-[#f5ecd9] rounded-md px-4 py-2 inline-flex flex-wrap items-center gap-2" data-testid="text-page-title">
               <span className="min-w-0 max-w-full break-words">{site.name}</span>
               {site.isClosed && (
-                <Badge variant="destructive" className="ml-2">Закрыт</Badge>
+                <Badge variant="destructive" className="ml-2">В архиве</Badge>
               )}
               {site.pendingClosureRequest && (
                 <Badge
                   variant="outline"
                   className="max-w-full whitespace-normal break-words border-amber-400 text-amber-700"
-                  data-testid="status-pending-site-closure"
+                  data-testid="status-pending-site-removal"
                 >
-                  Закрытие ожидает подтверждения администратора
+                  Снятие с обслуживания ожидает подтверждения администратора
                 </Badge>
               )}
             </h1>
             <p className="break-words text-muted-foreground text-sm mt-1">{site.address}</p>
+            {site.isClosed && (
+              <div className="mt-2 space-y-1 text-sm text-muted-foreground">
+                {site.closedFrom && (
+                  <p>
+                    Снято с обслуживания:{" "}
+                    {new Intl.DateTimeFormat("ru-RU").format(
+                      new Date(site.closedFrom),
+                    )}
+                  </p>
+                )}
+                {site.closureReason && <p>Причина: {site.closureReason}</p>}
+              </div>
+            )}
           </div>
           {(isAdmin || canEditSites) && (
             <div className="shrink-0 max-w-full [&>button]:min-h-11">
@@ -199,10 +213,10 @@ export default function SiteDetail() {
                 <Button
                   variant="outline"
                   onClick={() => setCloseDialogOpen(true)}
-                  data-testid="button-close-site"
+                  data-testid="button-remove-site-from-service"
                 >
                   <Lock className="h-4 w-4 mr-2" />
-                  Закрыть объект
+                  Снять с обслуживания
                 </Button>
               ) : isAdmin && site.isClosed ? (
                 <Button 
@@ -210,18 +224,19 @@ export default function SiteDetail() {
                   className="text-green-600 border-green-200 hover:bg-green-50"
                   onClick={() => reopenSite.mutate({ id: site.id })}
                   disabled={reopenSite.isPending}
+                  data-testid="button-return-site-to-service"
                 >
                   <Unlock className="h-4 w-4 mr-2" />
-                  Открыть объект
+                  Вернуть на обслуживание
                 </Button>
               ) : canEditSites && !site.isClosed && !site.pendingClosureRequest ? (
                 <Button
                   variant="outline"
                   onClick={() => setCloseDialogOpen(true)}
-                  data-testid="button-request-close-site"
+                  data-testid="button-request-site-removal"
                 >
                   <Lock className="h-4 w-4 mr-2" />
-                  Запросить закрытие
+                  Запросить снятие с обслуживания
                 </Button>
               ) : null}
             </div>

@@ -8,6 +8,8 @@ import {
   appUsersTable,
   clientsTable,
   db,
+  deliveriesTable,
+  deliveryPhotosTable,
   deliveryTypesTable,
   siteChangeRequestsTable,
   sitesTable,
@@ -37,6 +39,8 @@ let driverUserId = "";
 let tradeName = "";
 let deliveryType = "";
 const createdSiteIds: string[] = [];
+const createdDeliveryIds: string[] = [];
+const createdDeliveryPhotoIds: string[] = [];
 let admin: AuthenticatedAppUser;
 let logistician: AuthenticatedAppUser;
 const closureAuthorIds: string[] = [];
@@ -146,6 +150,12 @@ after(async () => {
     await db
       .delete(siteChangeRequestsTable)
       .where(eq(siteChangeRequestsTable.authorUserId, authorId));
+  }
+  for (const id of createdDeliveryPhotoIds) {
+    await db.delete(deliveryPhotosTable).where(eq(deliveryPhotosTable.id, id));
+  }
+  for (const id of createdDeliveryIds) {
+    await db.delete(deliveriesTable).where(eq(deliveriesTable.id, id));
   }
   for (const id of createdSiteIds) {
     await db.delete(sitesTable).where(eq(sitesTable.id, id));
@@ -511,6 +521,28 @@ test("закрытие логиста ждёт администратора, б�
     })
     .returning();
   createdSiteIds.push(closureSite.id);
+  const [closureDelivery] = await db
+    .insert(deliveriesTable)
+    .values({
+      siteId: closureSite.id,
+      plannedDate: "2027-02-01",
+      actualDate: "2027-02-02",
+      note: "Доставка сохраняется при выводе объекта из обслуживания",
+    })
+    .returning({ id: deliveriesTable.id });
+  createdDeliveryIds.push(closureDelivery.id);
+  const closureObjectPath = `/objects/site-closure-${randomUUID()}`;
+  const [closureAct] = await db
+    .insert(deliveryPhotosTable)
+    .values({
+      deliveryId: closureDelivery.id,
+      objectPath: closureObjectPath,
+      fileName: "Акт сохраняется.pdf",
+      mimeType: "application/pdf",
+      uploadedBy: "Тест сохранения",
+    })
+    .returning({ id: deliveryPhotosTable.id });
+  createdDeliveryPhotoIds.push(closureAct.id);
 
   actor = logistician;
   const ordinaryProposal = await request(
@@ -556,6 +588,7 @@ test("закрытие логиста ждёт администратора, б�
     closureDto.pendingClosureRequest.closureReason,
     "Проверка закрытия",
   );
+  assert.equal(closureDto.pendingClosureRequest.reopenDate, null);
   assert.equal(closureDto.closedFrom, null);
 
   const [secondAuthor] = await db
@@ -596,6 +629,21 @@ test("закрытие логиста ждёт администратора, б�
       .where(eq(siteChangeRequestsTable.siteId, closureSite.id)))
   ).find((item) => item.status === "pending");
   assert.ok(closureRequest);
+  await db
+    .update(siteChangeRequestsTable)
+    .set({
+      payload: {
+        kind: "closure",
+        closedFrom: "2027-02-01",
+        reopenDate: "2027-03-01",
+        closureReason: "Проверка закрытия",
+      },
+    })
+    .where(eq(siteChangeRequestsTable.id, closureRequest!.id));
+  const legacyPendingSite = await request(`/sites/${closureSite.id}`, "GET");
+  assert.equal(legacyPendingSite.status, 200);
+  const legacyPendingDto = (await legacyPendingSite.json()) as Record<string, any>;
+  assert.equal(legacyPendingDto.pendingClosureRequest.reopenDate, null);
   assert.equal(
     (await request(`/site-change-requests/${closureRequest!.id}/approve`, "POST"))
       .status,
@@ -606,6 +654,37 @@ test("закрытие логиста ждёт администратора, б�
   const approvedDto = (await approvedSite.json()) as Record<string, any>;
   assert.equal(approvedDto.pendingClosureRequest, null);
   assert.match(String(approvedDto.closedFrom), /^2027-02-01/);
+  assert.equal(approvedDto.reopenDate, null);
+  assert.equal(approvedDto.isClosed, true);
+  const [persistedApprovedSite] = await db
+    .select()
+    .from(sitesTable)
+    .where(eq(sitesTable.id, closureSite.id));
+  assert.equal(persistedApprovedSite.reopenDate, null);
+  const [retainedDelivery] = await db
+    .select()
+    .from(deliveriesTable)
+    .where(eq(deliveriesTable.id, closureDelivery.id));
+  assert.equal(
+    retainedDelivery.note,
+    "Доставка сохраняется при выводе объекта из обслуживания",
+  );
+  assert.equal(retainedDelivery.actualDate, "2027-02-02");
+  const [retainedAct] = await db
+    .select()
+    .from(deliveryPhotosTable)
+    .where(eq(deliveryPhotosTable.id, closureAct.id));
+  assert.equal(retainedAct.objectPath, closureObjectPath);
+  assert.equal(retainedAct.fileName, "Акт сохраняется.pdf");
+  const [normalizedClosureRequest] = await db
+    .select()
+    .from(siteChangeRequestsTable)
+    .where(eq(siteChangeRequestsTable.id, closureRequest!.id));
+  assert.equal(
+    (normalizedClosureRequest.payload as { reopenDate?: string | null })
+      .reopenDate,
+    null,
+  );
 
   const [reopenedSite] = await db
     .insert(sitesTable)
@@ -625,19 +704,51 @@ test("закрытие логиста ждёт администратора, б�
     .returning();
   createdSiteIds.push(reopenedSite.id);
   actor = logistician;
+  const pastReopenIgnored = await request(
+    `/sites/${reopenedSite.id}/close`,
+    "POST",
+    {
+      closedFrom: "2027-05-01",
+      reopenDate: "2020-02-01",
+      reason: "Новое закрытие",
+    },
+  );
+  assert.equal(pastReopenIgnored.status, 409);
+  const pastReopenIgnoredError = (await pastReopenIgnored.json()) as {
+    error?: string;
+  };
+  assert.match(String(pastReopenIgnoredError.error), /выведен из обслуживания/);
+  actor = admin;
+  const explicitReturn = await request(
+    `/sites/${reopenedSite.id}/reopen`,
+    "POST",
+  );
+  assert.equal(explicitReturn.status, 200);
+  const explicitReturnDto = (await explicitReturn.json()) as Record<string, any>;
+  assert.equal(explicitReturnDto.closedFrom, null);
+  assert.equal(explicitReturnDto.reopenDate, null);
+  assert.equal(explicitReturnDto.isClosed, false);
+  actor = logistician;
   const afterReopen = await request(
     `/sites/${reopenedSite.id}/close`,
     "POST",
-    { closedFrom: "2027-05-01", reopenDate: null, reason: "Новое закрытие" },
+    {
+      closedFrom: "2027-05-01",
+      reopenDate: "2020-01-01",
+      reason: "Новое закрытие",
+    },
   );
   assert.equal(afterReopen.status, 201);
   actor = admin;
   const directClose = await request(`/sites/${reopenedSite.id}/close`, "POST", {
     closedFrom: "2027-06-01",
-    reopenDate: null,
+    reopenDate: "2020-02-01",
     reason: "Решение администратора",
   });
   assert.equal(directClose.status, 200);
+  const directCloseDto = (await directClose.json()) as Record<string, any>;
+  assert.equal(directCloseDto.reopenDate, null);
+  assert.equal(directCloseDto.isClosed, true);
   const invalidatedClosure = (
     (await db
       .select()

@@ -20,3 +20,9 @@ Closure requested by a logistician is an exception: it requires an administrator
 **Why:** The user explicitly requested administrative confirmation for logistician closures, separately from ordinary object editing.
 
 **How to apply:** Preserve direct ordinary edits and existing administrator closure rights. Do not automatically delete scheduled deliveries when requesting or approving closure; that was not requested.
+
+Site closure means removal from service into a reversible archive, not a temporary pause with a scheduled reopening.
+
+**Why:** On 2026-09-15, the user explicitly removed the planned reopening field and requested manual restoration through “Вернуть на обслуживание”.
+
+**How to apply:** Keep archived sites out of the active service list, retain their deliveries and acts, and never resume service automatically from a historical planned reopening date. Keep the existing administrator approval for logistician removal requests. Preserve nullable legacy storage for compatibility rather than dropping historical data as part of this behavior change.

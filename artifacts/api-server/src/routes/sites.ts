@@ -54,7 +54,6 @@ import {
   requirePermission,
   requireSectionAccess,
 } from "../middlewares/requirePermission";
-import { todayLocalISO } from "../lib/deliveries";
 import { findInvalidDriverUserIds, loadDriverUsers } from "../lib/drivers";
 import {
   createBulkSiteImportSlowWarning,
@@ -161,11 +160,7 @@ function tradeNameError(unknown: string[]): string {
 }
 
 function isClosedToday(row: typeof sitesTable.$inferSelect): boolean {
-  if (!row.closedFrom) return false;
-  const today = todayLocalISO();
-  if (row.closedFrom > today) return false;
-  if (row.reopenDate && row.reopenDate <= today) return false;
-  return true;
+  return row.closedFrom !== null;
 }
 
 function toSiteDto(
@@ -225,6 +220,15 @@ function isClosureBaselinePayload(
   );
 }
 
+function normalizeClosurePayload(
+  payload: SiteChangeRequestClosurePayload,
+): SiteChangeRequestClosurePayload {
+  return {
+    ...payload,
+    reopenDate: null,
+  };
+}
+
 function toPendingClosureDto(
   row: typeof siteChangeRequestsTable.$inferSelect,
 ) {
@@ -235,7 +239,7 @@ function toPendingClosureDto(
     siteName: row.siteName,
     authorName: row.authorName,
     closedFrom: row.payload.closedFrom,
-    reopenDate: row.payload.reopenDate,
+    reopenDate: null,
     closureReason: row.payload.closureReason,
     createdAt: row.createdAt,
   };
@@ -244,8 +248,12 @@ function toPendingClosureDto(
 function toChangeRequestDto(
   row: typeof siteChangeRequestsTable.$inferSelect,
 ) {
+  const payload = isClosurePayload(row.payload)
+    ? normalizeClosurePayload(row.payload)
+    : row.payload;
   return {
     ...row,
+    payload,
     kind: isClosurePayload(row.payload) ? "closure" : "edit",
   };
 }
@@ -944,7 +952,7 @@ router.post(
     ) {
       res.status(400).json({
         error:
-          "Для предложения закрытия используйте специальный запрос закрытия объекта",
+          "Для предложения вывода из обслуживания используйте специальный запрос объекта",
       });
       return;
     }
@@ -1072,28 +1080,19 @@ async function decideSiteChangeRequest(
           if (!isClosureBaselinePayload(request.originalPayload)) {
             return {
               status: 409 as const,
-              error: "Предложение закрытия повреждено и больше не может быть применено",
+              error:
+                "Предложение вывода из обслуживания повреждено и больше не может быть применено",
             };
           }
-          if (
-            !dateOnlyFromInput(payload.closedFrom) ||
-            (payload.reopenDate !== null &&
-              !dateOnlyFromInput(payload.reopenDate))
-          ) {
+          if (!dateOnlyFromInput(payload.closedFrom)) {
             return {
               status: 400 as const,
-              error: "Предложение содержит некорректную дату",
-            };
-          }
-          if (payload.reopenDate && payload.reopenDate <= payload.closedFrom) {
-            return {
-              status: 400 as const,
-              error: "Дата открытия должна быть позже даты закрытия",
+              error: "Предложение содержит некорректную дату вывода из обслуживания",
             };
           }
           siteUpdateValues = {
             closedFrom: payload.closedFrom,
-            reopenDate: payload.reopenDate,
+            reopenDate: null,
             closureReason: payload.closureReason,
             closedBy: actor.name || actor.email,
           };
@@ -1153,6 +1152,10 @@ async function decideSiteChangeRequest(
         }
       }
 
+      const normalizedRequestPayload =
+        decision === "approved" && isClosurePayload(request.payload)
+          ? normalizeClosurePayload(request.payload)
+          : request.payload;
       const [updatedRequest] = await tx
         .update(siteChangeRequestsTable)
         .set({
@@ -1161,6 +1164,7 @@ async function decideSiteChangeRequest(
           decidedByUserId: actor.id,
           decidedByName: actor.name || actor.email,
           decidedByEmail: actor.email,
+          payload: normalizedRequestPayload,
         })
         .where(
           and(
@@ -1419,7 +1423,9 @@ router.post("/sites/:id/close", async (req, res): Promise<void> => {
     user?.role === "logistician" && user.editableSections.includes("sites");
   const canCloseDirectly = user?.role === "admin";
   if (!canRequestClosure && !canCloseDirectly) {
-    res.status(403).json({ error: "Недостаточно прав для закрытия объекта" });
+    res.status(403).json({
+      error: "Недостаточно прав для вывода объекта из обслуживания",
+    });
     return;
   }
   const parsed = CloseSiteBody.safeParse(req.body);
@@ -1429,16 +1435,10 @@ router.post("/sites/:id/close", async (req, res): Promise<void> => {
   }
 
   const closedFrom = dateOnlyFromInput(req.body?.closedFrom);
-  const reopenDate =
-    req.body?.reopenDate === null || req.body?.reopenDate === undefined
-      ? null
-      : dateOnlyFromInput(req.body?.reopenDate);
-  if (!closedFrom || (req.body?.reopenDate != null && !reopenDate)) {
-    res.status(400).json({ error: "Укажите корректную дату закрытия и открытия" });
-    return;
-  }
-  if (reopenDate && reopenDate <= closedFrom) {
-    res.status(400).json({ error: "Дата открытия должна быть позже даты закрытия" });
+  if (!closedFrom) {
+    res.status(400).json({
+      error: "Укажите корректную дату вывода объекта из обслуживания",
+    });
     return;
   }
 
@@ -1453,16 +1453,10 @@ router.post("/sites/:id/close", async (req, res): Promise<void> => {
     if (!site) return { status: 404 as const };
 
     if (canRequestClosure) {
-      const today = todayLocalISO();
-      const hasActiveOrScheduledClosure =
-        isClosedToday(site) ||
-        (site.closedFrom !== null &&
-          site.closedFrom > today &&
-          (!site.reopenDate || site.reopenDate > today));
-      if (hasActiveOrScheduledClosure) {
+      if (isClosedToday(site)) {
         return {
           status: 409 as const,
-          error: "Объект уже закрыт или для него запланировано закрытие",
+          error: "Объект уже выведен из обслуживания",
         };
       }
       const [authorPendingRequest] = await tx
@@ -1486,7 +1480,8 @@ router.post("/sites/:id/close", async (req, res): Promise<void> => {
       if (pending.has(site.id)) {
         return {
           status: 409 as const,
-          error: "Для объекта уже ожидает подтверждения запрос на закрытие",
+          error:
+            "Для объекта уже ожидает подтверждения запрос на вывод из обслуживания",
         };
       }
       const [request] = await tx
@@ -1500,7 +1495,7 @@ router.post("/sites/:id/close", async (req, res): Promise<void> => {
           payload: {
             kind: "closure",
             closedFrom,
-            reopenDate,
+            reopenDate: null,
             closureReason,
           },
           originalPayload: {
@@ -1538,7 +1533,7 @@ router.post("/sites/:id/close", async (req, res): Promise<void> => {
       .update(sitesTable)
       .set({
         closedFrom,
-        reopenDate,
+        reopenDate: null,
         closureReason,
         closedBy: user.name || user.email,
       })
