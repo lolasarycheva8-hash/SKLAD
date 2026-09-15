@@ -12,7 +12,12 @@ import {
   GetMySitesSummaryQueryParams,
   GetMySitesSummaryResponse,
 } from "@workspace/api-zod";
-import { toDeliveryDto, todayLocalISO, photosCountMap } from "../lib/deliveries";
+import {
+  toDeliveryDto,
+  todayLocalISO,
+  photosCountMap,
+  deliveryDtoEnrichmentMap,
+} from "../lib/deliveries";
 import { getMyDeliveriesAccess } from "../lib/my-deliveries-access";
 import { isDriverUser } from "../lib/user-roles";
 import { requireDriver } from "../middlewares/requirePermission";
@@ -65,6 +70,8 @@ router.get("/my/deliveries", async (req, res): Promise<void> => {
       delivery: deliveriesTable,
       siteName: sitesTable.name,
       siteAddress: sitesTable.address,
+      clientId: sitesTable.clientId,
+      clientName: sitesTable.client,
       managerContact: sitesTable.managerContact,
       driverName: appUsersTable.name,
       driverEmail: appUsersTable.email,
@@ -76,6 +83,9 @@ router.get("/my/deliveries", async (req, res): Promise<void> => {
     .orderBy(sql`${deliveriesTable.plannedDate} asc nulls last`);
 
   const counts = await photosCountMap(rows.map((row) => row.delivery.id));
+  const enrichment = await deliveryDtoEnrichmentMap(
+    rows.map((row) => row.delivery.id),
+  );
   res.json(
     ListMyDeliveriesResponse.parse(
       rows.map((row) =>
@@ -86,6 +96,11 @@ router.get("/my/deliveries", async (req, res): Promise<void> => {
           counts.get(row.delivery.id) ?? 0,
           row.driverName || row.driverEmail || "Не назначен",
           row.managerContact || null,
+          {
+            ...(enrichment.get(row.delivery.id) ?? {}),
+            clientId: row.clientId,
+            clientName: row.clientName,
+          },
         ),
       ),
     ),
@@ -164,6 +179,7 @@ router.post("/my/deliveries/:id/done", async (req, res): Promise<void> => {
     { deliveryId: updated.id, driverUserId, userId: req.appUser?.id },
     "Delivery marked done by driver",
   );
+  const enrichment = await deliveryDtoEnrichmentMap([updated.id]);
   res.json(MarkMyDeliveryDoneResponse.parse(
     toDeliveryDto(
       updated,
@@ -171,6 +187,12 @@ router.post("/my/deliveries/:id/done", async (req, res): Promise<void> => {
       site?.address ?? "",
       0,
       req.appUser?.name || req.appUser?.email || "Не назначен",
+      null,
+      {
+        ...(enrichment.get(updated.id) ?? {}),
+        clientId: site?.clientId ?? null,
+        clientName: site?.client ?? null,
+      },
     ),
   ));
 });
@@ -235,6 +257,7 @@ router.patch("/my/deliveries/:id/comment", async (req, res): Promise<void> => {
 
   const [site] = await db.select().from(sitesTable).where(eq(sitesTable.id, updated.siteId));
   const counts = await photosCountMap([updated.id]);
+  const enrichment = await deliveryDtoEnrichmentMap([updated.id]);
   req.log.info(
     { deliveryId: updated.id, driverUserId },
     "Delivery comment updated by driver",
@@ -246,6 +269,12 @@ router.patch("/my/deliveries/:id/comment", async (req, res): Promise<void> => {
       site?.address ?? "",
       counts.get(updated.id) ?? 0,
       req.appUser?.name || req.appUser?.email || "Не назначен",
+      null,
+      {
+        ...(enrichment.get(updated.id) ?? {}),
+        clientId: site?.clientId ?? null,
+        clientName: site?.client ?? null,
+      },
     ),
   ));
 });

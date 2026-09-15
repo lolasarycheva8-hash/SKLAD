@@ -7,6 +7,9 @@
  */
 
 export * from "./addDeliveryPhotoInput";
+export * from "./additionalDeliveryOrderInput";
+export * from "./additionalDeliveryOrderItem";
+export * from "./additionalDeliveryOrderResult";
 export * from "./appUser";
 export * from "./auditLogEntry";
 export * from "./auditLogPage";

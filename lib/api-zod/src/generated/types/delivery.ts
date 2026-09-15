@@ -5,6 +5,7 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
+import type { AdditionalDeliveryOrderItem } from "./additionalDeliveryOrderItem";
 import type { DeliveryStatus } from "./deliveryStatus";
 import type { DeliveryWorkflowStatus } from "./deliveryWorkflowStatus";
 
@@ -14,6 +15,16 @@ export interface Delivery {
   siteName: string;
   siteAddress: string;
   /**
+   * Current client resolved from the delivery site
+   * @nullable
+   */
+  clientId?: string | null;
+  /**
+   * Current client name resolved from the delivery site
+   * @nullable
+   */
+  clientName?: string | null;
+  /**
    * Телефон менеджера объекта для связи с водителем
    * @nullable
    */
@@ -21,6 +32,16 @@ export interface Delivery {
   /** @nullable */
   driverUserId: string | null;
   driver: string;
+  /**
+   * Parent delivery for an additional order
+   * @nullable
+   */
+  parentDeliveryId?: string | null;
+  /**
+   * Client order linked to an additional delivery
+   * @nullable
+   */
+  orderId?: string | null;
   /**
    * Плановая дата доставки (null, если дата ещё не назначена)
    * @nullable
@@ -67,4 +88,10 @@ export interface Delivery {
   archivedAt: Date | null;
   /** @nullable */
   archivedByName: string | null;
+  /**
+   * Additional-order contents without prices
+   * @nullable
+   */
+  additionalOrderItems?: AdditionalDeliveryOrderItem[] | null;
+  hasAdditionalOrders?: boolean;
 }

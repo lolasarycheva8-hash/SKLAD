@@ -60,6 +60,10 @@ import {
   type BulkSiteImportLogFields,
 } from "../lib/bulk-site-import-log";
 import { recordBulkSiteImportSlowWarning } from "../lib/bulk-site-import-slow-store";
+import {
+  hasLinkedOrderForDifferentClient,
+  SITE_CLIENT_ORDER_MISMATCH_ERROR,
+} from "../lib/site-client-order-invariant";
 
 const router: IRouter = Router();
 router.use("/sites", requireSectionAccess("sites"));
@@ -722,6 +726,25 @@ router.post("/sites/bulk", requireAdmin, async (req, res): Promise<void> => {
             };
           }
         }
+        for (const { item, client } of resolvedItems) {
+          const existingSite = item.id
+            ? existingSitesById.get(item.id)
+            : existingSitesByName.get(item.name);
+          if (
+            existingSite &&
+            existingSite.clientId !== client.id &&
+            (await hasLinkedOrderForDifferentClient(
+              tx,
+              existingSite.id,
+              client.id,
+            ))
+          ) {
+            return {
+              error: SITE_CLIENT_ORDER_MISMATCH_ERROR,
+              status: 409 as const,
+            };
+          }
+        }
 
         const sitesByInputIndex: Array<
           typeof sitesTable.$inferSelect | undefined
@@ -1133,6 +1156,19 @@ async function decideSiteChangeRequest(
           if ("error" in resolved) {
             return { status: 400 as const, error: resolved.error };
           }
+          if (
+            resolved.client.id !== site.clientId &&
+            (await hasLinkedOrderForDifferentClient(
+              tx,
+              site.id,
+              resolved.client.id,
+            ))
+          ) {
+            return {
+              status: 409 as const,
+              error: SITE_CLIENT_ORDER_MISMATCH_ERROR,
+            };
+          }
           updateValues.clientId = resolved.client.id;
           updateValues.client = resolved.client.name;
         }
@@ -1371,6 +1407,18 @@ router.patch("/sites/:id", requirePermission("sites"), async (req, res): Promise
         const resolvedClient = await resolveClient(tx, parsed.data.clientId);
         if ("error" in resolvedClient) {
           return { status: 400 as const, error: resolvedClient.error };
+        }
+        if (
+          await hasLinkedOrderForDifferentClient(
+            tx,
+            currentSite.id,
+            resolvedClient.client.id,
+          )
+        ) {
+          return {
+            status: 409 as const,
+            error: SITE_CLIENT_ORDER_MISMATCH_ERROR,
+          };
         }
         updateValues.client = resolvedClient.client.name;
         updateValues.clientId = resolvedClient.client.id;

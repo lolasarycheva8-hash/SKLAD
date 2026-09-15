@@ -18,6 +18,7 @@ import {
   shipmentItemsTable,
   shipmentsTable,
   sitesTable,
+  siteChangeRequestsTable,
   appUsersTable,
   legacyDriverSimilarityReviewsTable,
 } from "@workspace/db";
@@ -4471,4 +4472,496 @@ test("прикрепление ждёт path lock и не ссылается н�
     .from(deliveryPhotosTable)
     .where(eq(deliveryPhotosTable.objectPath, objectPath));
   assert.deepEqual(brokenReferences, []);
+});
+
+test("дополнительный заказ атомарен, идемпотентен и сохраняет независимую доставку", async () => {
+  const sourceType = `Основной интеграционный тип ${randomUUID()}`;
+  const additionalType = `Дополнительный интеграционный тип ${randomUUID()}`;
+  const productName = `Интеграционный товар ${randomUUID()}`;
+  const productSku = `integration-${randomUUID()}`;
+  const requestId = randomUUID();
+  const invalidProductId = randomUUID();
+
+  await db.insert(deliveryTypesTable).values([
+    { name: sourceType },
+    { name: additionalType },
+  ]);
+  const [product] = await db
+    .insert(productsTable)
+    .values({
+      name: productName,
+      sku: productSku,
+      unit: "шт",
+      price: "125.00",
+    })
+    .returning({ id: productsTable.id });
+  const [source] = await db
+    .insert(deliveriesTable)
+    .values({
+      siteId,
+      driverUserId: assignedDriver.id,
+      plannedDate: "2099-01-10",
+      correctedPlannedDate: "2099-01-11",
+      scheduleMonth: "2099-01",
+      deliveryType: sourceType,
+      logisticianNote: "Исходная заметка логиста",
+    })
+    .returning();
+
+  let childId = "";
+  let orderId = "";
+  let replacementId = "";
+  try {
+    actor = deliveriesOnlyLogistician;
+    const beforeInvalidOrders = await db
+      .select({ id: ordersTable.id })
+      .from(ordersTable)
+      .where(eq(ordersTable.clientId, integrationClientId));
+    const beforeInvalidChildren = await db
+      .select({ id: deliveriesTable.id })
+      .from(deliveriesTable)
+      .where(eq(deliveriesTable.parentDeliveryId, source.id));
+
+    const invalid = await fetch(
+      `${baseUrl}/deliveries/${source.id}/additional-order`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          deliveryType: additionalType,
+          requestId: randomUUID(),
+          items: [
+            {
+              productId: invalidProductId,
+              quantity: 2,
+              price: 125,
+            },
+          ],
+        }),
+      },
+    );
+    assert.equal(invalid.status, 404);
+    const afterInvalidOrders = await db
+      .select({ id: ordersTable.id })
+      .from(ordersTable)
+      .where(eq(ordersTable.clientId, integrationClientId));
+    const afterInvalidChildren = await db
+      .select({ id: deliveriesTable.id })
+      .from(deliveriesTable)
+      .where(eq(deliveriesTable.parentDeliveryId, source.id));
+    assert.deepEqual(afterInvalidOrders, beforeInvalidOrders);
+    assert.deepEqual(afterInvalidChildren, beforeInvalidChildren);
+
+    const createBody = {
+      deliveryType: additionalType,
+      note: "Дополнительный заказ",
+      requestId,
+      items: [{ productId: product.id, quantity: 2, price: 125 }],
+    };
+    const created = await fetch(
+      `${baseUrl}/deliveries/${source.id}/additional-order`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(createBody),
+      },
+    );
+    assert.equal(created.status, 201);
+    const createdBody = (await created.json()) as {
+      orderId: string;
+      deliveryId: string;
+    };
+    orderId = createdBody.orderId;
+    childId = createdBody.deliveryId;
+    assert.equal(childId, requestId);
+
+    const retry = await fetch(
+      `${baseUrl}/deliveries/${source.id}/additional-order`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(createBody),
+      },
+    );
+    assert.equal(retry.status, 200);
+    assert.deepEqual(await retry.json(), createdBody);
+
+    const children = await db
+      .select()
+      .from(deliveriesTable)
+      .where(eq(deliveriesTable.parentDeliveryId, source.id));
+    assert.equal(children.length, 1);
+    assert.equal(children[0].id, childId);
+    assert.equal(children[0].orderId, orderId);
+    assert.equal(children[0].siteId, source.siteId);
+    assert.equal(children[0].driverUserId, source.driverUserId);
+    assert.equal(children[0].plannedDate, source.plannedDate);
+    assert.equal(children[0].correctedPlannedDate, source.correctedPlannedDate);
+    assert.equal(children[0].scheduleMonth, source.scheduleMonth);
+    assert.equal(children[0].deliveryType, additionalType);
+    assert.equal(children[0].logisticianNote, source.logisticianNote);
+    assert.equal(children[0].actualDate, null);
+    assert.equal(children[0].actApprovedAt, null);
+    assert.equal(children[0].actApprovedBy, null);
+    assert.equal(children[0].note, null);
+    assert.equal(children[0].archivedAt, null);
+
+    const childItems = await db
+      .select()
+      .from(orderItemsTable)
+      .where(eq(orderItemsTable.orderId, orderId));
+    assert.equal(childItems.length, 1);
+    assert.equal(childItems[0].productId, product.id);
+    assert.equal(Number(childItems[0].quantity), 2);
+
+    actor = deliveriesOnlyLogistician;
+    const ordinaryDuplicate = await fetch(`${baseUrl}/deliveries`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        siteId,
+        driverUserId: assignedDriver.id,
+        plannedDate: source.plannedDate,
+        scheduleMonth: source.scheduleMonth,
+        deliveryType: sourceType,
+      }),
+    });
+    assert.equal(ordinaryDuplicate.status, 409);
+
+    actor = admin;
+    const completedChild = await fetch(`${baseUrl}/deliveries/${childId}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ actualDate: "2099-01-12" }),
+    });
+    assert.equal(completedChild.status, 200);
+    const [sourceAfterCompletion] = await db
+      .select({
+        actualDate: deliveriesTable.actualDate,
+        archivedAt: deliveriesTable.archivedAt,
+      })
+      .from(deliveriesTable)
+      .where(eq(deliveriesTable.id, source.id));
+    const [childAfterCompletion] = await db
+      .select({
+        actualDate: deliveriesTable.actualDate,
+        actApprovedAt: deliveriesTable.actApprovedAt,
+      })
+      .from(deliveriesTable)
+      .where(eq(deliveriesTable.id, childId));
+    assert.equal(sourceAfterCompletion.actualDate, null);
+    assert.equal(sourceAfterCompletion.archivedAt, null);
+    assert.equal(childAfterCompletion.actualDate, "2099-01-12");
+    assert.equal(childAfterCompletion.actApprovedAt, null);
+
+    await db
+      .update(deliveriesTable)
+      .set({ driverUserId: otherDriver.id })
+      .where(eq(deliveriesTable.id, childId));
+
+    actor = assignedDriver;
+    const assignedDeliveries = await fetch(`${baseUrl}/my/deliveries`);
+    assert.equal(assignedDeliveries.status, 200);
+    const assignedRows = (await assignedDeliveries.json()) as Array<{
+      id: string;
+      hasAdditionalOrders?: boolean;
+      additionalOrderItems?: unknown;
+    }>;
+    const assignedSource = assignedRows.find((row) => row.id === source.id);
+    assert.equal(assignedRows.some((row) => row.id === childId), false);
+    assert.equal(assignedSource?.hasAdditionalOrders, true);
+    assert.equal(assignedSource?.additionalOrderItems, undefined);
+
+    actor = otherDriver;
+    const otherDriverDeliveries = await fetch(`${baseUrl}/my/deliveries`);
+    assert.equal(otherDriverDeliveries.status, 200);
+    const otherDriverRows = (await otherDriverDeliveries.json()) as Array<{
+      id: string;
+      additionalOrderItems?: Array<{
+        productId: string;
+        productName: string;
+        quantity: number;
+        unit: string;
+        price?: unknown;
+      }>;
+    }>;
+    const reassignedChild = otherDriverRows.find((row) => row.id === childId);
+    assert.ok(reassignedChild);
+    assert.deepEqual(reassignedChild.additionalOrderItems, [
+      {
+        productId: product.id,
+        productName,
+        quantity: 2,
+        unit: "шт",
+      },
+    ]);
+    assert.equal(
+      Object.hasOwn(reassignedChild.additionalOrderItems?.[0] ?? {}, "price"),
+      false,
+    );
+
+    actor = admin;
+    const replacement = await fetch(`${baseUrl}/deliveries/bulk/replace`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        month: "2099-01",
+        items: [
+          {
+            siteId,
+            driverUserId: assignedDriver.id,
+            plannedDate: "2099-01-20",
+            scheduleMonth: "2099-01",
+            deliveryType: sourceType,
+          },
+        ],
+      }),
+    });
+    assert.equal(replacement.status, 201);
+    const replacementRows = (await replacement.json()) as Array<{ id: string }>;
+    assert.equal(replacementRows.length, 1);
+    replacementId = replacementRows[0].id;
+
+    const [sourceAfterReplacement] = await db
+      .select({ archivedAt: deliveriesTable.archivedAt })
+      .from(deliveriesTable)
+      .where(eq(deliveriesTable.id, source.id));
+    const [childAfterReplacement] = await db
+      .select({
+        parentDeliveryId: deliveriesTable.parentDeliveryId,
+        orderId: deliveriesTable.orderId,
+        actualDate: deliveriesTable.actualDate,
+        archivedAt: deliveriesTable.archivedAt,
+      })
+      .from(deliveriesTable)
+      .where(eq(deliveriesTable.id, childId));
+    assert.ok(sourceAfterReplacement.archivedAt);
+    assert.deepEqual(childAfterReplacement, {
+      parentDeliveryId: source.id,
+      orderId,
+      actualDate: "2099-01-12",
+      archivedAt: null,
+    });
+
+    const deleteLinkedOrder = await fetch(`${baseUrl}/orders/${orderId}`, {
+      method: "DELETE",
+    });
+    assert.equal(deleteLinkedOrder.status, 409);
+  } finally {
+    if (replacementId) {
+      await db
+        .delete(deliveriesTable)
+        .where(eq(deliveriesTable.id, replacementId));
+    }
+    if (childId) {
+      await db.delete(deliveriesTable).where(eq(deliveriesTable.id, childId));
+    }
+    if (orderId) {
+      await db.delete(ordersTable).where(eq(ordersTable.id, orderId));
+    }
+    await db.delete(deliveriesTable).where(eq(deliveriesTable.id, source.id));
+    await db
+      .delete(productsTable)
+      .where(eq(productsTable.id, product.id));
+    await db
+      .delete(deliveryTypesTable)
+      .where(inArray(deliveryTypesTable.name, [sourceType, additionalType]));
+  }
+});
+
+test("импорт и подтверждение предложения не меняют клиента объекта со связанным заказом", async () => {
+  const [otherClient] = await db
+    .insert(clientsTable)
+    .values({ name: `Другой интеграционный клиент ${randomUUID()}` })
+    .returning({ id: clientsTable.id });
+  const [linkedOrder] = await db
+    .insert(ordersTable)
+    .values({ clientId: integrationClientId, isPaid: false })
+    .returning({ id: ordersTable.id });
+  const [linkedDelivery] = await db
+    .insert(deliveriesTable)
+    .values({
+      siteId,
+      orderId: linkedOrder.id,
+      driverUserId: assignedDriver.id,
+      plannedDate: "2099-02-10",
+      scheduleMonth: "2099-02",
+    })
+    .returning({ id: deliveriesTable.id });
+
+  let requestId = "";
+  const sitesEditor = testUser("logistician", {
+    editableSections: ["sites"],
+  });
+  await db.insert(appUsersTable).values(sitesEditor);
+  try {
+    actor = admin;
+    const bulk = await fetch(`${baseUrl}/sites/bulk`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        items: [
+          {
+            id: siteId,
+            name: `Тест актов ${randomUUID()}`,
+            address: "Изменённый адрес",
+            branch: "Тестовый куст",
+            clientId: otherClient.id,
+            manager: "Тестовый менеджер",
+            managerContact: "+7 999 123-45-67",
+            director: "Тестовый руководитель",
+            project: "Тестовый проект",
+            driverUserId: assignedDriver.id,
+          },
+        ],
+      }),
+    });
+    assert.equal(bulk.status, 409);
+    const [siteAfterBulk] = await db
+      .select({ clientId: sitesTable.clientId })
+      .from(sitesTable)
+      .where(eq(sitesTable.id, siteId));
+    assert.equal(siteAfterBulk.clientId, integrationClientId);
+
+    actor = sitesEditor;
+    const proposal = await fetch(`${baseUrl}/sites/${siteId}/change-requests`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ clientId: otherClient.id }),
+    });
+    assert.equal(proposal.status, 201);
+    requestId = ((await proposal.json()) as { id: string }).id;
+
+    actor = admin;
+    const approval = await fetch(
+      `${baseUrl}/site-change-requests/${requestId}/approve`,
+      { method: "POST" },
+    );
+    assert.equal(approval.status, 409);
+    const [siteAfterApproval] = await db
+      .select({ clientId: sitesTable.clientId })
+      .from(sitesTable)
+      .where(eq(sitesTable.id, siteId));
+    assert.equal(siteAfterApproval.clientId, integrationClientId);
+  } finally {
+    if (requestId) {
+      await db
+        .delete(siteChangeRequestsTable)
+        .where(eq(siteChangeRequestsTable.id, requestId));
+    }
+    await db
+      .delete(deliveriesTable)
+      .where(eq(deliveriesTable.id, linkedDelivery.id));
+    await db.delete(ordersTable).where(eq(ordersTable.id, linkedOrder.id));
+    await db.delete(clientsTable).where(eq(clientsTable.id, otherClient.id));
+    await db.delete(appUsersTable).where(eq(appUsersTable.id, sitesEditor.id));
+  }
+});
+
+test("один requestId из разных исходных доставок возвращает 409 вместо 500", async () => {
+  const sourceType = `Тип collision source ${randomUUID()}`;
+  const additionalType = `Тип collision additional ${randomUUID()}`;
+  const collisionRequestId = randomUUID();
+  await db.insert(deliveryTypesTable).values([
+    { name: sourceType },
+    { name: additionalType },
+  ]);
+  const [otherClient] = await db
+    .insert(clientsTable)
+    .values({ name: `Collision client ${randomUUID()}` })
+    .returning({ id: clientsTable.id, name: clientsTable.name });
+  const [otherSite] = await db
+    .insert(sitesTable)
+    .values({
+      name: `Collision site ${randomUUID()}`,
+      address: "Collision address",
+      branch: "Collision branch",
+      client: otherClient.name,
+      clientId: otherClient.id,
+      manager: "Collision manager",
+      managerContact: "",
+      director: "Collision director",
+      project: "Collision project",
+      driverUserId: assignedDriver.id,
+      deliveryType: sourceType,
+    })
+    .returning({ id: sitesTable.id });
+  const [product] = await db
+    .insert(productsTable)
+    .values({
+      name: `Collision product ${randomUUID()}`,
+      sku: `collision-${randomUUID()}`,
+      unit: "шт",
+      price: "50.00",
+    })
+    .returning({ id: productsTable.id });
+  const [source] = await db
+    .insert(deliveriesTable)
+    .values({
+      siteId,
+      driverUserId: assignedDriver.id,
+      plannedDate: "2099-03-10",
+      scheduleMonth: "2099-03",
+      deliveryType: sourceType,
+    })
+    .returning({ id: deliveriesTable.id });
+  const [otherSource] = await db
+    .insert(deliveriesTable)
+    .values({
+      siteId: otherSite.id,
+      driverUserId: assignedDriver.id,
+      plannedDate: "2099-03-11",
+      scheduleMonth: "2099-03",
+      deliveryType: sourceType,
+    })
+    .returning({ id: deliveriesTable.id });
+
+  try {
+    actor = deliveriesOnlyLogistician;
+    const body = {
+      deliveryType: additionalType,
+      requestId: collisionRequestId,
+      items: [{ productId: product.id, quantity: 1, price: 50 }],
+    };
+    const [first, second] = await Promise.all([
+      fetch(`${baseUrl}/deliveries/${source.id}/additional-order`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      }),
+      fetch(`${baseUrl}/deliveries/${otherSource.id}/additional-order`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      }),
+    ]);
+    assert.deepEqual(
+      [first.status, second.status].sort((left, right) => left - right),
+      [201, 409],
+    );
+  } finally {
+    const [collisionDelivery] = await db
+      .select({ id: deliveriesTable.id, orderId: deliveriesTable.orderId })
+      .from(deliveriesTable)
+      .where(eq(deliveriesTable.id, collisionRequestId));
+    if (collisionDelivery) {
+      await db
+        .delete(deliveriesTable)
+        .where(eq(deliveriesTable.id, collisionDelivery.id));
+      if (collisionDelivery.orderId) {
+        await db
+          .delete(ordersTable)
+          .where(eq(ordersTable.id, collisionDelivery.orderId));
+      }
+    }
+    await db
+      .delete(deliveriesTable)
+      .where(inArray(deliveriesTable.id, [source.id, otherSource.id]));
+    await db.delete(productsTable).where(eq(productsTable.id, product.id));
+    await db.delete(sitesTable).where(eq(sitesTable.id, otherSite.id));
+    await db.delete(clientsTable).where(eq(clientsTable.id, otherClient.id));
+    await db
+      .delete(deliveryTypesTable)
+      .where(inArray(deliveryTypesTable.name, [sourceType, additionalType]));
+  }
 });

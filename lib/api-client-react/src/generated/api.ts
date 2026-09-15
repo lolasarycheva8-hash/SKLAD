@@ -18,6 +18,8 @@ import type {
 
 import type {
   AddDeliveryPhotoInput,
+  AdditionalDeliveryOrderInput,
+  AdditionalDeliveryOrderResult,
   AppUser,
   AuditLogPage,
   Category,
@@ -3092,6 +3094,97 @@ export const useUpdateDeliveriesActualBulk = <
   TContext
 > => {
   return useMutation(getUpdateDeliveriesActualBulkMutationOptions(options));
+};
+
+export const getCreateAdditionalDeliveryOrderUrl = (id: string) => {
+  return `/api/deliveries/${id}/additional-order`;
+};
+
+/**
+ * @summary Create an independent additional delivery order from an existing delivery
+ */
+export const createAdditionalDeliveryOrder = async (
+  id: string,
+  additionalDeliveryOrderInput: AdditionalDeliveryOrderInput,
+  options?: RequestInit,
+): Promise<AdditionalDeliveryOrderResult> => {
+  return customFetch<AdditionalDeliveryOrderResult>(
+    getCreateAdditionalDeliveryOrderUrl(id),
+    {
+      ...options,
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...options?.headers },
+      body: JSON.stringify(additionalDeliveryOrderInput),
+    },
+  );
+};
+
+export const getCreateAdditionalDeliveryOrderMutationOptions = <
+  TError = ErrorType<void>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createAdditionalDeliveryOrder>>,
+    TError,
+    { id: string; data: BodyType<AdditionalDeliveryOrderInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof createAdditionalDeliveryOrder>>,
+  TError,
+  { id: string; data: BodyType<AdditionalDeliveryOrderInput> },
+  TContext
+> => {
+  const mutationKey = ["createAdditionalDeliveryOrder"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof createAdditionalDeliveryOrder>>,
+    { id: string; data: BodyType<AdditionalDeliveryOrderInput> }
+  > = (props) => {
+    const { id, data } = props ?? {};
+
+    return createAdditionalDeliveryOrder(id, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type CreateAdditionalDeliveryOrderMutationResult = NonNullable<
+  Awaited<ReturnType<typeof createAdditionalDeliveryOrder>>
+>;
+export type CreateAdditionalDeliveryOrderMutationBody =
+  BodyType<AdditionalDeliveryOrderInput>;
+export type CreateAdditionalDeliveryOrderMutationError = ErrorType<void>;
+
+/**
+ * @summary Create an independent additional delivery order from an existing delivery
+ */
+export const useCreateAdditionalDeliveryOrder = <
+  TError = ErrorType<void>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createAdditionalDeliveryOrder>>,
+    TError,
+    { id: string; data: BodyType<AdditionalDeliveryOrderInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof createAdditionalDeliveryOrder>>,
+  TError,
+  { id: string; data: BodyType<AdditionalDeliveryOrderInput> },
+  TContext
+> => {
+  return useMutation(getCreateAdditionalDeliveryOrderMutationOptions(options));
 };
 
 export const getUpdateDeliveryUrl = (id: string) => {

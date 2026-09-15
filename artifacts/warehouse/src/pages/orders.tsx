@@ -26,7 +26,6 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import {
   Select,
@@ -47,7 +46,6 @@ import {
 import {
   Plus,
   Printer,
-  Trash2,
   Search,
   Filter,
   X,
@@ -56,6 +54,11 @@ import {
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { usePermissions } from "@/hooks/use-permissions";
+import {
+  EMPTY_ORDER_FORM_ITEM,
+  OrderFormFields,
+  type OrderFormItem,
+} from "@/components/order-form-fields";
 
 const dateFormatter = new Intl.DateTimeFormat("ru-RU", {
   day: "2-digit",
@@ -68,13 +71,7 @@ const currency = new Intl.NumberFormat("ru-RU", {
   maximumFractionDigits: 0,
 });
 
-type ItemRow = {
-  productId: string;
-  quantity: string;
-  price: string;
-};
-
-const EMPTY_ITEM: ItemRow = { productId: "", quantity: "1", price: "0" };
+type ItemRow = OrderFormItem;
 
 function getQueryParam(name: string): string | null {
   if (typeof window === "undefined") return null;
@@ -93,7 +90,9 @@ export default function Orders() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [clientId, setClientId] = useState("");
   const [note, setNote] = useState("");
-  const [items, setItems] = useState<ItemRow[]>([{ ...EMPTY_ITEM }]);
+  const [items, setItems] = useState<ItemRow[]>([
+    { ...EMPTY_ORDER_FORM_ITEM },
+  ]);
 
   const [search, setSearch] = useState("");
   const [clientFilter, setClientFilter] = useState("");
@@ -142,7 +141,7 @@ export default function Orders() {
   function openCreateDialog() {
     setClientId("");
     setNote("");
-    setItems([{ ...EMPTY_ITEM }]);
+    setItems([{ ...EMPTY_ORDER_FORM_ITEM }]);
     setDialogOpen(true);
   }
 
@@ -177,7 +176,7 @@ export default function Orders() {
   }
 
   function addItem() {
-    setItems((prev) => [...prev, { ...EMPTY_ITEM }]);
+    setItems((prev) => [...prev, { ...EMPTY_ORDER_FORM_ITEM }]);
   }
 
   function removeItem(index: number) {
@@ -207,12 +206,6 @@ export default function Orders() {
       },
     });
   }
-
-  const totalPreview = items.reduce((sum, item) => {
-    const qty = Number(item.quantity) || 0;
-    const price = Number(item.price) || 0;
-    return sum + qty * price;
-  }, 0);
 
   const filteredOrders = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -555,111 +548,19 @@ export default function Orders() {
             <DialogTitle>Новый заказ</DialogTitle>
           </DialogHeader>
           <form onSubmit={handleSubmit} className="space-y-4">
-            <div className="space-y-2">
-              <Label>Клиент</Label>
-              <Select value={clientId} onValueChange={setClientId} required>
-                <SelectTrigger data-testid="select-order-client">
-                  <SelectValue placeholder="Выберите клиента" />
-                </SelectTrigger>
-                <SelectContent>
-                  {(clients ?? []).map((client) => (
-                    <SelectItem key={client.id} value={client.id}>
-                      {client.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <Label>Позиции заказа</Label>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={addItem}
-                  data-testid="button-add-order-item"
-                >
-                  <Plus className="h-3.5 w-3.5 mr-1" />
-                  Добавить позицию
-                </Button>
-              </div>
-              <div className="space-y-2">
-                {items.map((item, index) => (
-                  <div key={index} className="flex items-center gap-2">
-                    <Select
-                      value={item.productId}
-                      onValueChange={(value) =>
-                        handleProductSelect(index, value)
-                      }
-                    >
-                      <SelectTrigger
-                        className="flex-1"
-                        data-testid={`select-order-item-product-${index}`}
-                      >
-                        <SelectValue placeholder="Товар" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {(products ?? []).map((product) => (
-                          <SelectItem key={product.id} value={product.id}>
-                            {product.name} ({product.unit})
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <Input
-                      type="number"
-                      min="0.01"
-                      step="0.01"
-                      className="w-24"
-                      placeholder="Кол-во"
-                      value={item.quantity}
-                      onChange={(e) =>
-                        updateItem(index, { quantity: e.target.value })
-                      }
-                      data-testid={`input-order-item-quantity-${index}`}
-                    />
-                    <Input
-                      type="number"
-                      className="w-28"
-                      placeholder="Цена"
-                      value={item.price}
-                      readOnly
-                      disabled
-                      title="Цена подтягивается из справочника товаров"
-                      data-testid={`input-order-item-price-${index}`}
-                    />
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => removeItem(index)}
-                      disabled={items.length === 1}
-                      data-testid={`button-remove-order-item-${index}`}
-                    >
-                      <Trash2 className="h-4 w-4 text-destructive" />
-                    </Button>
-                  </div>
-                ))}
-              </div>
-              <div className="text-sm text-muted-foreground text-right">
-                Итого:{" "}
-                <span className="font-medium text-foreground">
-                  {currency.format(totalPreview)}
-                </span>
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="note">Примечание</Label>
-              <Textarea
-                id="note"
-                value={note}
-                onChange={(e) => setNote(e.target.value)}
-                data-testid="input-order-note"
-              />
-            </div>
+            <OrderFormFields
+              clients={clients ?? []}
+              products={products ?? []}
+              clientId={clientId}
+              onClientChange={setClientId}
+              items={items}
+              onItemChange={updateItem}
+              onProductSelect={handleProductSelect}
+              onAddItem={addItem}
+              onRemoveItem={removeItem}
+              note={note}
+              onNoteChange={setNote}
+            />
 
             <DialogFooter>
               <Button

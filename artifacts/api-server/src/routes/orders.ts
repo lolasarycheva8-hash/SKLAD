@@ -8,6 +8,7 @@ import {
   productsTable,
   shipmentsTable,
   orderPaymentsTable,
+  deliveriesTable,
 } from "@workspace/db";
 import {
   ListOrdersQueryParams,
@@ -310,7 +311,34 @@ router.delete("/orders/:id", canEditOrders, async (req, res): Promise<void> => {
     return;
   }
 
-  const [order] = await db.delete(ordersTable).where(eq(ordersTable.id, params.data.id)).returning();
+  const [linkedDelivery] = await db
+    .select({ id: deliveriesTable.id })
+    .from(deliveriesTable)
+    .where(eq(deliveriesTable.orderId, params.data.id))
+    .limit(1);
+  if (linkedDelivery) {
+    res.status(409).json({ error: "Нельзя удалить заказ, связанный с доставкой" });
+    return;
+  }
+
+  let order: typeof ordersTable.$inferSelect | undefined;
+  try {
+    [order] = await db
+      .delete(ordersTable)
+      .where(eq(ordersTable.id, params.data.id))
+      .returning();
+  } catch (error) {
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      error.code === "23503"
+    ) {
+      res.status(409).json({ error: "Нельзя удалить заказ, связанный с доставкой" });
+      return;
+    }
+    throw error;
+  }
 
   if (!order) {
     res.status(404).json({ error: "Order not found" });

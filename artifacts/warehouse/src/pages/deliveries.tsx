@@ -18,6 +18,14 @@ import { DeliveryCreateForm } from "@/components/delivery-create-form";
 import { ManagerContactCell } from "@/components/manager-contact-cell";
 import { DriverSummarySheet } from "@/components/driver-summary-sheet";
 import { buildDriverSummary } from "@/lib/driver-summary";
+import {
+  AdditionalOrderDialog,
+} from "@/components/additional-order-dialog";
+import {
+  AdditionalOrderItems,
+  AdditionalOrderLabel,
+  isAdditionalDelivery,
+} from "@/components/additional-order-display";
 
 import {
   useListDeliveries,
@@ -37,6 +45,7 @@ import {
   getListMyDeliveriesQueryKey,
   getGetDeliveryDashboardSummaryQueryKey,
   getGetDashboardSummaryQueryKey,
+  getListOrdersQueryKey,
   type Delivery,
 } from "@workspace/api-client-react";
 import {
@@ -113,6 +122,10 @@ import {
   type DeliveryImportMode,
   type DeliveryImportReview,
 } from "@/lib/delivery-workspace";
+import {
+  buildAdditionalOrderMatrixRows,
+  type AdditionalOrderMatrixRow,
+} from "@/lib/additional-order-matrix";
 import {
   CalendarClock,
   Check,
@@ -586,6 +599,8 @@ export default function Deliveries() {
   const [logisticianNoteDraft, setLogisticianNoteDraft] = useState("");
   const [driverCommentTarget, setDriverCommentTarget] =
     useState<Delivery | null>(null);
+  const [additionalOrderTarget, setAdditionalOrderTarget] =
+    useState<JoinedDelivery | null>(null);
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
 
   const queryClient = useQueryClient();
@@ -593,8 +608,16 @@ export default function Deliveries() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const factFileInputRef = useRef<HTMLInputElement>(null);
   const [importingFacts, setImportingFacts] = useState(false);
-  const { user, canEdit, isAdmin, canApproveDeliveryActs } = usePermissions();
+  const {
+    user,
+    canEdit,
+    canView,
+    isAdmin,
+    canApproveDeliveryActs,
+  } = usePermissions();
   const canEditDeliveries = canEdit("deliveries");
+  const canViewOrders =
+    typeof canView === "function" && canView("orders");
   const canViewArchivedDeliveries = canEditDeliveries;
   const canEditCorrectedPlan =
     canEditDeliveries && (isAdmin || user?.role === "logistician");
@@ -820,9 +843,18 @@ export default function Deliveries() {
     arr.sort((a, b) => {
       const valA = (a as any)[field] || "";
       const valB = (b as any)[field] || "";
-      if (typeof valA === "number" && typeof valB === "number")
-        return (valA - valB) * mult;
-      return String(valA).localeCompare(String(valB)) * mult;
+      const result =
+        typeof valA === "number" && typeof valB === "number"
+          ? (valA - valB) * mult
+          : String(valA).localeCompare(String(valB)) * mult;
+      if (result !== 0) return result;
+
+      // Keep a child immediately after its parent whenever the selected
+      // sort field leaves the two rows tied. Date/status filters still apply
+      // to each row independently.
+      if (a.parentDeliveryId === b.id) return 1;
+      if (b.parentDeliveryId === a.id) return -1;
+      return 0;
     });
     return arr;
   }, [filteredData, sortConfig]);
@@ -885,6 +917,11 @@ export default function Deliveries() {
     queryClient.invalidateQueries({
       queryKey: getListMyDeliveriesQueryKey(),
     });
+  };
+
+  const invalidateAfterAdditionalOrder = () => {
+    invalidate();
+    queryClient.invalidateQueries({ queryKey: getListOrdersQueryKey() });
   };
 
   const createDelivery = useCreateDelivery({
@@ -1351,35 +1388,8 @@ export default function Deliveries() {
   ).getDate();
   const days = Array.from({ length: daysInMonth }, (_, i) => i + 1);
 
-  const matrixRows = useMemo(() => {
-    const map = new Map<
-      string,
-      {
-        key: string;
-        siteId: string;
-        siteName: string;
-        driver: string;
-        client: string;
-        deliveries: JoinedDelivery[];
-      }
-    >();
-    for (const d of scheduleFilteredData) {
-      const key = `${d.siteId}-${d.driver}`;
-      if (!map.has(key)) {
-        map.set(key, {
-          key,
-          siteId: d.siteId,
-          siteName: d.siteName,
-          driver: d.driver,
-          client: d.siteClient,
-          deliveries: [],
-        });
-      }
-      map.get(key)!.deliveries.push(d);
-    }
-    return Array.from(map.values()).sort((a, b) =>
-      a.siteName.localeCompare(b.siteName)
-    );
+  const matrixRows = useMemo<AdditionalOrderMatrixRow<JoinedDelivery>[]>(() => {
+    return buildAdditionalOrderMatrixRows(scheduleFilteredData);
   }, [scheduleFilteredData]);
 
   const undatedCount = useMemo(
@@ -2104,6 +2114,12 @@ export default function Deliveries() {
                           ? (d) => setDeleteTarget(d)
                           : undefined
                       }
+                      onAddAdditionalOrder={
+                        canEditDeliveries && !isAdditionalDelivery(delivery)
+                          ? (d) => setAdditionalOrderTarget(d)
+                          : undefined
+                      }
+                      canViewOrders={canViewOrders}
                     />
                   ))}
                   {visibleSitesWithoutDeliveries.length > 0 && (
@@ -2261,6 +2277,18 @@ export default function Deliveries() {
                         >
                           {d.siteName}
                         </Link>
+                        {(d.hasAdditionalOrders || isAdditionalDelivery(d)) && (
+                          <div className="mt-1 flex flex-col items-start gap-1">
+                            <AdditionalOrderLabel
+                              delivery={d}
+                              canViewOrders={canViewOrders}
+                            />
+                            <AdditionalOrderItems
+                              items={d.additionalOrderItems}
+                              compact
+                            />
+                          </div>
+                        )}
                       </td>
                       <td className="p-2 font-bold" title={d.driver}>
                         {canEditDeliveries && !d.actualDate ? (
@@ -2457,6 +2485,18 @@ export default function Deliveries() {
                               </Button>
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="end">
+                              {canEditDeliveries && !isAdditionalDelivery(d) && (
+                                <>
+                                  <DropdownMenuItem
+                                    onClick={() => setAdditionalOrderTarget(d)}
+                                    data-testid={`button-additional-order-${d.id}`}
+                                  >
+                                    <Plus className="h-4 w-4 mr-2" />
+                                    Добавить доп.заказ
+                                  </DropdownMenuItem>
+                                  <DropdownMenuSeparator />
+                                </>
+                              )}
                               {canEditDeliveries &&
                                 canRescheduleDelivery(d.actualDate) && (
                                 <>
@@ -2762,6 +2802,44 @@ export default function Deliveries() {
                       >
                         {row.siteName}
                       </Link>
+                      {row.hasAdditionalOrder && (
+                        <div className="mt-1 flex flex-col items-start gap-1">
+                          {row.additionalOrderDeliveries.length > 0 ? (
+                            row.additionalOrderDeliveries.map((additionalDelivery) => (
+                              <div
+                                key={additionalDelivery.id}
+                                className="flex flex-col items-start gap-0.5"
+                              >
+                                <div className="flex flex-wrap items-center gap-1">
+                                  <AdditionalOrderLabel
+                                    delivery={additionalDelivery}
+                                    canViewOrders={canViewOrders}
+                                  />
+                                  <span className="text-[10px] text-muted-foreground">
+                                    {additionalDelivery.plannedDate
+                                      ? dateFormat.format(
+                                          new Date(additionalDelivery.plannedDate),
+                                        )
+                                      : "Без даты"}{" "}
+                                    ·{" "}
+                                    {additionalDelivery.deliveryType ||
+                                      "Тип не указан"}
+                                  </span>
+                                </div>
+                                <AdditionalOrderItems
+                                  items={additionalDelivery.additionalOrderItems}
+                                  compact
+                                />
+                              </div>
+                            ))
+                          ) : (
+                            <AdditionalOrderLabel
+                              delivery={{ hasAdditionalOrders: true }}
+                              canViewOrders={canViewOrders}
+                            />
+                          )}
+                        </div>
+                      )}
                     </td>
                     <td
                       className="sticky left-[160px] z-20 w-[180px] min-w-[180px] truncate bg-background p-2 transition-colors group-hover:bg-muted/50"
@@ -2861,6 +2939,21 @@ export default function Deliveries() {
       )}
 
       {/* Dialogs */}
+      {additionalOrderTarget && (
+        <AdditionalOrderDialog
+          delivery={additionalOrderTarget}
+          open
+          onCancel={() => setAdditionalOrderTarget(null)}
+          onSuccess={(result) => {
+            invalidateAfterAdditionalOrder();
+            setAdditionalOrderTarget(null);
+            toast({
+              title: "Дополнительный заказ создан",
+              description: `Доставка ${result.deliveryId.slice(0, 8)} добавлена в график.`,
+            });
+          }}
+        />
+      )}
       <Dialog
         open={!!logisticianNoteTarget}
         onOpenChange={(open) => !open && closeLogisticianNoteDialog()}

@@ -19,6 +19,13 @@ import { usePermissions } from "@/hooks/use-permissions";
 import { DeliveryPhotosDialog } from "@/components/delivery-photos-dialog";
 import { DeliveryCommentDialog } from "@/components/delivery-comment-dialog";
 import { cn } from "@/lib/utils";
+import {
+  AdditionalOrderItems,
+  AdditionalOrderLabel,
+  isAdditionalDelivery,
+} from "@/components/additional-order-display";
+
+type MyAdditionalDelivery = Delivery;
 
 function isoDate(d: Date): string {
   const y = d.getFullYear();
@@ -74,7 +81,9 @@ function managerPhoneHref(contact: string | null | undefined): string | null {
 }
 
 export default function MyDeliveries() {
-  const { user } = usePermissions();
+  const { user, canView } = usePermissions();
+  const canViewOrders =
+    typeof canView === "function" && canView("orders");
   const [selectedDate, setSelectedDate] = useState(todayStr);
   const [search, setSearch] = useState("");
   const [activeFilter, setActiveFilter] = useState<"all" | "planned" | "done" | "closed" | "not_completed">("all");
@@ -263,6 +272,7 @@ export default function MyDeliveries() {
           </div>
         ) : (
           filtered.map(d => {
+            const additionalDelivery = d as MyAdditionalDelivery;
             const isOverdue = d.plannedDate !== null && d.plannedDate < todayStr;
             const phoneHref = managerPhoneHref(d.managerContact);
             let toneBorderColor = "border-slate-200";
@@ -278,12 +288,27 @@ export default function MyDeliveries() {
               >
                 <div className="p-3 sm:p-4">
                   <div className="mb-1 flex items-start justify-between gap-2">
-                    <h3
+                    <div className="min-w-0 flex-1">
+                      <h3
                       data-testid={`delivery-site-name-${d.id}`}
                       className="min-w-0 break-words text-[16px] font-bold leading-tight text-slate-900 [overflow-wrap:anywhere]"
-                    >
-                      {d.siteName}
-                    </h3>
+                      >
+                        {d.siteName}
+                      </h3>
+                      {(additionalDelivery.hasAdditionalOrders ||
+                        isAdditionalDelivery(additionalDelivery)) && (
+                        <div className="mt-1 flex flex-col items-start gap-1">
+                          <AdditionalOrderLabel
+                            delivery={additionalDelivery}
+                            canViewOrders={canViewOrders}
+                          />
+                          <AdditionalOrderItems
+                            items={additionalDelivery.additionalOrderItems}
+                            compact
+                          />
+                        </div>
+                      )}
+                    </div>
                     <div className="flex shrink-0 items-center gap-1">
                       {phoneHref && (
                         <Button

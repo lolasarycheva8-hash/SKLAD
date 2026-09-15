@@ -19,6 +19,10 @@ import {
   deliveryTypesTable,
   sitesTable,
   appUsersTable,
+  clientsTable,
+  ordersTable,
+  orderItemsTable,
+  productsTable,
 } from "@workspace/db";
 import {
   ListDeliveriesQueryParams,
@@ -50,8 +54,16 @@ import {
   DeleteDeliveryPhotoParams,
   ListDeliverySiteLookupResponse,
   ListDeliveryTypeLookupResponse,
+  CreateAdditionalDeliveryOrderParams,
+  CreateAdditionalDeliveryOrderBody,
+  CreateAdditionalDeliveryOrderResponse,
 } from "@workspace/api-zod";
-import { toDeliveryDto, monthRange, photosCountMap } from "../lib/deliveries";
+import {
+  toDeliveryDto,
+  monthRange,
+  photosCountMap,
+  deliveryDtoEnrichmentMap,
+} from "../lib/deliveries";
 import { isPostgresConstraintError } from "../lib/postgres-errors";
 import {
   requireAdmin,
@@ -529,6 +541,8 @@ const DELIVERY_UNIQUE_CONSTRAINTS = new Set([
   "deliveries_owned_undated_uq",
   "deliveries_owned_dated_active_uq",
   "deliveries_owned_undated_active_uq",
+  "deliveries_primary_dated_active_uq",
+  "deliveries_primary_undated_active_uq",
 ]);
 
 export function isDeliveryScheduleUniqueViolation(error: unknown): boolean {
@@ -677,6 +691,8 @@ router.get(
         delivery: deliveriesTable,
         siteName: sitesTable.name,
         siteAddress: sitesTable.address,
+        clientId: sitesTable.clientId,
+        clientName: sitesTable.client,
         driverName: appUsersTable.name,
         driverEmail: appUsersTable.email,
       })
@@ -690,6 +706,9 @@ router.get(
       .orderBy(sql`${deliveriesTable.plannedDate} asc nulls last`);
 
     const counts = await photosCountMap(rows.map((row) => row.delivery.id));
+    const enrichment = await deliveryDtoEnrichmentMap(
+      rows.map((row) => row.delivery.id),
+    );
     let dtos = rows.map((row) =>
       toDeliveryDto(
         row.delivery,
@@ -697,6 +716,12 @@ router.get(
         row.siteAddress,
         counts.get(row.delivery.id) ?? 0,
         row.driverName || row.driverEmail || "Не назначен",
+        null,
+        {
+          ...(enrichment.get(row.delivery.id) ?? {}),
+          clientId: row.clientId,
+          clientName: row.clientName,
+        },
       ),
     );
 
@@ -809,6 +834,7 @@ router.post(
       throw error;
     }
 
+    const enrichment = await deliveryDtoEnrichmentMap([delivery.id]);
     res
       .status(201)
       .json(
@@ -819,9 +845,299 @@ router.post(
             site.address,
             0,
             await getDriverName(delivery.driverUserId),
+            null,
+            {
+              ...(enrichment.get(delivery.id) ?? {}),
+              clientId: site.clientId,
+              clientName: site.client,
+            },
           ),
         ),
       );
+  },
+);
+
+function normalizedOrderItems(
+  items: Array<{ productId: string; quantity: number }>,
+): string {
+  return [...new Map(
+    items.map((item) => [
+      item.productId,
+      (Number(
+        items
+          .filter((candidate) => candidate.productId === item.productId)
+          .reduce((sum, candidate) => sum + candidate.quantity, 0),
+      )).toFixed(6),
+    ]),
+  )]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([productId, quantity]) => `${productId}:${quantity}`)
+    .join("|");
+}
+
+router.post(
+  "/deliveries/:id/additional-order",
+  canEditDeliveries,
+  async (req, res): Promise<void> => {
+    const params = CreateAdditionalDeliveryOrderParams.safeParse(req.params);
+    if (!params.success) {
+      res.status(400).json({ error: params.error.message });
+      return;
+    }
+    const parsed = CreateAdditionalDeliveryOrderBody.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: parsed.error.message });
+      return;
+    }
+
+    // Read the routing keys without locks first. The transaction then locks
+    // client -> site -> delivery, matching the site/client mutation order and
+    // rechecks every value before creating either row.
+    const [initialSource] = await db
+      .select({ siteId: deliveriesTable.siteId })
+      .from(deliveriesTable)
+      .where(eq(deliveriesTable.id, params.data.id))
+      .limit(1);
+    if (!initialSource) {
+      res.status(404).json({ error: "Доставка не найдена" });
+      return;
+    }
+    const [initialSite] = await db
+      .select({ id: sitesTable.id, clientId: sitesTable.clientId })
+      .from(sitesTable)
+      .where(eq(sitesTable.id, initialSource.siteId))
+      .limit(1);
+    if (!initialSite) {
+      res.status(404).json({ error: "Объект доставки не найден" });
+      return;
+    }
+
+    let outcome;
+    try {
+      outcome = await db.transaction(async (tx) => {
+      const [client] = await tx
+        .select({ id: clientsTable.id })
+        .from(clientsTable)
+        .where(eq(clientsTable.id, initialSite.clientId))
+        .for("update")
+        .limit(1);
+      if (!client) return { status: 409 as const, reason: "client" as const };
+
+      const [site] = await tx
+        .select()
+        .from(sitesTable)
+        .where(eq(sitesTable.id, initialSite.id))
+        .for("update")
+        .limit(1);
+      if (!site) return { status: 404 as const, reason: "site" as const };
+      if (site.clientId !== initialSite.clientId) {
+        return { status: 409 as const, reason: "site-changed" as const };
+      }
+
+      const [source] = await tx
+        .select()
+        .from(deliveriesTable)
+        .where(eq(deliveriesTable.id, params.data.id))
+        .for("update")
+        .limit(1);
+      if (!source) return { status: 404 as const, reason: "source" as const };
+      if (source.parentDeliveryId || source.orderId) {
+        return { status: 409 as const, reason: "not-primary" as const };
+      }
+      if (source.archivedAt) {
+        return { status: 409 as const, reason: "archived" as const };
+      }
+      if (source.deletionPendingAt) {
+        return { status: 409 as const, reason: "deleting" as const };
+      }
+      if (source.siteId !== site.id) {
+        return { status: 409 as const, reason: "site-changed" as const };
+      }
+      if (site.closedFrom) {
+        return { status: 409 as const, reason: "site-closed" as const };
+      }
+
+      if (
+        source.driverUserId &&
+        (await findInvalidDriverUserIds([source.driverUserId], tx)).length > 0
+      ) {
+        return { status: 409 as const, reason: "driver" as const };
+      }
+
+      const deliveryType = parsed.data.deliveryType.trim();
+      if (!deliveryType) {
+        return { status: 400 as const, reason: "delivery-type" as const };
+      }
+      const [knownType] = await tx
+        .select({ name: deliveryTypesTable.name })
+        .from(deliveryTypesTable)
+        .where(eq(deliveryTypesTable.name, deliveryType))
+        .limit(1);
+      if (!knownType) {
+        return { status: 400 as const, reason: "unknown-delivery-type" as const };
+      }
+      const sourceDeliveryType = source.deliveryType ?? site.deliveryType;
+      if (deliveryType === sourceDeliveryType) {
+        return { status: 400 as const, reason: "same-delivery-type" as const };
+      }
+
+      const [existingRequest] = await tx
+        .select()
+        .from(deliveriesTable)
+        .where(eq(deliveriesTable.id, parsed.data.requestId))
+        .for("update")
+        .limit(1);
+      if (existingRequest) {
+        if (
+          existingRequest.parentDeliveryId !== source.id ||
+          !existingRequest.orderId
+        ) {
+          return { status: 409 as const, reason: "request-conflict" as const };
+        }
+        const [existingOrder] = await tx
+          .select()
+          .from(ordersTable)
+          .where(eq(ordersTable.id, existingRequest.orderId))
+          .limit(1);
+        if (!existingOrder) {
+          return { status: 409 as const, reason: "request-conflict" as const };
+        }
+        const existingItems = await tx
+          .select({
+            productId: orderItemsTable.productId,
+            quantity: orderItemsTable.quantity,
+          })
+          .from(orderItemsTable)
+          .where(eq(orderItemsTable.orderId, existingOrder.id));
+        const requestedItems = parsed.data.items.map((item) => ({
+          productId: item.productId,
+          quantity: item.quantity,
+        }));
+        if (
+          existingRequest.deliveryType !== deliveryType ||
+          (existingOrder.note ?? null) !== (parsed.data.note ?? null) ||
+          normalizedOrderItems(
+            existingItems.map((item) => ({
+              productId: item.productId,
+              quantity: Number(item.quantity),
+            })),
+          ) !== normalizedOrderItems(requestedItems)
+        ) {
+          return { status: 409 as const, reason: "request-conflict" as const };
+        }
+        return {
+          status: 200 as const,
+          orderId: existingOrder.id,
+          deliveryId: existingRequest.id,
+        };
+      }
+
+      const productIds = [...new Set(parsed.data.items.map((item) => item.productId))];
+      const products = await tx
+        .select()
+        .from(productsTable)
+        .where(inArray(productsTable.id, productIds));
+      const productMap = new Map(products.map((product) => [product.id, product]));
+      if (products.length !== productIds.length) {
+        return { status: 404 as const, reason: "products" as const };
+      }
+
+      const [order] = await tx
+        .insert(ordersTable)
+        .values({
+          clientId: client.id,
+          isPaid: false,
+          note: parsed.data.note ?? null,
+        })
+        .returning();
+      await tx.insert(orderItemsTable).values(
+        parsed.data.items.map((item) => ({
+          orderId: order.id,
+          productId: item.productId,
+          quantity: String(item.quantity),
+          price: String(productMap.get(item.productId)!.price),
+        })),
+      );
+      const [delivery] = await tx
+        .insert(deliveriesTable)
+        .values({
+          id: parsed.data.requestId,
+          siteId: source.siteId,
+          parentDeliveryId: source.id,
+          orderId: order.id,
+          driverUserId: source.driverUserId,
+          plannedDate: source.plannedDate,
+          correctedPlannedDate: source.correctedPlannedDate,
+          deliveryType,
+          scheduleMonth: source.scheduleMonth,
+          logisticianNote: source.logisticianNote,
+        })
+        .returning();
+      return {
+        status: 201 as const,
+        orderId: order.id,
+        deliveryId: delivery.id,
+      };
+      });
+    } catch (error) {
+      if (
+        isPostgresConstraintError(error, {
+          code: "23505",
+          constraint: "deliveries_pkey",
+        })
+      ) {
+        res.status(409).json({
+          error: "requestId уже использован для другой дополнительной доставки",
+        });
+        return;
+      }
+      throw error;
+    }
+
+    if (outcome.status === 404) {
+      res
+        .status(404)
+        .json({ error: outcome.reason === "products" ? "Products not found" : "Доставка не найдена" });
+      return;
+    }
+    if (outcome.status === 400) {
+      res.status(400).json({
+        error:
+          outcome.reason === "unknown-delivery-type"
+            ? "Выбранный тип поставки отсутствует в справочнике"
+            : outcome.reason === "same-delivery-type"
+              ? "Тип дополнительной доставки должен отличаться от исходной"
+              : "Тип дополнительной доставки не может быть пустым",
+      });
+      return;
+    }
+    if (outcome.status === 409) {
+      const error =
+        outcome.reason === "archived"
+          ? "Архивная доставка недоступна для изменения"
+          : outcome.reason === "deleting"
+            ? "Доставка уже подготовлена к физическому удалению"
+            : outcome.reason === "not-primary"
+              ? "Дополнительный заказ можно создать только из основной доставки"
+            : outcome.reason === "site-closed"
+              ? "Нельзя создать заказ для отключённого объекта"
+              : outcome.reason === "driver"
+                ? "Водитель исходной доставки больше не активен"
+                : outcome.reason === "request-conflict"
+                  ? "requestId уже использован для другой дополнительной доставки"
+                  : outcome.reason === "site-changed"
+                    ? "Состояние клиента объекта изменилось, повторите отправку"
+                    : "Клиент объекта недоступен";
+      res.status(409).json({ error });
+      return;
+    }
+
+    res.status(outcome.status).json(
+      CreateAdditionalDeliveryOrderResponse.parse({
+        orderId: outcome.orderId,
+        deliveryId: outcome.deliveryId,
+      }),
+    );
   },
 );
 
@@ -937,7 +1253,12 @@ router.post(
         scheduleMonth: deliveriesTable.scheduleMonth,
       })
       .from(deliveriesTable)
-      .where(isNull(deliveriesTable.archivedAt));
+      .where(
+        and(
+          isNull(deliveriesTable.archivedAt),
+          isNull(deliveriesTable.orderId),
+        ),
+      );
     const existingKeys = new Set(
       existingDeliveries.map(
         (delivery) =>
@@ -983,16 +1304,26 @@ router.post(
       throw error;
     }
 
+    const enrichment = await deliveryDtoEnrichmentMap(
+      inserted.map((row) => row.id),
+    );
     const dtos = await Promise.all(
-      inserted.map(async (row) =>
-        toDeliveryDto(
+      inserted.map(async (row) => {
+        const site = siteMap.get(row.siteId)!;
+        return toDeliveryDto(
           row,
-          siteMap.get(row.siteId)!.name,
-          siteMap.get(row.siteId)!.address,
+          site.name,
+          site.address,
           0,
           await getDriverName(row.driverUserId),
-        ),
-      ),
+          null,
+          {
+            ...(enrichment.get(row.id) ?? {}),
+            clientId: site.clientId,
+            clientName: site.client,
+          },
+        );
+      }),
     );
 
     res.status(201).json(CreateDeliveriesBulkResponse.parse(dtos));
@@ -1211,7 +1542,11 @@ router.post(
           })
           .from(deliveriesTable)
           .where(
-            and(monthCondition(parsed.data.month), isNull(deliveriesTable.archivedAt)),
+            and(
+              monthCondition(parsed.data.month),
+              isNull(deliveriesTable.archivedAt),
+              isNull(deliveriesTable.orderId),
+            ),
           )
           .for("update");
         const existingIds = existingDeliveries
@@ -1359,16 +1694,26 @@ router.post(
     }
     const inserted = replacement.inserted;
 
+    const enrichment = await deliveryDtoEnrichmentMap(
+      inserted.map((row) => row.id),
+    );
     const dtos = await Promise.all(
-      inserted.map(async (row) =>
-        toDeliveryDto(
+      inserted.map(async (row) => {
+        const site = siteMap.get(row.siteId)!;
+        return toDeliveryDto(
           row,
-          siteMap.get(row.siteId)!.name,
-          siteMap.get(row.siteId)!.address,
+          site.name,
+          site.address,
           0,
           await getDriverName(row.driverUserId),
-        ),
-      ),
+          null,
+          {
+            ...(enrichment.get(row.id) ?? {}),
+            clientId: site.clientId,
+            clientName: site.client,
+          },
+        );
+      }),
     );
     res.status(201).json(ReplaceDeliveriesBulkResponse.parse(dtos));
   },
@@ -1591,6 +1936,7 @@ router.patch(
       .from(sitesTable)
       .where(eq(sitesTable.id, delivery.siteId));
     const counts = await photosCountMap([delivery.id]);
+    const enrichment = await deliveryDtoEnrichmentMap([delivery.id]);
 
     res.json(
       UpdateDeliveryResponse.parse(
@@ -1600,6 +1946,12 @@ router.patch(
           site?.address ?? "",
           counts.get(delivery.id) ?? 0,
           await getDriverName(delivery.driverUserId),
+          null,
+          {
+            ...(enrichment.get(delivery.id) ?? {}),
+            clientId: site?.clientId ?? null,
+            clientName: site?.client ?? null,
+          },
         ),
       ),
     );
@@ -1681,6 +2033,7 @@ router.post(
       .from(sitesTable)
       .where(eq(sitesTable.id, delivery.siteId));
     const counts = await photosCountMap([delivery.id]);
+    const enrichment = await deliveryDtoEnrichmentMap([delivery.id]);
     res.json(
       RestoreDeliveryResponse.parse(
         toDeliveryDto(
@@ -1689,6 +2042,12 @@ router.post(
           site?.address ?? "",
           counts.get(delivery.id) ?? 0,
           await getDriverName(delivery.driverUserId),
+          null,
+          {
+            ...(enrichment.get(delivery.id) ?? {}),
+            clientId: site?.clientId ?? null,
+            clientName: site?.client ?? null,
+          },
         ),
       ),
     );
@@ -1777,6 +2136,7 @@ router.post(
       .from(sitesTable)
       .where(eq(sitesTable.id, delivery.siteId));
     const counts = await photosCountMap([delivery.id]);
+    const enrichment = await deliveryDtoEnrichmentMap([delivery.id]);
     res.json(
       RescheduleDeliveryResponse.parse(
         toDeliveryDto(
@@ -1785,6 +2145,12 @@ router.post(
           site?.address ?? "",
           counts.get(delivery.id) ?? 0,
           await getDriverName(delivery.driverUserId),
+          null,
+          {
+            ...(enrichment.get(delivery.id) ?? {}),
+            clientId: site?.clientId ?? null,
+            clientName: site?.client ?? null,
+          },
         ),
       ),
     );
@@ -1864,6 +2230,7 @@ router.post(
       .from(sitesTable)
       .where(eq(sitesTable.id, outcome.delivery.siteId));
     const counts = await photosCountMap([outcome.delivery.id]);
+    const enrichment = await deliveryDtoEnrichmentMap([outcome.delivery.id]);
     req.log.info(
       { deliveryId: outcome.delivery.id, approvedBy: req.appUser.id },
       "Delivery act approved",
@@ -1876,6 +2243,12 @@ router.post(
           site?.address ?? "",
           counts.get(outcome.delivery.id) ?? 0,
           await getDriverName(outcome.delivery.driverUserId),
+          null,
+          {
+            ...(enrichment.get(outcome.delivery.id) ?? {}),
+            clientId: site?.clientId ?? null,
+            clientName: site?.client ?? null,
+          },
         ),
       ),
     );

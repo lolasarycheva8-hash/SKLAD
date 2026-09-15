@@ -50,6 +50,33 @@ export function requireSectionAccess(section: Section) {
   return requireAnySectionAccess([section]);
 }
 
+/**
+ * Product cards are needed by the additional-order form for delivery editors,
+ * but the existing order lookup must remain available to users who can access
+ * the standalone orders section. Drivers and read-only users must not receive
+ * the catalogue through this endpoint.
+ */
+export function requireOrderProductLookup(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): void {
+  const user = req.appUser;
+  if (
+    user &&
+    !isDriverUser(user) &&
+    (user.role === "admin" ||
+      (user.role === "logistician" &&
+        (user.editableSections.includes("orders") ||
+          user.editableSections.includes("deliveries"))) ||
+      (user.role === "manager" && user.editableSections.includes("orders")))
+  ) {
+    next();
+    return;
+  }
+  res.status(403).json({ error: "Раздел недоступен" });
+}
+
 export function requireDeliveryActApproval(
   req: Request,
   res: Response,

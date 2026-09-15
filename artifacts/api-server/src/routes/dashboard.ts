@@ -7,7 +7,13 @@ import {
   GetDeliveryDashboardSummaryResponse,
 } from "@workspace/api-zod";
 import { getCurrentStockMap } from "../lib/stock";
-import { toDeliveryDto, monthRange, currentMonth, todayLocalISO } from "../lib/deliveries";
+import {
+  toDeliveryDto,
+  monthRange,
+  currentMonth,
+  todayLocalISO,
+  deliveryDtoEnrichmentMap,
+} from "../lib/deliveries";
 import { cached } from "../lib/cache";
 import { requireAdmin } from "../middlewares/requirePermission";
 
@@ -29,6 +35,8 @@ router.get("/dashboard/delivery-summary", async (req, res): Promise<void> => {
       delivery: deliveriesTable,
       siteName: sitesTable.name,
       siteAddress: sitesTable.address,
+      clientId: sitesTable.clientId,
+      clientName: sitesTable.client,
       driverName: appUsersTable.name,
       driverEmail: appUsersTable.email,
     })
@@ -48,12 +56,21 @@ router.get("/dashboard/delivery-summary", async (req, res): Promise<void> => {
     ))
     .orderBy(sql`${deliveriesTable.plannedDate} asc nulls last`);
 
+  const enrichment = await deliveryDtoEnrichmentMap(
+    rows.map((row) => row.delivery.id),
+  );
   const dtos = rows.map((row) => toDeliveryDto(
     row.delivery,
     row.siteName,
     row.siteAddress,
     0,
     row.driverName || row.driverEmail || "Не назначен",
+    null,
+    {
+      ...(enrichment.get(row.delivery.id) ?? {}),
+      clientId: row.clientId,
+      clientName: row.clientName,
+    },
   ));
 
   const totalScheduled = dtos.length;
@@ -97,6 +114,8 @@ router.get("/dashboard/delivery-summary", async (req, res): Promise<void> => {
       delivery: deliveriesTable,
       siteName: sitesTable.name,
       siteAddress: sitesTable.address,
+      clientId: sitesTable.clientId,
+      clientName: sitesTable.client,
       driverName: appUsersTable.name,
       driverEmail: appUsersTable.email,
     })
@@ -111,6 +130,9 @@ router.get("/dashboard/delivery-summary", async (req, res): Promise<void> => {
     );
 
   const todayTotal = todayRows.length;
+  const todayEnrichment = await deliveryDtoEnrichmentMap(
+    todayRows.map((row) => row.delivery.id),
+  );
   const todayDeliveries = todayRows
     .map((row) => toDeliveryDto(
       row.delivery,
@@ -118,6 +140,12 @@ router.get("/dashboard/delivery-summary", async (req, res): Promise<void> => {
       row.siteAddress,
       0,
       row.driverName || row.driverEmail || "Не назначен",
+      null,
+      {
+        ...(todayEnrichment.get(row.delivery.id) ?? {}),
+        clientId: row.clientId,
+        clientName: row.clientName,
+      },
     ))
     .sort((a, b) => a.driver.localeCompare(b.driver) || a.siteName.localeCompare(b.siteName));
   const todayDriverMap = new Map<string, { count: number; done: number }>();

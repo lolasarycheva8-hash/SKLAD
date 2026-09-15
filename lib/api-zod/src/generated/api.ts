@@ -1345,18 +1345,38 @@ export const ListDeliveriesQueryParams = zod.object({
 export const listDeliveriesResponseScheduleMonthRegExp = new RegExp(
   "^\\d{4}-(0[1-9]|1[0-2])$",
 );
+export const listDeliveriesResponseAdditionalOrderItemsItemQuantityExclusiveMin = 0;
 
 export const ListDeliveriesResponseItem = zod.object({
   id: zod.string(),
   siteId: zod.string(),
   siteName: zod.string(),
   siteAddress: zod.string(),
+  clientId: zod
+    .string()
+    .uuid()
+    .nullish()
+    .describe("Current client resolved from the delivery site"),
+  clientName: zod
+    .string()
+    .nullish()
+    .describe("Current client name resolved from the delivery site"),
   managerContact: zod
     .string()
     .nullish()
     .describe("Телефон менеджера объекта для связи с водителем"),
   driverUserId: zod.string().uuid().nullable(),
   driver: zod.string(),
+  parentDeliveryId: zod
+    .string()
+    .uuid()
+    .nullish()
+    .describe("Parent delivery for an additional order"),
+  orderId: zod
+    .string()
+    .uuid()
+    .nullish()
+    .describe("Client order linked to an additional delivery"),
   plannedDate: zod.coerce
     .date()
     .nullable()
@@ -1420,6 +1440,22 @@ export const ListDeliveriesResponseItem = zod.object({
   createdAt: zod.coerce.date(),
   archivedAt: zod.coerce.date().nullable(),
   archivedByName: zod.string().nullable(),
+  additionalOrderItems: zod
+    .array(
+      zod.object({
+        productId: zod.string().uuid(),
+        productName: zod.string(),
+        quantity: zod
+          .number()
+          .gt(
+            listDeliveriesResponseAdditionalOrderItemsItemQuantityExclusiveMin,
+          ),
+        unit: zod.string(),
+      }),
+    )
+    .nullish()
+    .describe("Additional-order contents without prices"),
+  hasAdditionalOrders: zod.boolean().optional(),
 });
 export const ListDeliveriesResponse = zod.array(ListDeliveriesResponseItem);
 
@@ -1454,18 +1490,38 @@ export const CreateDeliveryBody = zod.object({
 export const createDeliveryResponseScheduleMonthRegExp = new RegExp(
   "^\\d{4}-(0[1-9]|1[0-2])$",
 );
+export const createDeliveryResponseAdditionalOrderItemsItemQuantityExclusiveMin = 0;
 
 export const CreateDeliveryResponse = zod.object({
   id: zod.string(),
   siteId: zod.string(),
   siteName: zod.string(),
   siteAddress: zod.string(),
+  clientId: zod
+    .string()
+    .uuid()
+    .nullish()
+    .describe("Current client resolved from the delivery site"),
+  clientName: zod
+    .string()
+    .nullish()
+    .describe("Current client name resolved from the delivery site"),
   managerContact: zod
     .string()
     .nullish()
     .describe("Телефон менеджера объекта для связи с водителем"),
   driverUserId: zod.string().uuid().nullable(),
   driver: zod.string(),
+  parentDeliveryId: zod
+    .string()
+    .uuid()
+    .nullish()
+    .describe("Parent delivery for an additional order"),
+  orderId: zod
+    .string()
+    .uuid()
+    .nullish()
+    .describe("Client order linked to an additional delivery"),
   plannedDate: zod.coerce
     .date()
     .nullable()
@@ -1529,6 +1585,22 @@ export const CreateDeliveryResponse = zod.object({
   createdAt: zod.coerce.date(),
   archivedAt: zod.coerce.date().nullable(),
   archivedByName: zod.string().nullable(),
+  additionalOrderItems: zod
+    .array(
+      zod.object({
+        productId: zod.string().uuid(),
+        productName: zod.string(),
+        quantity: zod
+          .number()
+          .gt(
+            createDeliveryResponseAdditionalOrderItemsItemQuantityExclusiveMin,
+          ),
+        unit: zod.string(),
+      }),
+    )
+    .nullish()
+    .describe("Additional-order contents without prices"),
+  hasAdditionalOrders: zod.boolean().optional(),
 });
 
 /**
@@ -1566,18 +1638,38 @@ export const CreateDeliveriesBulkBody = zod.object({
 export const createDeliveriesBulkResponseScheduleMonthRegExp = new RegExp(
   "^\\d{4}-(0[1-9]|1[0-2])$",
 );
+export const createDeliveriesBulkResponseAdditionalOrderItemsItemQuantityExclusiveMin = 0;
 
 export const CreateDeliveriesBulkResponseItem = zod.object({
   id: zod.string(),
   siteId: zod.string(),
   siteName: zod.string(),
   siteAddress: zod.string(),
+  clientId: zod
+    .string()
+    .uuid()
+    .nullish()
+    .describe("Current client resolved from the delivery site"),
+  clientName: zod
+    .string()
+    .nullish()
+    .describe("Current client name resolved from the delivery site"),
   managerContact: zod
     .string()
     .nullish()
     .describe("Телефон менеджера объекта для связи с водителем"),
   driverUserId: zod.string().uuid().nullable(),
   driver: zod.string(),
+  parentDeliveryId: zod
+    .string()
+    .uuid()
+    .nullish()
+    .describe("Parent delivery for an additional order"),
+  orderId: zod
+    .string()
+    .uuid()
+    .nullish()
+    .describe("Client order linked to an additional delivery"),
   plannedDate: zod.coerce
     .date()
     .nullable()
@@ -1641,6 +1733,22 @@ export const CreateDeliveriesBulkResponseItem = zod.object({
   createdAt: zod.coerce.date(),
   archivedAt: zod.coerce.date().nullable(),
   archivedByName: zod.string().nullable(),
+  additionalOrderItems: zod
+    .array(
+      zod.object({
+        productId: zod.string().uuid(),
+        productName: zod.string(),
+        quantity: zod
+          .number()
+          .gt(
+            createDeliveriesBulkResponseAdditionalOrderItemsItemQuantityExclusiveMin,
+          ),
+        unit: zod.string(),
+      }),
+    )
+    .nullish()
+    .describe("Additional-order contents without prices"),
+  hasAdditionalOrders: zod.boolean().optional(),
 });
 export const CreateDeliveriesBulkResponse = zod.array(
   CreateDeliveriesBulkResponseItem,
@@ -1695,18 +1803,38 @@ export const ReplaceDeliveriesBulkBody = zod.object({
 export const replaceDeliveriesBulkResponseScheduleMonthRegExp = new RegExp(
   "^\\d{4}-(0[1-9]|1[0-2])$",
 );
+export const replaceDeliveriesBulkResponseAdditionalOrderItemsItemQuantityExclusiveMin = 0;
 
 export const ReplaceDeliveriesBulkResponseItem = zod.object({
   id: zod.string(),
   siteId: zod.string(),
   siteName: zod.string(),
   siteAddress: zod.string(),
+  clientId: zod
+    .string()
+    .uuid()
+    .nullish()
+    .describe("Current client resolved from the delivery site"),
+  clientName: zod
+    .string()
+    .nullish()
+    .describe("Current client name resolved from the delivery site"),
   managerContact: zod
     .string()
     .nullish()
     .describe("Телефон менеджера объекта для связи с водителем"),
   driverUserId: zod.string().uuid().nullable(),
   driver: zod.string(),
+  parentDeliveryId: zod
+    .string()
+    .uuid()
+    .nullish()
+    .describe("Parent delivery for an additional order"),
+  orderId: zod
+    .string()
+    .uuid()
+    .nullish()
+    .describe("Client order linked to an additional delivery"),
   plannedDate: zod.coerce
     .date()
     .nullable()
@@ -1770,6 +1898,22 @@ export const ReplaceDeliveriesBulkResponseItem = zod.object({
   createdAt: zod.coerce.date(),
   archivedAt: zod.coerce.date().nullable(),
   archivedByName: zod.string().nullable(),
+  additionalOrderItems: zod
+    .array(
+      zod.object({
+        productId: zod.string().uuid(),
+        productName: zod.string(),
+        quantity: zod
+          .number()
+          .gt(
+            replaceDeliveriesBulkResponseAdditionalOrderItemsItemQuantityExclusiveMin,
+          ),
+        unit: zod.string(),
+      }),
+    )
+    .nullish()
+    .describe("Additional-order contents without prices"),
+  hasAdditionalOrders: zod.boolean().optional(),
 });
 export const ReplaceDeliveriesBulkResponse = zod.array(
   ReplaceDeliveriesBulkResponseItem,
@@ -1791,6 +1935,46 @@ export const updateDeliveriesActualBulkResponseUpdatedMin = 0;
 
 export const UpdateDeliveriesActualBulkResponse = zod.object({
   updated: zod.number().min(updateDeliveriesActualBulkResponseUpdatedMin),
+});
+
+/**
+ * @summary Create an independent additional delivery order from an existing delivery
+ */
+export const CreateAdditionalDeliveryOrderParams = zod.object({
+  id: zod.coerce.string().uuid(),
+});
+
+export const createAdditionalDeliveryOrderBodyItemsItemQuantityExclusiveMin = 0;
+
+export const createAdditionalDeliveryOrderBodyItemsItemPriceMin = 0;
+
+export const CreateAdditionalDeliveryOrderBody = zod.object({
+  deliveryType: zod
+    .string()
+    .min(1)
+    .describe(
+      "Delivery type selected from the catalog and different from the source delivery",
+    ),
+  note: zod.string().nullish(),
+  items: zod
+    .array(
+      zod.object({
+        productId: zod.string(),
+        quantity: zod
+          .number()
+          .gt(createAdditionalDeliveryOrderBodyItemsItemQuantityExclusiveMin),
+        price: zod
+          .number()
+          .min(createAdditionalDeliveryOrderBodyItemsItemPriceMin),
+      }),
+    )
+    .min(1),
+  requestId: zod.string().uuid(),
+});
+
+export const CreateAdditionalDeliveryOrderResponse = zod.object({
+  orderId: zod.string().uuid(),
+  deliveryId: zod.string().uuid(),
 });
 
 /**
@@ -1825,18 +2009,38 @@ export const UpdateDeliveryBody = zod.object({
 export const updateDeliveryResponseScheduleMonthRegExp = new RegExp(
   "^\\d{4}-(0[1-9]|1[0-2])$",
 );
+export const updateDeliveryResponseAdditionalOrderItemsItemQuantityExclusiveMin = 0;
 
 export const UpdateDeliveryResponse = zod.object({
   id: zod.string(),
   siteId: zod.string(),
   siteName: zod.string(),
   siteAddress: zod.string(),
+  clientId: zod
+    .string()
+    .uuid()
+    .nullish()
+    .describe("Current client resolved from the delivery site"),
+  clientName: zod
+    .string()
+    .nullish()
+    .describe("Current client name resolved from the delivery site"),
   managerContact: zod
     .string()
     .nullish()
     .describe("Телефон менеджера объекта для связи с водителем"),
   driverUserId: zod.string().uuid().nullable(),
   driver: zod.string(),
+  parentDeliveryId: zod
+    .string()
+    .uuid()
+    .nullish()
+    .describe("Parent delivery for an additional order"),
+  orderId: zod
+    .string()
+    .uuid()
+    .nullish()
+    .describe("Client order linked to an additional delivery"),
   plannedDate: zod.coerce
     .date()
     .nullable()
@@ -1900,6 +2104,22 @@ export const UpdateDeliveryResponse = zod.object({
   createdAt: zod.coerce.date(),
   archivedAt: zod.coerce.date().nullable(),
   archivedByName: zod.string().nullable(),
+  additionalOrderItems: zod
+    .array(
+      zod.object({
+        productId: zod.string().uuid(),
+        productName: zod.string(),
+        quantity: zod
+          .number()
+          .gt(
+            updateDeliveryResponseAdditionalOrderItemsItemQuantityExclusiveMin,
+          ),
+        unit: zod.string(),
+      }),
+    )
+    .nullish()
+    .describe("Additional-order contents without prices"),
+  hasAdditionalOrders: zod.boolean().optional(),
 });
 
 /**
@@ -1921,18 +2141,38 @@ export const RestoreDeliveryParams = zod.object({
 export const restoreDeliveryResponseScheduleMonthRegExp = new RegExp(
   "^\\d{4}-(0[1-9]|1[0-2])$",
 );
+export const restoreDeliveryResponseAdditionalOrderItemsItemQuantityExclusiveMin = 0;
 
 export const RestoreDeliveryResponse = zod.object({
   id: zod.string(),
   siteId: zod.string(),
   siteName: zod.string(),
   siteAddress: zod.string(),
+  clientId: zod
+    .string()
+    .uuid()
+    .nullish()
+    .describe("Current client resolved from the delivery site"),
+  clientName: zod
+    .string()
+    .nullish()
+    .describe("Current client name resolved from the delivery site"),
   managerContact: zod
     .string()
     .nullish()
     .describe("Телефон менеджера объекта для связи с водителем"),
   driverUserId: zod.string().uuid().nullable(),
   driver: zod.string(),
+  parentDeliveryId: zod
+    .string()
+    .uuid()
+    .nullish()
+    .describe("Parent delivery for an additional order"),
+  orderId: zod
+    .string()
+    .uuid()
+    .nullish()
+    .describe("Client order linked to an additional delivery"),
   plannedDate: zod.coerce
     .date()
     .nullable()
@@ -1996,6 +2236,22 @@ export const RestoreDeliveryResponse = zod.object({
   createdAt: zod.coerce.date(),
   archivedAt: zod.coerce.date().nullable(),
   archivedByName: zod.string().nullable(),
+  additionalOrderItems: zod
+    .array(
+      zod.object({
+        productId: zod.string().uuid(),
+        productName: zod.string(),
+        quantity: zod
+          .number()
+          .gt(
+            restoreDeliveryResponseAdditionalOrderItemsItemQuantityExclusiveMin,
+          ),
+        unit: zod.string(),
+      }),
+    )
+    .nullish()
+    .describe("Additional-order contents without prices"),
+  hasAdditionalOrders: zod.boolean().optional(),
 });
 
 /**
@@ -2012,18 +2268,38 @@ export const RescheduleDeliveryBody = zod.object({
 export const rescheduleDeliveryResponseScheduleMonthRegExp = new RegExp(
   "^\\d{4}-(0[1-9]|1[0-2])$",
 );
+export const rescheduleDeliveryResponseAdditionalOrderItemsItemQuantityExclusiveMin = 0;
 
 export const RescheduleDeliveryResponse = zod.object({
   id: zod.string(),
   siteId: zod.string(),
   siteName: zod.string(),
   siteAddress: zod.string(),
+  clientId: zod
+    .string()
+    .uuid()
+    .nullish()
+    .describe("Current client resolved from the delivery site"),
+  clientName: zod
+    .string()
+    .nullish()
+    .describe("Current client name resolved from the delivery site"),
   managerContact: zod
     .string()
     .nullish()
     .describe("Телефон менеджера объекта для связи с водителем"),
   driverUserId: zod.string().uuid().nullable(),
   driver: zod.string(),
+  parentDeliveryId: zod
+    .string()
+    .uuid()
+    .nullish()
+    .describe("Parent delivery for an additional order"),
+  orderId: zod
+    .string()
+    .uuid()
+    .nullish()
+    .describe("Client order linked to an additional delivery"),
   plannedDate: zod.coerce
     .date()
     .nullable()
@@ -2087,6 +2363,22 @@ export const RescheduleDeliveryResponse = zod.object({
   createdAt: zod.coerce.date(),
   archivedAt: zod.coerce.date().nullable(),
   archivedByName: zod.string().nullable(),
+  additionalOrderItems: zod
+    .array(
+      zod.object({
+        productId: zod.string().uuid(),
+        productName: zod.string(),
+        quantity: zod
+          .number()
+          .gt(
+            rescheduleDeliveryResponseAdditionalOrderItemsItemQuantityExclusiveMin,
+          ),
+        unit: zod.string(),
+      }),
+    )
+    .nullish()
+    .describe("Additional-order contents without prices"),
+  hasAdditionalOrders: zod.boolean().optional(),
 });
 
 /**
@@ -2108,18 +2400,38 @@ export const ApproveDeliveryActParams = zod.object({
 export const approveDeliveryActResponseScheduleMonthRegExp = new RegExp(
   "^\\d{4}-(0[1-9]|1[0-2])$",
 );
+export const approveDeliveryActResponseAdditionalOrderItemsItemQuantityExclusiveMin = 0;
 
 export const ApproveDeliveryActResponse = zod.object({
   id: zod.string(),
   siteId: zod.string(),
   siteName: zod.string(),
   siteAddress: zod.string(),
+  clientId: zod
+    .string()
+    .uuid()
+    .nullish()
+    .describe("Current client resolved from the delivery site"),
+  clientName: zod
+    .string()
+    .nullish()
+    .describe("Current client name resolved from the delivery site"),
   managerContact: zod
     .string()
     .nullish()
     .describe("Телефон менеджера объекта для связи с водителем"),
   driverUserId: zod.string().uuid().nullable(),
   driver: zod.string(),
+  parentDeliveryId: zod
+    .string()
+    .uuid()
+    .nullish()
+    .describe("Parent delivery for an additional order"),
+  orderId: zod
+    .string()
+    .uuid()
+    .nullish()
+    .describe("Client order linked to an additional delivery"),
   plannedDate: zod.coerce
     .date()
     .nullable()
@@ -2183,6 +2495,22 @@ export const ApproveDeliveryActResponse = zod.object({
   createdAt: zod.coerce.date(),
   archivedAt: zod.coerce.date().nullable(),
   archivedByName: zod.string().nullable(),
+  additionalOrderItems: zod
+    .array(
+      zod.object({
+        productId: zod.string().uuid(),
+        productName: zod.string(),
+        quantity: zod
+          .number()
+          .gt(
+            approveDeliveryActResponseAdditionalOrderItemsItemQuantityExclusiveMin,
+          ),
+        unit: zod.string(),
+      }),
+    )
+    .nullish()
+    .describe("Additional-order contents without prices"),
+  hasAdditionalOrders: zod.boolean().optional(),
 });
 
 /**
@@ -3353,18 +3681,38 @@ export const ListMyDeliveriesQueryParams = zod.object({
 export const listMyDeliveriesResponseScheduleMonthRegExp = new RegExp(
   "^\\d{4}-(0[1-9]|1[0-2])$",
 );
+export const listMyDeliveriesResponseAdditionalOrderItemsItemQuantityExclusiveMin = 0;
 
 export const ListMyDeliveriesResponseItem = zod.object({
   id: zod.string(),
   siteId: zod.string(),
   siteName: zod.string(),
   siteAddress: zod.string(),
+  clientId: zod
+    .string()
+    .uuid()
+    .nullish()
+    .describe("Current client resolved from the delivery site"),
+  clientName: zod
+    .string()
+    .nullish()
+    .describe("Current client name resolved from the delivery site"),
   managerContact: zod
     .string()
     .nullish()
     .describe("Телефон менеджера объекта для связи с водителем"),
   driverUserId: zod.string().uuid().nullable(),
   driver: zod.string(),
+  parentDeliveryId: zod
+    .string()
+    .uuid()
+    .nullish()
+    .describe("Parent delivery for an additional order"),
+  orderId: zod
+    .string()
+    .uuid()
+    .nullish()
+    .describe("Client order linked to an additional delivery"),
   plannedDate: zod.coerce
     .date()
     .nullable()
@@ -3428,6 +3776,22 @@ export const ListMyDeliveriesResponseItem = zod.object({
   createdAt: zod.coerce.date(),
   archivedAt: zod.coerce.date().nullable(),
   archivedByName: zod.string().nullable(),
+  additionalOrderItems: zod
+    .array(
+      zod.object({
+        productId: zod.string().uuid(),
+        productName: zod.string(),
+        quantity: zod
+          .number()
+          .gt(
+            listMyDeliveriesResponseAdditionalOrderItemsItemQuantityExclusiveMin,
+          ),
+        unit: zod.string(),
+      }),
+    )
+    .nullish()
+    .describe("Additional-order contents without prices"),
+  hasAdditionalOrders: zod.boolean().optional(),
 });
 export const ListMyDeliveriesResponse = zod.array(ListMyDeliveriesResponseItem);
 
@@ -3441,18 +3805,38 @@ export const MarkMyDeliveryDoneParams = zod.object({
 export const markMyDeliveryDoneResponseScheduleMonthRegExp = new RegExp(
   "^\\d{4}-(0[1-9]|1[0-2])$",
 );
+export const markMyDeliveryDoneResponseAdditionalOrderItemsItemQuantityExclusiveMin = 0;
 
 export const MarkMyDeliveryDoneResponse = zod.object({
   id: zod.string(),
   siteId: zod.string(),
   siteName: zod.string(),
   siteAddress: zod.string(),
+  clientId: zod
+    .string()
+    .uuid()
+    .nullish()
+    .describe("Current client resolved from the delivery site"),
+  clientName: zod
+    .string()
+    .nullish()
+    .describe("Current client name resolved from the delivery site"),
   managerContact: zod
     .string()
     .nullish()
     .describe("Телефон менеджера объекта для связи с водителем"),
   driverUserId: zod.string().uuid().nullable(),
   driver: zod.string(),
+  parentDeliveryId: zod
+    .string()
+    .uuid()
+    .nullish()
+    .describe("Parent delivery for an additional order"),
+  orderId: zod
+    .string()
+    .uuid()
+    .nullish()
+    .describe("Client order linked to an additional delivery"),
   plannedDate: zod.coerce
     .date()
     .nullable()
@@ -3516,6 +3900,22 @@ export const MarkMyDeliveryDoneResponse = zod.object({
   createdAt: zod.coerce.date(),
   archivedAt: zod.coerce.date().nullable(),
   archivedByName: zod.string().nullable(),
+  additionalOrderItems: zod
+    .array(
+      zod.object({
+        productId: zod.string().uuid(),
+        productName: zod.string(),
+        quantity: zod
+          .number()
+          .gt(
+            markMyDeliveryDoneResponseAdditionalOrderItemsItemQuantityExclusiveMin,
+          ),
+        unit: zod.string(),
+      }),
+    )
+    .nullish()
+    .describe("Additional-order contents without prices"),
+  hasAdditionalOrders: zod.boolean().optional(),
 });
 
 /**
@@ -3532,18 +3932,38 @@ export const UpdateMyDeliveryCommentBody = zod.object({
 export const updateMyDeliveryCommentResponseScheduleMonthRegExp = new RegExp(
   "^\\d{4}-(0[1-9]|1[0-2])$",
 );
+export const updateMyDeliveryCommentResponseAdditionalOrderItemsItemQuantityExclusiveMin = 0;
 
 export const UpdateMyDeliveryCommentResponse = zod.object({
   id: zod.string(),
   siteId: zod.string(),
   siteName: zod.string(),
   siteAddress: zod.string(),
+  clientId: zod
+    .string()
+    .uuid()
+    .nullish()
+    .describe("Current client resolved from the delivery site"),
+  clientName: zod
+    .string()
+    .nullish()
+    .describe("Current client name resolved from the delivery site"),
   managerContact: zod
     .string()
     .nullish()
     .describe("Телефон менеджера объекта для связи с водителем"),
   driverUserId: zod.string().uuid().nullable(),
   driver: zod.string(),
+  parentDeliveryId: zod
+    .string()
+    .uuid()
+    .nullish()
+    .describe("Parent delivery for an additional order"),
+  orderId: zod
+    .string()
+    .uuid()
+    .nullish()
+    .describe("Client order linked to an additional delivery"),
   plannedDate: zod.coerce
     .date()
     .nullable()
@@ -3607,6 +4027,22 @@ export const UpdateMyDeliveryCommentResponse = zod.object({
   createdAt: zod.coerce.date(),
   archivedAt: zod.coerce.date().nullable(),
   archivedByName: zod.string().nullable(),
+  additionalOrderItems: zod
+    .array(
+      zod.object({
+        productId: zod.string().uuid(),
+        productName: zod.string(),
+        quantity: zod
+          .number()
+          .gt(
+            updateMyDeliveryCommentResponseAdditionalOrderItemsItemQuantityExclusiveMin,
+          ),
+        unit: zod.string(),
+      }),
+    )
+    .nullish()
+    .describe("Additional-order contents without prices"),
+  hasAdditionalOrders: zod.boolean().optional(),
 });
 
 /**
@@ -4388,8 +4824,11 @@ export const GetDeliveryDashboardSummaryQueryParams = zod.object({
 
 export const getDeliveryDashboardSummaryResponseOverdueDeliveriesItemScheduleMonthRegExp =
   new RegExp("^\\d{4}-(0[1-9]|1[0-2])$");
+export const getDeliveryDashboardSummaryResponseOverdueDeliveriesItemAdditionalOrderItemsItemQuantityExclusiveMin = 0;
+
 export const getDeliveryDashboardSummaryResponseTodayDeliveriesItemScheduleMonthRegExp =
   new RegExp("^\\d{4}-(0[1-9]|1[0-2])$");
+export const getDeliveryDashboardSummaryResponseTodayDeliveriesItemAdditionalOrderItemsItemQuantityExclusiveMin = 0;
 
 export const GetDeliveryDashboardSummaryResponse = zod.object({
   month: zod.string(),
@@ -4419,12 +4858,31 @@ export const GetDeliveryDashboardSummaryResponse = zod.object({
       siteId: zod.string(),
       siteName: zod.string(),
       siteAddress: zod.string(),
+      clientId: zod
+        .string()
+        .uuid()
+        .nullish()
+        .describe("Current client resolved from the delivery site"),
+      clientName: zod
+        .string()
+        .nullish()
+        .describe("Current client name resolved from the delivery site"),
       managerContact: zod
         .string()
         .nullish()
         .describe("Телефон менеджера объекта для связи с водителем"),
       driverUserId: zod.string().uuid().nullable(),
       driver: zod.string(),
+      parentDeliveryId: zod
+        .string()
+        .uuid()
+        .nullish()
+        .describe("Parent delivery for an additional order"),
+      orderId: zod
+        .string()
+        .uuid()
+        .nullish()
+        .describe("Client order linked to an additional delivery"),
       plannedDate: zod.coerce
         .date()
         .nullable()
@@ -4494,6 +4952,22 @@ export const GetDeliveryDashboardSummaryResponse = zod.object({
       createdAt: zod.coerce.date(),
       archivedAt: zod.coerce.date().nullable(),
       archivedByName: zod.string().nullable(),
+      additionalOrderItems: zod
+        .array(
+          zod.object({
+            productId: zod.string().uuid(),
+            productName: zod.string(),
+            quantity: zod
+              .number()
+              .gt(
+                getDeliveryDashboardSummaryResponseOverdueDeliveriesItemAdditionalOrderItemsItemQuantityExclusiveMin,
+              ),
+            unit: zod.string(),
+          }),
+        )
+        .nullish()
+        .describe("Additional-order contents without prices"),
+      hasAdditionalOrders: zod.boolean().optional(),
     }),
   ),
   todayTotal: zod
@@ -4517,12 +4991,31 @@ export const GetDeliveryDashboardSummaryResponse = zod.object({
         siteId: zod.string(),
         siteName: zod.string(),
         siteAddress: zod.string(),
+        clientId: zod
+          .string()
+          .uuid()
+          .nullish()
+          .describe("Current client resolved from the delivery site"),
+        clientName: zod
+          .string()
+          .nullish()
+          .describe("Current client name resolved from the delivery site"),
         managerContact: zod
           .string()
           .nullish()
           .describe("Телефон менеджера объекта для связи с водителем"),
         driverUserId: zod.string().uuid().nullable(),
         driver: zod.string(),
+        parentDeliveryId: zod
+          .string()
+          .uuid()
+          .nullish()
+          .describe("Parent delivery for an additional order"),
+        orderId: zod
+          .string()
+          .uuid()
+          .nullish()
+          .describe("Client order linked to an additional delivery"),
         plannedDate: zod.coerce
           .date()
           .nullable()
@@ -4594,6 +5087,22 @@ export const GetDeliveryDashboardSummaryResponse = zod.object({
         createdAt: zod.coerce.date(),
         archivedAt: zod.coerce.date().nullable(),
         archivedByName: zod.string().nullable(),
+        additionalOrderItems: zod
+          .array(
+            zod.object({
+              productId: zod.string().uuid(),
+              productName: zod.string(),
+              quantity: zod
+                .number()
+                .gt(
+                  getDeliveryDashboardSummaryResponseTodayDeliveriesItemAdditionalOrderItemsItemQuantityExclusiveMin,
+                ),
+              unit: zod.string(),
+            }),
+          )
+          .nullish()
+          .describe("Additional-order contents without prices"),
+        hasAdditionalOrders: zod.boolean().optional(),
       }),
     )
     .describe("Все доставки, запланированные на сегодня"),

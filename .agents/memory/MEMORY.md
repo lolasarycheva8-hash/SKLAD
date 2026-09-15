@@ -48,3 +48,4 @@
 - [Tailwind CSS variables](tailwind-css-variables.md) — legacy bracket shorthand can compile into invalid CSS; use explicit var() and inspect generated styles.
 - [Storage log import trust](storage-log-import-trust.md) — reject opaque imported log builders by default; approving a metrics builder must not grant sanitizer privileges.
 - [Radix jsdom verification limits](radix-jsdom-check-limits.md) — Select interaction tests can stall beyond their timeout; distinguish incomplete UI checks from verified API behavior.
+- [Additional delivery orders](additional-delivery-orders.md) — atomic client order plus linked delivery; independent execution and retention during schedule replacement.

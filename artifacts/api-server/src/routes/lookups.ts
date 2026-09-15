@@ -30,6 +30,7 @@ import { toOrderDto } from "../lib/orders";
 import { toShipmentDto } from "../lib/shipments";
 import {
   requireAnySectionAccess,
+  requireOrderProductLookup,
   requireSectionAccess,
 } from "../middlewares/requirePermission";
 
@@ -114,7 +115,7 @@ router.get(
 
 router.get(
   "/lookups/order-products",
-  requireAnySectionAccess(["orders"]),
+  requireOrderProductLookup,
   async (_req, res) => {
     const rows = await db
       .select({

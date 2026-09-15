@@ -12,6 +12,11 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { getMonthDateBounds, toDateInputValue, confirmPlannedDate } from "@/lib/delivery-workspace";
 import type { JoinedDelivery } from "@/pages/deliveries";
 import { cn } from "@/lib/utils";
+import {
+  AdditionalOrderItems,
+  AdditionalOrderLabel,
+  isAdditionalDelivery,
+} from "@/components/additional-order-display";
 
 const mobileDateFormat = new Intl.DateTimeFormat("ru-RU", {
   day: "2-digit",
@@ -154,6 +159,8 @@ export function MobileLogisticianCard({
   onOpenPhotos,
   onOpenDriverComment,
   onDelete,
+  onAddAdditionalOrder,
+  canViewOrders = false,
 }: {
   delivery: JoinedDelivery;
   month: string;
@@ -161,6 +168,8 @@ export function MobileLogisticianCard({
   onOpenPhotos: (delivery: JoinedDelivery) => void;
   onOpenDriverComment: (delivery: JoinedDelivery) => void;
   onDelete?: (delivery: JoinedDelivery) => void;
+  onAddAdditionalOrder?: (delivery: JoinedDelivery) => void;
+  canViewOrders?: boolean;
 }) {
   const [dateDialogOpen, setDateDialogOpen] = useState(false);
 
@@ -179,9 +188,23 @@ export function MobileLogisticianCard({
     <div className="bg-card text-card-foreground border rounded-lg shadow-sm mb-3 overflow-hidden flex flex-col" data-testid={`mobile-card-delivery-${delivery.id}`}>
       <div className="p-3 border-b pb-2">
         <div className="flex justify-between items-start mb-1">
-          <Link href={`/sites/${delivery.siteId}`} className="font-semibold text-primary text-base line-clamp-2 leading-tight flex-1 mr-2">
-            {delivery.siteName}
-          </Link>
+          <div className="min-w-0 flex-1 mr-2">
+            <Link href={`/sites/${delivery.siteId}`} className="font-semibold text-primary text-base line-clamp-2 leading-tight">
+              {delivery.siteName}
+            </Link>
+            {(delivery.hasAdditionalOrders || isAdditionalDelivery(delivery)) && (
+              <div className="mt-1 flex flex-col items-start gap-1">
+                <AdditionalOrderLabel
+                  delivery={delivery}
+                  canViewOrders={canViewOrders}
+                />
+                <AdditionalOrderItems
+                  items={delivery.additionalOrderItems}
+                  compact
+                />
+              </div>
+            )}
+          </div>
           <div className="shrink-0 text-right">
             {renderStatus()}
           </div>
@@ -256,6 +279,20 @@ export function MobileLogisticianCard({
         </div>
       )}
 
+      {onAddAdditionalOrder && !isAdditionalDelivery(delivery) && (
+        <div className="border-t bg-muted/10 p-2">
+          <Button
+            type="button"
+            variant="outline"
+            className="h-11 w-full text-sm font-medium"
+            onClick={() => onAddAdditionalOrder(delivery)}
+            data-testid={`mobile-card-button-additional-order-${delivery.id}`}
+          >
+            Добавить доп.заказ
+          </Button>
+        </div>
+      )}
+
       <MobileActualDateDialog
         delivery={delivery}
         month={month}
@@ -312,9 +349,14 @@ export function MobileManagerTable({
           {data.map((delivery) => (
             <tr key={delivery.id} className="border-b last:border-0" data-testid={`mobile-row-delivery-${delivery.id}`}>
               <td className="sticky left-0 z-10 bg-background p-2 align-top font-medium shadow-[1px_0_0_0_var(--color-border)]">
-                <Link href={`/sites/${delivery.siteId}`} className="line-clamp-2 text-primary hover:underline">
-                  {delivery.siteName}
-                </Link>
+                <div className="flex flex-col items-start gap-1">
+                  <Link href={`/sites/${delivery.siteId}`} className="line-clamp-2 text-primary hover:underline">
+                    {delivery.siteName}
+                  </Link>
+                  {(delivery.hasAdditionalOrders || isAdditionalDelivery(delivery)) && (
+                    <AdditionalOrderLabel delivery={delivery} />
+                  )}
+                </div>
               </td>
               <td className="break-words p-2 align-top" title={delivery.driver}>
                 {delivery.driver || "—"}

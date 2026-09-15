@@ -1,10 +1,18 @@
-import { date, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
+import {
+  date,
+  foreignKey,
+  pgTable,
+  text,
+  timestamp,
+  uuid,
+} from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { uniqueIndex } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { sitesTable } from "./sites";
 import { appUsersTable } from "./app-users";
+import { ordersTable } from "./orders";
 
 export const deliveriesTable = pgTable(
   "deliveries",
@@ -13,6 +21,10 @@ export const deliveriesTable = pgTable(
     siteId: uuid("site_id")
       .notNull()
       .references(() => sitesTable.id, { onDelete: "restrict" }),
+    parentDeliveryId: uuid("parent_delivery_id"),
+    orderId: uuid("order_id").references(() => ordersTable.id, {
+      onDelete: "restrict",
+    }),
     // Preserve the old free-text assignment during the transition to users.
     legacyDriver: text("driver").notNull().default(""),
     driverUserId: uuid("driver_user_id").references(() => appUsersTable.id, {
@@ -45,15 +57,23 @@ export const deliveriesTable = pgTable(
       .defaultNow(),
   },
   (table) => [
-    uniqueIndex("deliveries_owned_dated_active_uq")
+    foreignKey({
+      name: "deliveries_parent_delivery_id_fk",
+      columns: [table.parentDeliveryId],
+      foreignColumns: [table.id],
+    }).onDelete("restrict"),
+    uniqueIndex("deliveries_order_id_uq").on(table.orderId),
+    // Schedule ownership applies to primary rows only. Supplemental
+    // deliveries intentionally share the parent's site/date slot.
+    uniqueIndex("deliveries_primary_dated_active_uq")
       .on(table.siteId, table.scheduleMonth, table.plannedDate)
       .where(
-        sql`${table.archivedAt} is null and ${table.scheduleMonth} is not null and ${table.plannedDate} is not null`,
+        sql`${table.archivedAt} is null and ${table.orderId} is null and ${table.scheduleMonth} is not null and ${table.plannedDate} is not null`,
       ),
-    uniqueIndex("deliveries_owned_undated_active_uq")
+    uniqueIndex("deliveries_primary_undated_active_uq")
       .on(table.siteId, table.scheduleMonth)
       .where(
-        sql`${table.archivedAt} is null and ${table.scheduleMonth} is not null and ${table.plannedDate} is null`,
+        sql`${table.archivedAt} is null and ${table.orderId} is null and ${table.scheduleMonth} is not null and ${table.plannedDate} is null`,
       ),
   ],
 );

@@ -406,11 +406,29 @@ export const DeliveryWorkflowStatus = {
   closed: "closed",
 } as const;
 
+export interface AdditionalDeliveryOrderItem {
+  productId: string;
+  productName: string;
+  /** @exclusiveMinimum 0 */
+  quantity: number;
+  unit: string;
+}
+
 export interface Delivery {
   id: string;
   siteId: string;
   siteName: string;
   siteAddress: string;
+  /**
+   * Current client resolved from the delivery site
+   * @nullable
+   */
+  clientId?: string | null;
+  /**
+   * Current client name resolved from the delivery site
+   * @nullable
+   */
+  clientName?: string | null;
   /**
    * Телефон менеджера объекта для связи с водителем
    * @nullable
@@ -419,6 +437,16 @@ export interface Delivery {
   /** @nullable */
   driverUserId: string | null;
   driver: string;
+  /**
+   * Parent delivery for an additional order
+   * @nullable
+   */
+  parentDeliveryId?: string | null;
+  /**
+   * Client order linked to an additional delivery
+   * @nullable
+   */
+  orderId?: string | null;
   /**
    * Плановая дата доставки (null, если дата ещё не назначена)
    * @nullable
@@ -465,6 +493,12 @@ export interface Delivery {
   archivedAt: string | null;
   /** @nullable */
   archivedByName: string | null;
+  /**
+   * Additional-order contents without prices
+   * @nullable
+   */
+  additionalOrderItems?: AdditionalDeliveryOrderItem[] | null;
+  hasAdditionalOrders?: boolean;
 }
 
 export interface CreateDeliveryInput {
@@ -490,6 +524,31 @@ export interface CreateDeliveryInput {
    * @pattern ^\d{4}-(0[1-9]|1[0-2])$
    */
   scheduleMonth?: string | null;
+}
+
+export interface OrderItemInput {
+  productId: string;
+  /** @exclusiveMinimum 0 */
+  quantity: number;
+  /** @minimum 0 */
+  price: number;
+}
+
+export interface AdditionalDeliveryOrderInput {
+  /**
+   * Delivery type selected from the catalog and different from the source delivery
+   * @minLength 1
+   */
+  deliveryType: string;
+  note?: string | null;
+  /** @minItems 1 */
+  items: OrderItemInput[];
+  requestId: string;
+}
+
+export interface AdditionalDeliveryOrderResult {
+  orderId: string;
+  deliveryId: string;
 }
 
 export interface CreateDeliveriesBulkInput {
@@ -844,14 +903,6 @@ export interface MySiteSummary {
 
 export interface ClearAllDataResult {
   cleared: boolean;
-}
-
-export interface OrderItemInput {
-  productId: string;
-  /** @exclusiveMinimum 0 */
-  quantity: number;
-  /** @minimum 0 */
-  price: number;
 }
 
 export interface OrderItem {
