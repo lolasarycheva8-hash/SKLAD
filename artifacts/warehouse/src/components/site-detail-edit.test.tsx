@@ -6,6 +6,9 @@ const state = vi.hoisted(() => ({
   role: "logistician",
   hasSites: true,
   pending: false,
+  branchesLoading: false,
+  branchesError: false,
+  refetchBranches: vi.fn(),
   save: vi.fn(),
   propose: vi.fn(),
   invalidate: vi.fn(),
@@ -49,6 +52,13 @@ vi.mock("@workspace/api-client-react", () => ({
   useListDeliveryTypes: () => ({ data: [] }),
   useListDrivers: () => ({ data: [{ id: "driver-test", name: "Водитель" }] }),
   useListOrderClientLookup: () => ({ data: [{ id: "client-test", name: "Клиент" }] }),
+  useListSiteBranchLookup: () => ({
+    data: [{ name: "Пушкинский" }, { name: "Куст" }, { name: "Дмитровский" }, { name: "Куст" }],
+    isLoading: state.branchesLoading,
+    isError: state.branchesError,
+    refetch: state.refetchBranches,
+  }),
+  getListSiteBranchLookupQueryKey: () => ["site-branches"],
   getListSitesQueryKey: () => ["sites"],
   getGetSiteQueryKey: (id: string) => ["site", id],
   getListDeliverySiteLookupQueryKey: () => ["delivery-site-lookup"],
@@ -62,6 +72,8 @@ afterEach(() => {
   state.role = "logistician";
   state.hasSites = true;
   state.pending = false;
+  state.branchesLoading = false;
+  state.branchesError = false;
 });
 
 it.each(["logistician", "admin"])("%s сохраняет карточку напрямую без согласования", (role) => {
@@ -98,9 +110,47 @@ it.each(["manager", "driver", "logistician"])("%s без права редакт
   render(<SiteDetail />);
   const name = screen.getByTestId("input-site-name") as HTMLInputElement;
   expect(name.disabled).toBe(true);
+  expect((screen.getByTestId("select-site-branch") as HTMLSelectElement).disabled).toBe(true);
   expect(screen.queryByTestId("button-submit-site")).toBeNull();
   fireEvent.submit(name.closest("form")!);
   expect(state.save).not.toHaveBeenCalled();
+});
+
+it.each(["logistician", "admin"])("%s выбирает куст из полного списка и сохраняет его", (role) => {
+  state.role = role;
+  render(<SiteDetail />);
+  const select = screen.getByRole("combobox", { name: "Куст" }) as HTMLSelectElement;
+  expect(select.value).toBe("Куст");
+  expect(Array.from(select.options).map((option) => option.value)).toEqual([
+    "", "Дмитровский", "Куст", "Пушкинский",
+  ]);
+  fireEvent.change(select, { target: { value: "Пушкинский" } });
+  fireEvent.click(screen.getByTestId("button-submit-site"));
+  expect(state.save).toHaveBeenCalledWith(expect.objectContaining({
+    data: expect.objectContaining({ branch: "Пушкинский" }),
+  }));
+  act(() => state.callbacks.onError?.(new Error("Не удалось сохранить")));
+  expect(select.value).toBe("Пушкинский");
+});
+
+it("не сбрасывает текущий куст во время загрузки или при ошибке и позволяет повторить загрузку", () => {
+  state.branchesLoading = true;
+  const { rerender } = render(<SiteDetail />);
+  const select = screen.getByTestId("select-site-branch") as HTMLSelectElement;
+  expect(select.disabled).toBe(true);
+  expect(select.value).toBe("Куст");
+  expect(screen.getByRole("status").textContent).toContain("Загружаем");
+  state.branchesLoading = false;
+  state.branchesError = true;
+  rerender(<SiteDetail />);
+  expect(select.disabled).toBe(true);
+  expect(screen.getByRole("alert").textContent).toContain("Не удалось");
+  fireEvent.click(screen.getByRole("button", { name: "Повторить" }));
+  expect(state.refetchBranches).toHaveBeenCalledOnce();
+  state.branchesError = false;
+  rerender(<SiteDetail />);
+  expect(select.disabled).toBe(false);
+  expect(select.value).toBe("Куст");
 });
 
 it("сохраняет черновик при ошибке и блокирует повторную отправку во время сохранения", () => {

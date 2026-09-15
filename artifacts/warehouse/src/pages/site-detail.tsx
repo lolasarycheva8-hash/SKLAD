@@ -8,6 +8,8 @@ import {
   getListSitesQueryKey,
   getGetSiteQueryKey,
   getListDeliverySiteLookupQueryKey,
+  useListSiteBranchLookup,
+  getListSiteBranchLookupQueryKey,
 } from "@workspace/api-client-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -61,6 +63,12 @@ export default function SiteDetail() {
   const { data: deliveryTypes } = useListDeliveryTypes();
   const { data: drivers = [] } = useListDrivers();
   const { data: clients = [] } = useListOrderClientLookup();
+  const {
+    data: branches = [],
+    isLoading: branchesLoading,
+    isError: branchesError,
+    refetch: refetchBranches,
+  } = useListSiteBranchLookup();
 
   const { data: site, isLoading } = useGetSite(params.id);
   const [form, setForm] = useState<FormState | null>(null);
@@ -92,6 +100,7 @@ export default function SiteDetail() {
         queryClient.invalidateQueries({ queryKey: getListSitesQueryKey() });
         queryClient.invalidateQueries({ queryKey: getGetSiteQueryKey(params.id) });
         queryClient.invalidateQueries({ queryKey: getListDeliverySiteLookupQueryKey() });
+        queryClient.invalidateQueries({ queryKey: getListSiteBranchLookupQueryKey() });
         toast({ title: "Объект обновлён" });
       },
       onError: (error) => {
@@ -239,14 +248,37 @@ export default function SiteDetail() {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 [&>div]:min-w-0">
               <div className="space-y-2">
                 <Label htmlFor="branch">Куст</Label>
-                <Input
+                <select
                   id="branch"
                   required
-                  disabled={!canEditSites}
+                  disabled={!canEditSites || branchesLoading || branchesError}
                   value={form.branch}
                   onChange={(e) => setForm({ ...form, branch: e.target.value })}
-                  data-testid="input-site-branch"
-                />
+                  className="flex h-9 w-full min-w-0 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] disabled:cursor-not-allowed disabled:opacity-50"
+                  aria-describedby={branchesLoading || branchesError ? "branch-status" : undefined}
+                  data-testid="select-site-branch"
+                >
+                  <option value="" disabled>Выберите куст</option>
+                  {Array.from(new Set([
+                    ...branches.map((branch) => branch.name),
+                    form.branch,
+                  ])).filter((name) => name.trim()).sort((a, b) => a.localeCompare(b, "ru")).map((name) => (
+                    <option key={name} value={name}>{name}</option>
+                  ))}
+                </select>
+                {branchesLoading && (
+                  <p id="branch-status" role="status" className="text-sm text-muted-foreground">
+                    Загружаем список кустов…
+                  </p>
+                )}
+                {branchesError && (
+                  <div id="branch-status" role="alert" className="text-sm text-destructive">
+                    Не удалось загрузить список кустов.{" "}
+                    <button type="button" className="underline" onClick={() => void refetchBranches()}>
+                      Повторить
+                    </button>
+                  </div>
+                )}
               </div>
               <div className="space-y-2">
                 <Label htmlFor="client">Клиент</Label>
