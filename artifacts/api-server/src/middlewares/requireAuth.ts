@@ -19,6 +19,7 @@ declare global {
   namespace Express {
     interface Request {
       appUser?: AuthenticatedAppUser;
+      authActor?: AuthenticatedAppUser;
     }
   }
 }
@@ -126,6 +127,20 @@ export async function requireAuth(
 
   try {
     req.appUser = await provisionAppUser(userId);
+    const actorClerkUserId = auth?.actor?.sub;
+    if (actorClerkUserId) {
+      const [actorRow] = await db
+        .select()
+        .from(appUsersTable)
+        .where(eq(appUsersTable.clerkUserId, actorClerkUserId));
+      if (!actorRow || normalizeAppUser(actorRow).role !== "admin") {
+        res.status(403).json({
+          error: "Администратор, начавший просмотр, больше не имеет доступа",
+        });
+        return;
+      }
+      req.authActor = normalizeAppUser(actorRow);
+    }
   } catch (err) {
     if (err instanceof NotInvitedError) {
       res.status(403).json({

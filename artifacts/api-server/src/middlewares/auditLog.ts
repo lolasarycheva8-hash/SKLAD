@@ -50,8 +50,9 @@ export function auditLog(req: Request, res: Response, next: NextFunction): void 
   res.on("finish", () => {
     // Only record changes that actually succeeded.
     if (res.statusCode >= 400) return;
-    const user = req.appUser;
-    if (!user) return;
+    const effectiveUser = req.appUser;
+    const user = req.authActor ?? effectiveUser;
+    if (!user || !effectiveUser) return;
 
     const { entity, entityId, path } = parsePath(req.originalUrl);
 
@@ -66,7 +67,13 @@ export function auditLog(req: Request, res: Response, next: NextFunction): void 
         entityId,
         path,
         statusCode: res.statusCode,
-        meta: body ?? null,
+        meta: req.authActor
+          ? {
+              ...(body === undefined ? {} : { requestBody: body }),
+              impersonatedUserId: effectiveUser.id,
+              impersonatedUserEmail: effectiveUser.email,
+            }
+          : body ?? null,
       })
       .catch((err) => {
         req.log?.error({ err }, "Failed to write audit log entry");

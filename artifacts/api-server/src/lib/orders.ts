@@ -8,7 +8,9 @@ import {
   productsTable,
   orderPaymentsTable,
   ordersTable,
+  deliveriesTable,
 } from "@workspace/db";
+import { getOrderBilling, getOrderLifecycle } from "./order-billing";
 
 type DbOrTx = typeof db | PgTransaction<any, any, any>;
 
@@ -26,8 +28,15 @@ export async function recalculateOrderIsPaid(
   totalAmount: number,
   dbOrTx: DbOrTx = db,
 ): Promise<{ paidAmount: number; isPaid: boolean }> {
+  if (dbOrTx === db) {
+    return db.transaction((tx) => recalculateOrderIsPaid(orderId, totalAmount, tx));
+  }
+  const [current] = await dbOrTx.select().from(ordersTable)
+    .where(eq(ordersTable.id, orderId)).for("update");
   const paidAmount = await getPaidAmount(orderId, dbOrTx);
-  const isPaid = paidAmount >= totalAmount && totalAmount > 0;
+  const summary = await getOrderBilling(orderId, dbOrTx);
+  const isPaid = summary ? !!summary.paidAt :
+    !!current?.isPaid || (paidAmount >= totalAmount && totalAmount > 0);
 
   await dbOrTx.update(ordersTable).set({ isPaid }).where(eq(ordersTable.id, orderId));
 
@@ -39,7 +48,7 @@ export async function getShippedQuantityMap(
   dbOrTx: DbOrTx = db,
   excludeShipmentId?: string,
 ): Promise<Map<string, number>> {
-  const conditions = [eq(shipmentsTable.orderId, orderId)];
+  const conditions = [eq(shipmentsTable.orderId, orderId), eq(shipmentsTable.isDeleted, false)];
   if (excludeShipmentId) {
     conditions.push(sql`${shipmentsTable.id} != ${excludeShipmentId}`);
   }
@@ -65,9 +74,14 @@ export async function toOrderDto(
   order: {
     id: string;
     clientId: string;
+    siteId: string | null;
+    siteName: string | null;
+    siteAddress: string | null;
     isPaid: boolean;
     note: string | null;
     createdAt: Date;
+    plannedMonth: string | null;
+    fulfillmentDeliveryId?: string | null;
   },
   clientName: string,
 ) {
@@ -96,15 +110,29 @@ export async function toOrderDto(
   const totalAmount = items.reduce((sum, item) => sum + item.quantity * item.price, 0);
   const paidAmount = await getPaidAmount(order.id);
   const overpaidAmount = Math.max(0, paidAmount - totalAmount);
+  const lifecycle = await getOrderLifecycle(order);
+  const delivery = lifecycle.delivery;
 
   return {
     id: order.id,
+    status: lifecycle.status,
+    orderNumber: lifecycle.orderNumber,
+    summaryId: lifecycle.summaryId,
+    fulfillmentDeliveryId: lifecycle.fulfillmentDeliveryId,
     clientId: order.clientId,
     clientName,
-    isPaid: order.isPaid,
+    siteId: order.siteId,
+    siteName: order.siteName,
+    siteAddress: order.siteAddress,
+    isPaid: lifecycle.status === "paid",
     paidAmount,
     overpaidAmount,
     note: order.note,
+    plannedMonth: delivery
+      ? (delivery.plannedDate ? delivery.plannedDate.slice(0, 7) : delivery.scheduleMonth)
+      : order.plannedMonth,
+    monthFromDelivery: !!delivery,
+    deliveryFromAdditionalOrder: lifecycle.deliveryFromAdditionalOrder,
     items,
     totalAmount,
     createdAt: order.createdAt,

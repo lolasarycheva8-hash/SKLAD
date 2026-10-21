@@ -5,28 +5,66 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
-import type { DeliveryStatus } from './deliveryStatus';
-import type { DeliveryWorkflowStatus } from './deliveryWorkflowStatus';
+import type { AdditionalDeliveryOrderItem } from "./additionalDeliveryOrderItem";
+import type { CalendarMonth } from "./calendarMonth";
+import type { DeliveryStatus } from "./deliveryStatus";
+import type { DeliveryWorkflowStatus } from "./deliveryWorkflowStatus";
 
 export interface Delivery {
   id: string;
   siteId: string;
   siteName: string;
   siteAddress: string;
+  /**
+   * Торговая сеть из торгового названия объекта, не клиент-юрлицо
+   * @nullable
+   */
+  tradeNetworkName?: string | null;
+  /**
+   * Current client resolved from the delivery site
+   * @nullable
+   */
+  clientId?: string | null;
+  /**
+   * Current client name resolved from the delivery site
+   * @nullable
+   */
+  clientName?: string | null;
+  /**
+   * Телефон менеджера объекта для связи с водителем
+   * @nullable
+   */
+  managerContact?: string | null;
   /** @nullable */
   driverUserId: string | null;
   driver: string;
   /**
-     * Плановая дата доставки (null, если дата ещё не назначена)
-     * @nullable
-     */
+   * Parent delivery for an additional order
+   * @nullable
+   */
+  parentDeliveryId?: string | null;
+  /**
+   * Client order linked to an additional delivery
+   * @nullable
+   */
+  orderId?: string | null;
+  /**
+   * Плановая дата доставки (null, если дата ещё не назначена)
+   * @nullable
+   */
   plannedDate: Date | null;
   /**
-     * Месяц владения строкой графика; null возможен только у legacy rows
-     * @nullable
-     * @pattern ^\d{4}-(0[1-9]|1[0-2])$
-     */
-  scheduleMonth: string | null;
+   * Уточнённая плановая дата только для отчётности; не изменяет исходный план, график или показатели
+   * @nullable
+   */
+  correctedPlannedDate?: Date | null;
+  /**
+   * Тип поставки для этой доставки; null означает использовать значение объекта
+   * @nullable
+   */
+  deliveryType?: string | null;
+  /** Месяц владения строкой графика; null возможен только у legacy rows */
+  scheduleMonth: CalendarMonth | null;
   /** Фактическая дата доставки (редактируемая) */
   actualDate: Date | null;
   /** @nullable */
@@ -34,7 +72,10 @@ export interface Delivery {
   /** @nullable */
   actApprovedBy: string | null;
   workflowStatus: DeliveryWorkflowStatus;
+  /** Комментарий водителя; логист видит его только для чтения */
   note: string | null;
+  /** Примечание логиста для водителя; водитель видит его только для чтения */
+  logisticianNote: string | null;
   status: DeliveryStatus;
   /** Отклонение факта от плана в днях (положительное — отставание) */
   lagDays: number | null;
@@ -45,4 +86,14 @@ export interface Delivery {
   /** Количество приложенных фото-актов */
   photosCount: number;
   createdAt: Date;
+  /** @nullable */
+  archivedAt: Date | null;
+  /** @nullable */
+  archivedByName: string | null;
+  /**
+   * Additional-order contents without prices
+   * @nullable
+   */
+  additionalOrderItems?: AdditionalDeliveryOrderItem[] | null;
+  hasAdditionalOrders?: boolean;
 }

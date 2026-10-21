@@ -5,10 +5,11 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
+import type { CalendarMonth } from "./calendarMonth";
 
 export type GetDeliveryDashboardSummaryParams = {
-/**
- * Format YYYY-MM, defaults to current month
- */
-month?: string;
+  /**
+   * Format YYYY-MM, defaults to current month
+   */
+  month?: CalendarMonth;
 };

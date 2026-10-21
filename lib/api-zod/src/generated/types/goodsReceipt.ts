@@ -5,7 +5,7 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
-import type { GoodsReceiptItem } from './goodsReceiptItem';
+import type { GoodsReceiptItem } from "./goodsReceiptItem";
 
 export interface GoodsReceipt {
   id: string;

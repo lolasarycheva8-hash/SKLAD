@@ -13,10 +13,10 @@ import {
   GetProductResponse,
   UpdateProductResponse,
   CreateProductsBulkBody,
-  CreateProductsBulkResponse,
 } from "@workspace/api-zod";
 import { getCurrentStockForProduct, getCurrentStockMap } from "../lib/stock";
 import { toProductDto } from "../lib/products";
+import { importProducts, ProductImportError } from "../lib/product-import";
 import { requirePermission, requireSectionAccess } from "../middlewares/requirePermission";
 
 const router: IRouter = Router();
@@ -117,70 +117,15 @@ router.post("/products/bulk", canEditProducts, async (req, res): Promise<void> =
     return;
   }
 
-  const results: Awaited<ReturnType<typeof toProductDto>>[] = [];
-
-  for (const item of parsed.data.items) {
-    const [existing] = await db
-      .select()
-      .from(productsTable)
-      .where(eq(productsTable.sku, item.sku));
-
-    let product;
-    if (existing) {
-      [product] = await db
-        .update(productsTable)
-        .set({
-          name: item.name,
-          unit: item.unit,
-          purchasePrice: String(item.purchasePrice ?? existing.purchasePrice),
-          price: String(item.price),
-          categoryId: item.categoryId ?? existing.categoryId,
-          minStock: String(item.minStock ?? existing.minStock),
-          supplier: item.supplier ?? existing.supplier,
-          supplierContact: item.supplierContact ?? existing.supplierContact,
-        })
-        .where(eq(productsTable.id, existing.id))
-        .returning();
-    } else {
-      [product] = await db
-        .insert(productsTable)
-        .values({
-          name: item.name,
-          sku: item.sku,
-          unit: item.unit,
-          purchasePrice: String(item.purchasePrice ?? 0),
-          price: String(item.price),
-          categoryId: item.categoryId ?? null,
-          minStock: String(item.minStock ?? 0),
-          supplier: item.supplier ?? null,
-          supplierContact: item.supplierContact ?? null,
-        })
-        .returning();
-
-      if (item.initialStock && item.initialStock > 0) {
-        await db.insert(movementsTable).values({
-          productId: product.id,
-          type: "in",
-          quantity: String(item.initialStock),
-          reason: "Начальный остаток (импорт)",
-        });
-      }
+  try {
+    res.status(201).json(await importProducts(parsed.data));
+  } catch (error) {
+    if (error instanceof ProductImportError) {
+      res.status(error.status).json({ error: error.message });
+      return;
     }
-
-    let categoryName: string | null = null;
-    if (product.categoryId) {
-      const [category] = await db
-        .select()
-        .from(categoriesTable)
-        .where(eq(categoriesTable.id, product.categoryId));
-      categoryName = category?.name ?? null;
-    }
-
-    const currentStock = await getCurrentStockForProduct(product.id);
-    results.push(toProductDto(product, categoryName, currentStock));
+    throw error;
   }
-
-  res.status(201).json(CreateProductsBulkResponse.parse(results));
 });
 
 router.get("/products/:id", async (req, res): Promise<void> => {

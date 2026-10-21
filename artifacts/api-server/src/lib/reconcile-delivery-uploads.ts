@@ -15,6 +15,7 @@ export interface ReconciliationSummary {
   tooYoung: number;
   unknownAge: number;
   candidates: number;
+  preserved: number;
   deleted: number;
   raceSkipped: number;
   failed: number;
@@ -23,21 +24,15 @@ export interface ReconciliationSummary {
 
 export type ReconciliationEvent =
   | { type: "candidate"; object: DeliveryUploadObject }
-  | { type: "deleted"; object: DeliveryUploadObject }
-  | { type: "raceSkipped"; object: DeliveryUploadObject }
-  | { type: "failure"; object: DeliveryUploadObject; error: string };
+  | { type: "preserved"; object: DeliveryUploadObject };
 
 export interface ReconciliationDependencies {
   listUploads: () => Promise<DeliveryUploadObject[]>;
   listReferencedObjectPaths: () => Promise<Iterable<string>>;
-  deleteIfUnreferenced: (
-    objectPath: string,
-  ) => Promise<"deleted" | "raceSkipped">;
   onEvent?: (event: ReconciliationEvent) => void;
 }
 
 export interface ReconciliationOptions {
-  dryRun?: boolean;
   minimumAgeHours?: number;
   now?: Date;
 }
@@ -49,15 +44,10 @@ export function validateMinimumAgeHours(value: number): number {
   return value;
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 export async function reconcileDeliveryUploads(
   dependencies: ReconciliationDependencies,
   options: ReconciliationOptions = {},
 ): Promise<ReconciliationSummary> {
-  const dryRun = options.dryRun ?? true;
   const minimumAgeHours = validateMinimumAgeHours(options.minimumAgeHours ?? 24);
   const now = options.now ?? new Date();
   if (!Number.isFinite(now.getTime())) {
@@ -72,6 +62,7 @@ export async function reconcileDeliveryUploads(
     tooYoung: 0,
     unknownAge: 0,
     candidates: 0,
+    preserved: 0,
     deleted: 0,
     raceSkipped: 0,
     failed: 0,
@@ -96,28 +87,11 @@ export async function reconcileDeliveryUploads(
 
     summary.candidates += 1;
     dependencies.onEvent?.({ type: "candidate", object });
-    if (dryRun) continue;
-
-    try {
-      // The dependency must coordinate its exact-path decision and deletion
-      // atomically (the PostgreSQL implementation holds an advisory xact lock).
-      const decision = await dependencies.deleteIfUnreferenced(object.objectPath);
-      if (decision === "raceSkipped") {
-        summary.raceSkipped += 1;
-        dependencies.onEvent?.({ type: "raceSkipped", object });
-      } else {
-        summary.deleted += 1;
-        dependencies.onEvent?.({ type: "deleted", object });
-      }
-    } catch (error) {
-      const failure = {
-        objectPath: object.objectPath,
-        error: errorMessage(error),
-      };
-      summary.failed += 1;
-      summary.failures.push(failure);
-      dependencies.onEvent?.({ type: "failure", object, error: failure.error });
-    }
+    // A storage prefix can be shared by deployments backed by separate
+    // databases. Absence from this database is therefore not proof that the
+    // object is unowned. Orphan reconciliation is deliberately report-only.
+    summary.preserved += 1;
+    dependencies.onEvent?.({ type: "preserved", object });
   }
 
   return summary;

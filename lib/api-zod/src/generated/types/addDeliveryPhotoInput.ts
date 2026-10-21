@@ -7,6 +7,11 @@
  */
 
 export interface AddDeliveryPhotoInput {
+  /**
+   * Явно подтверждённая фактическая дата для одновременной отметки выполнения и прикрепления акта
+   * @pattern ^[0-9]{4}-[0-9]{2}-[0-9]{2}$
+   */
+  confirmedActualDate?: string;
   /** objectPath из ответа на запрос ссылки загрузки */
   objectPath: string;
   fileName: string;

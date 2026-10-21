@@ -66,6 +66,7 @@ async function listUnresolvedLegacyDriverCandidates() {
       .where(
         and(
           isNull(deliveriesTable.driverUserId),
+          isNull(deliveriesTable.archivedAt),
           sql`${normalizedDeliveryDriver} <> ''`,
         ),
       )
@@ -123,20 +124,19 @@ async function listUnresolvedLegacyDriverAssignments() {
       ? []
       : await db
           .select({
-            similarityGroup:
-              legacyDriverSimilarityReviewsTable.similarityGroup,
+            similarityGroup: legacyDriverSimilarityReviewsTable.similarityGroup,
             legacyNames: legacyDriverSimilarityReviewsTable.legacyNames,
-             reviewedAt: legacyDriverSimilarityReviewsTable.reviewedAt,
-             reviewedByName: appUsersTable.name,
+            reviewedAt: legacyDriverSimilarityReviewsTable.reviewedAt,
+            reviewedByName: appUsersTable.name,
+            reviewedByNameSnapshot:
+              legacyDriverSimilarityReviewsTable.reviewedByNameSnapshot,
+            reviewedByDeleted: isNull(appUsersTable.id),
           })
           .from(legacyDriverSimilarityReviewsTable)
-           .leftJoin(
-             appUsersTable,
-             eq(
-               legacyDriverSimilarityReviewsTable.reviewedBy,
-               appUsersTable.id,
-             ),
-           )
+          .leftJoin(
+            appUsersTable,
+            eq(legacyDriverSimilarityReviewsTable.reviewedBy, appUsersTable.id),
+          )
           .where(
             inArray(
               legacyDriverSimilarityReviewsTable.similarityGroup,
@@ -164,8 +164,11 @@ async function listUnresolvedLegacyDriverAssignments() {
       similarityReviewed,
       similarityReviewedAt: similarityReviewed ? review!.reviewedAt : null,
       similarityReviewedByName: similarityReviewed
-        ? review!.reviewedByName
+        ? (review!.reviewedByNameSnapshot ?? review!.reviewedByName)
         : null,
+      similarityReviewedByDeleted: similarityReviewed
+        ? review!.reviewedByDeleted
+        : false,
     };
   });
 }
@@ -255,6 +258,7 @@ router.post(
           .where(
             and(
               isNull(deliveriesTable.driverUserId),
+              isNull(deliveriesTable.archivedAt),
               sql`${normalizedLegacyDriverSql(deliveriesTable.legacyDriver)} = ${mapping.legacyName}`,
             ),
           )
@@ -325,6 +329,7 @@ router.put(
           similarityGroup: body.data.similarityGroup,
           legacyNames,
           reviewedBy: req.appUser!.id,
+          reviewedByNameSnapshot: req.appUser!.name,
         })
         .onConflictDoUpdate({
           target: legacyDriverSimilarityReviewsTable.similarityGroup,
@@ -332,6 +337,7 @@ router.put(
             legacyNames,
             reviewedAt: new Date(),
             reviewedBy: req.appUser!.id,
+            reviewedByNameSnapshot: req.appUser!.name,
           },
         });
     } else {

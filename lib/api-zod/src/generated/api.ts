@@ -5,266 +5,632 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
-import * as zod from 'zod';
+import * as zod from "zod";
 
+export const reviewDeliveryScheduleBodyMonthRegExp = new RegExp(
+  "^\\d{4}-(0[1-9]|1[0-2])$",
+);
+export const reviewDeliveryScheduleBodyRowsItemRowMin = 2;
+
+export const reviewDeliveryScheduleBodyRowsItemSiteNameMax = 500;
+
+export const reviewDeliveryScheduleBodyRowsItemDriverNameMax = 500;
+
+export const reviewDeliveryScheduleBodyRowsMax = 10000;
+
+export const ReviewDeliveryScheduleBody = zod.object({
+  month: zod.string().regex(reviewDeliveryScheduleBodyMonthRegExp),
+  rows: zod
+    .array(
+      zod.object({
+        row: zod.number().min(reviewDeliveryScheduleBodyRowsItemRowMin),
+        siteName: zod
+          .string()
+          .max(reviewDeliveryScheduleBodyRowsItemSiteNameMax),
+        driverName: zod
+          .string()
+          .max(reviewDeliveryScheduleBodyRowsItemDriverNameMax),
+        plannedDate: zod
+          .string()
+          .nullable()
+          .describe(
+            "ISO-дата, null для пустой ячейки; некорректная строка будет отмечена в отчёте",
+          ),
+      }),
+    )
+    .min(1)
+    .max(reviewDeliveryScheduleBodyRowsMax),
+  fingerprint: zod.string().optional(),
+  selectedRows: zod.array(zod.number()).optional(),
+});
+
+export const ReviewDeliveryScheduleResponse = zod.object({
+  fingerprint: zod.string(),
+  updated: zod.number(),
+  created: zod.number(),
+  rows: zod.array(
+    zod.object({
+      row: zod.number(),
+      siteName: zod.string(),
+      status: zod.enum([
+        "update",
+        "create",
+        "unchanged",
+        "protected",
+        "conflict",
+      ]),
+      reason: zod.string(),
+      oldDate: zod.string().nullable(),
+      newDate: zod.string().nullable(),
+      oldDriver: zod.string(),
+      newDriver: zod.string(),
+    }),
+  ),
+});
+
+/**
+ * @summary List inventory records (admin only)
+ */
+export const ListInventoryRecordsQueryParams = zod.object({
+  kind: zod.enum(["equipment", "consumables", "spare_parts"]).optional(),
+  siteId: zod.coerce.string().uuid().optional(),
+});
+
+export const ListInventoryRecordsResponseItem = zod.object({
+  id: zod.string().uuid(),
+  kind: zod.enum(["equipment", "consumables", "spare_parts"]),
+  name: zod.string(),
+  type: zod.string().nullable(),
+  model: zod.string().nullable(),
+  inventoryNumber: zod.string().nullable(),
+  sku: zod.string().nullable(),
+  quantity: zod.number(),
+  unit: zod.string(),
+  condition: zod.string(),
+  status: zod.string(),
+  siteId: zod.string().uuid().nullable(),
+  notes: zod.string().nullable(),
+});
+export const ListInventoryRecordsResponse = zod.array(
+  ListInventoryRecordsResponseItem,
+);
+
+/**
+ * @summary Create an inventory record (admin only)
+ */
+export const createInventoryRecordBodyNameMax = 300;
+
+export const createInventoryRecordBodyTypeMax = 300;
+
+export const createInventoryRecordBodyModelMax = 300;
+
+export const createInventoryRecordBodyInventoryNumberMax = 100;
+
+export const createInventoryRecordBodySkuMax = 100;
+
+export const createInventoryRecordBodyQuantityMin = 0;
+export const createInventoryRecordBodyQuantityMax = 1000000000;
+
+export const createInventoryRecordBodyUnitMax = 50;
+
+export const createInventoryRecordBodyConditionMax = 100;
+
+export const createInventoryRecordBodyStatusMax = 100;
+
+export const createInventoryRecordBodyNotesMax = 10000;
+
+export const CreateInventoryRecordBody = zod
+  .object({
+    kind: zod.enum(["equipment", "consumables", "spare_parts"]),
+    name: zod.string().min(1).max(createInventoryRecordBodyNameMax),
+    type: zod.string().max(createInventoryRecordBodyTypeMax).nullish(),
+    model: zod.string().max(createInventoryRecordBodyModelMax).nullish(),
+    inventoryNumber: zod
+      .string()
+      .min(1)
+      .max(createInventoryRecordBodyInventoryNumberMax)
+      .nullish(),
+    sku: zod.string().min(1).max(createInventoryRecordBodySkuMax).nullish(),
+    quantity: zod
+      .number()
+      .min(createInventoryRecordBodyQuantityMin)
+      .max(createInventoryRecordBodyQuantityMax),
+    unit: zod.string().min(1).max(createInventoryRecordBodyUnitMax),
+    condition: zod.string().min(1).max(createInventoryRecordBodyConditionMax),
+    status: zod.string().min(1).max(createInventoryRecordBodyStatusMax),
+    siteId: zod.string().uuid().nullish(),
+    notes: zod.string().max(createInventoryRecordBodyNotesMax).nullish(),
+  })
+  .describe(
+    "Equipment requires inventoryNumber and quantity exactly 1. Consumables and spare parts require sku. Archived sites cannot be assigned.",
+  );
+
+export const CreateInventoryRecordResponse = zod.object({
+  id: zod.string().uuid(),
+  kind: zod.enum(["equipment", "consumables", "spare_parts"]),
+  name: zod.string(),
+  type: zod.string().nullable(),
+  model: zod.string().nullable(),
+  inventoryNumber: zod.string().nullable(),
+  sku: zod.string().nullable(),
+  quantity: zod.number(),
+  unit: zod.string(),
+  condition: zod.string(),
+  status: zod.string(),
+  siteId: zod.string().uuid().nullable(),
+  notes: zod.string().nullable(),
+});
+
+/**
+ * Equipment identifiers are globally unique; SKU is unique per kind. Identifiers are trimmed and compared case-insensitively. Any invalid or duplicate row rejects the entire batch.
+ * @summary Atomically create inventory records without overwriting (admin only)
+ */
+export const bulkCreateInventoryRecordsBodyRowsItemNameMax = 300;
+
+export const bulkCreateInventoryRecordsBodyRowsItemTypeMax = 300;
+
+export const bulkCreateInventoryRecordsBodyRowsItemModelMax = 300;
+
+export const bulkCreateInventoryRecordsBodyRowsItemInventoryNumberMax = 100;
+
+export const bulkCreateInventoryRecordsBodyRowsItemSkuMax = 100;
+
+export const bulkCreateInventoryRecordsBodyRowsItemQuantityMin = 0;
+export const bulkCreateInventoryRecordsBodyRowsItemQuantityMax = 1000000000;
+
+export const bulkCreateInventoryRecordsBodyRowsItemUnitMax = 50;
+
+export const bulkCreateInventoryRecordsBodyRowsItemConditionMax = 100;
+
+export const bulkCreateInventoryRecordsBodyRowsItemStatusMax = 100;
+
+export const bulkCreateInventoryRecordsBodyRowsItemNotesMax = 10000;
+
+export const bulkCreateInventoryRecordsBodyRowsMax = 1000;
+
+export const BulkCreateInventoryRecordsBody = zod.object({
+  rows: zod
+    .array(
+      zod
+        .object({
+          kind: zod.enum(["equipment", "consumables", "spare_parts"]),
+          name: zod
+            .string()
+            .min(1)
+            .max(bulkCreateInventoryRecordsBodyRowsItemNameMax),
+          type: zod
+            .string()
+            .max(bulkCreateInventoryRecordsBodyRowsItemTypeMax)
+            .nullish(),
+          model: zod
+            .string()
+            .max(bulkCreateInventoryRecordsBodyRowsItemModelMax)
+            .nullish(),
+          inventoryNumber: zod
+            .string()
+            .min(1)
+            .max(bulkCreateInventoryRecordsBodyRowsItemInventoryNumberMax)
+            .nullish(),
+          sku: zod
+            .string()
+            .min(1)
+            .max(bulkCreateInventoryRecordsBodyRowsItemSkuMax)
+            .nullish(),
+          quantity: zod
+            .number()
+            .min(bulkCreateInventoryRecordsBodyRowsItemQuantityMin)
+            .max(bulkCreateInventoryRecordsBodyRowsItemQuantityMax),
+          unit: zod
+            .string()
+            .min(1)
+            .max(bulkCreateInventoryRecordsBodyRowsItemUnitMax),
+          condition: zod
+            .string()
+            .min(1)
+            .max(bulkCreateInventoryRecordsBodyRowsItemConditionMax),
+          status: zod
+            .string()
+            .min(1)
+            .max(bulkCreateInventoryRecordsBodyRowsItemStatusMax),
+          siteId: zod.string().uuid().nullish(),
+          notes: zod
+            .string()
+            .max(bulkCreateInventoryRecordsBodyRowsItemNotesMax)
+            .nullish(),
+        })
+        .describe(
+          "Equipment requires inventoryNumber and quantity exactly 1. Consumables and spare parts require sku. Archived sites cannot be assigned.",
+        ),
+    )
+    .min(1)
+    .max(bulkCreateInventoryRecordsBodyRowsMax),
+});
+
+export const BulkCreateInventoryRecordsResponse = zod.object({
+  records: zod.array(
+    zod.object({
+      id: zod.string().uuid(),
+      kind: zod.enum(["equipment", "consumables", "spare_parts"]),
+      name: zod.string(),
+      type: zod.string().nullable(),
+      model: zod.string().nullable(),
+      inventoryNumber: zod.string().nullable(),
+      sku: zod.string().nullable(),
+      quantity: zod.number(),
+      unit: zod.string(),
+      condition: zod.string(),
+      status: zod.string(),
+      siteId: zod.string().uuid().nullable(),
+      notes: zod.string().nullable(),
+    }),
+  ),
+  created: zod.number(),
+});
+
+/**
+ * @summary Update inventory record; kind is immutable (admin only)
+ */
+export const UpdateInventoryRecordParams = zod.object({
+  id: zod.coerce.string().uuid(),
+});
+
+export const updateInventoryRecordBodyNameMax = 300;
+
+export const updateInventoryRecordBodyTypeMax = 300;
+
+export const updateInventoryRecordBodyModelMax = 300;
+
+export const updateInventoryRecordBodyInventoryNumberMax = 100;
+
+export const updateInventoryRecordBodySkuMax = 100;
+
+export const updateInventoryRecordBodyQuantityMin = 0;
+export const updateInventoryRecordBodyQuantityMax = 1000000000;
+
+export const updateInventoryRecordBodyUnitMax = 50;
+
+export const updateInventoryRecordBodyConditionMax = 100;
+
+export const updateInventoryRecordBodyStatusMax = 100;
+
+export const updateInventoryRecordBodyNotesMax = 10000;
+
+export const UpdateInventoryRecordBody = zod.object({
+  name: zod.string().min(1).max(updateInventoryRecordBodyNameMax).optional(),
+  type: zod.string().max(updateInventoryRecordBodyTypeMax).nullish(),
+  model: zod.string().max(updateInventoryRecordBodyModelMax).nullish(),
+  inventoryNumber: zod
+    .string()
+    .min(1)
+    .max(updateInventoryRecordBodyInventoryNumberMax)
+    .nullish(),
+  sku: zod.string().min(1).max(updateInventoryRecordBodySkuMax).nullish(),
+  quantity: zod
+    .number()
+    .min(updateInventoryRecordBodyQuantityMin)
+    .max(updateInventoryRecordBodyQuantityMax)
+    .optional(),
+  unit: zod.string().min(1).max(updateInventoryRecordBodyUnitMax).optional(),
+  condition: zod
+    .string()
+    .min(1)
+    .max(updateInventoryRecordBodyConditionMax)
+    .optional(),
+  status: zod
+    .string()
+    .min(1)
+    .max(updateInventoryRecordBodyStatusMax)
+    .optional(),
+  siteId: zod.string().uuid().nullish(),
+  notes: zod.string().max(updateInventoryRecordBodyNotesMax).nullish(),
+});
+
+export const UpdateInventoryRecordResponse = zod.object({
+  id: zod.string().uuid(),
+  kind: zod.enum(["equipment", "consumables", "spare_parts"]),
+  name: zod.string(),
+  type: zod.string().nullable(),
+  model: zod.string().nullable(),
+  inventoryNumber: zod.string().nullable(),
+  sku: zod.string().nullable(),
+  quantity: zod.number(),
+  unit: zod.string(),
+  condition: zod.string(),
+  status: zod.string(),
+  siteId: zod.string().uuid().nullable(),
+  notes: zod.string().nullable(),
+});
+
+/**
+ * @summary Delete inventory record (admin only)
+ */
+export const DeleteInventoryRecordParams = zod.object({
+  id: zod.coerce.string().uuid(),
+});
+
+export const DeleteInventoryRecordResponse = zod.void();
 
 /**
  * Returns server health status
  * @summary Health check
  */
 export const HealthCheckResponse = zod.object({
-  "status": zod.string()
-})
-
+  status: zod.string(),
+});
 
 /**
  * @summary List all categories
  */
 export const ListCategoriesResponseItem = zod.object({
-  "id": zod.string(),
-  "name": zod.string(),
-  "createdAt": zod.coerce.date()
-})
-export const ListCategoriesResponse = zod.array(ListCategoriesResponseItem)
-
+  id: zod.string(),
+  name: zod.string(),
+  createdAt: zod.coerce.date(),
+});
+export const ListCategoriesResponse = zod.array(ListCategoriesResponseItem);
 
 /**
  * @summary Create a category
  */
 export const CreateCategoryBody = zod.object({
-  "name": zod.string()
-})
+  name: zod.string(),
+});
 
 export const CreateCategoryResponse = zod.object({
-  "id": zod.string(),
-  "name": zod.string(),
-  "createdAt": zod.coerce.date()
-})
-
+  id: zod.string(),
+  name: zod.string(),
+  createdAt: zod.coerce.date(),
+});
 
 /**
  * @summary Rename a category
  */
 export const UpdateCategoryParams = zod.object({
-  "id": zod.coerce.string()
-})
+  id: zod.coerce.string(),
+});
 
 export const UpdateCategoryBody = zod.object({
-  "name": zod.string()
-})
+  name: zod.string(),
+});
 
 export const UpdateCategoryResponse = zod.object({
-  "id": zod.string(),
-  "name": zod.string(),
-  "createdAt": zod.coerce.date()
-})
-
+  id: zod.string(),
+  name: zod.string(),
+  createdAt: zod.coerce.date(),
+});
 
 /**
  * @summary Delete a category
  */
 export const DeleteCategoryParams = zod.object({
-  "id": zod.coerce.string()
-})
+  id: zod.coerce.string(),
+});
 
-export const DeleteCategoryResponse = zod.void()
-
+export const DeleteCategoryResponse = zod.void();
 
 /**
  * @summary List all products with current stock
  */
 export const ListProductsQueryParams = zod.object({
-  "search": zod.coerce.string().optional(),
-  "categoryId": zod.coerce.string().optional(),
-  "lowStockOnly": zod.coerce.boolean().optional()
-})
+  search: zod.coerce.string().optional(),
+  categoryId: zod.coerce.string().optional(),
+  lowStockOnly: zod.coerce.boolean().optional(),
+});
 
 export const ListProductsResponseItem = zod.object({
-  "id": zod.string(),
-  "name": zod.string(),
-  "sku": zod.string(),
-  "unit": zod.string().describe('Unit of measure, e.g. шт, кг, л'),
-  "purchasePrice": zod.number().describe('Закупочная цена'),
-  "price": zod.number().describe('Продажная цена'),
-  "categoryId": zod.string().nullish(),
-  "categoryName": zod.string().nullish(),
-  "currentStock": zod.number(),
-  "minStock": zod.number().describe('Minimum stock threshold for low-stock alerts'),
-  "supplier": zod.string().nullable().describe('Поставщик'),
-  "supplierContact": zod.string().nullable().describe('Контакт поставщика'),
-  "isLowStock": zod.boolean().describe('currentStock < 30% of minStock'),
-  "createdAt": zod.coerce.date()
-})
-export const ListProductsResponse = zod.array(ListProductsResponseItem)
-
+  id: zod.string(),
+  name: zod.string(),
+  sku: zod.string(),
+  unit: zod.string().describe("Unit of measure, e.g. шт, кг, л"),
+  purchasePrice: zod.number().describe("Закупочная цена"),
+  price: zod.number().describe("Продажная цена"),
+  categoryId: zod.string().nullish(),
+  categoryName: zod.string().nullish(),
+  currentStock: zod.number(),
+  minStock: zod
+    .number()
+    .describe("Minimum stock threshold for low-stock alerts"),
+  supplier: zod.string().nullable().describe("Поставщик"),
+  supplierContact: zod.string().nullable().describe("Контакт поставщика"),
+  isLowStock: zod.boolean().describe("currentStock < 30% of minStock"),
+  createdAt: zod.coerce.date(),
+});
+export const ListProductsResponse = zod.array(ListProductsResponseItem);
 
 /**
  * @summary Create a product
  */
 export const CreateProductBody = zod.object({
-  "name": zod.string(),
-  "sku": zod.string(),
-  "unit": zod.string(),
-  "purchasePrice": zod.number().optional(),
-  "price": zod.number(),
-  "categoryId": zod.string().nullish(),
-  "minStock": zod.number().optional(),
-  "supplier": zod.string().nullish(),
-  "supplierContact": zod.string().nullish(),
-  "initialStock": zod.number().optional()
-})
+  name: zod.string(),
+  sku: zod.string(),
+  unit: zod.string(),
+  purchasePrice: zod.number().optional(),
+  price: zod.number(),
+  categoryId: zod.string().nullish(),
+  minStock: zod.number().optional(),
+  supplier: zod.string().nullish(),
+  supplierContact: zod.string().nullish(),
+  initialStock: zod.number().optional(),
+});
 
 export const CreateProductResponse = zod.object({
-  "id": zod.string(),
-  "name": zod.string(),
-  "sku": zod.string(),
-  "unit": zod.string().describe('Unit of measure, e.g. шт, кг, л'),
-  "purchasePrice": zod.number().describe('Закупочная цена'),
-  "price": zod.number().describe('Продажная цена'),
-  "categoryId": zod.string().nullish(),
-  "categoryName": zod.string().nullish(),
-  "currentStock": zod.number(),
-  "minStock": zod.number().describe('Minimum stock threshold for low-stock alerts'),
-  "supplier": zod.string().nullable().describe('Поставщик'),
-  "supplierContact": zod.string().nullable().describe('Контакт поставщика'),
-  "isLowStock": zod.boolean().describe('currentStock < 30% of minStock'),
-  "createdAt": zod.coerce.date()
-})
-
+  id: zod.string(),
+  name: zod.string(),
+  sku: zod.string(),
+  unit: zod.string().describe("Unit of measure, e.g. шт, кг, л"),
+  purchasePrice: zod.number().describe("Закупочная цена"),
+  price: zod.number().describe("Продажная цена"),
+  categoryId: zod.string().nullish(),
+  categoryName: zod.string().nullish(),
+  currentStock: zod.number(),
+  minStock: zod
+    .number()
+    .describe("Minimum stock threshold for low-stock alerts"),
+  supplier: zod.string().nullable().describe("Поставщик"),
+  supplierContact: zod.string().nullable().describe("Контакт поставщика"),
+  isLowStock: zod.boolean().describe("currentStock < 30% of minStock"),
+  createdAt: zod.coerce.date(),
+});
 
 /**
- * @summary Create multiple products at once (импорт из Excel), upsert by sku
+ * @summary Atomic product import, match by SKU or unambiguous name when SKU is blank
  */
+
 export const CreateProductsBulkBody = zod.object({
-  "items": zod.array(zod.object({
-  "name": zod.string(),
-  "sku": zod.string(),
-  "unit": zod.string(),
-  "purchasePrice": zod.number().optional(),
-  "price": zod.number(),
-  "categoryId": zod.string().nullish(),
-  "minStock": zod.number().optional(),
-  "supplier": zod.string().nullish(),
-  "supplierContact": zod.string().nullish(),
-  "initialStock": zod.number().optional()
-}))
-})
+  items: zod
+    .array(
+      zod.object({
+        name: zod.string(),
+        sku: zod.string(),
+        unit: zod.string(),
+        purchasePrice: zod.number().optional(),
+        price: zod.number(),
+        categoryId: zod.string().nullish(),
+        minStock: zod.number().optional(),
+        supplier: zod.string().nullish(),
+        supplierContact: zod.string().nullish(),
+        initialStock: zod.number().optional(),
+      }),
+    )
+    .min(1),
+});
 
-export const CreateProductsBulkResponseItem = zod.object({
-  "id": zod.string(),
-  "name": zod.string(),
-  "sku": zod.string(),
-  "unit": zod.string().describe('Unit of measure, e.g. шт, кг, л'),
-  "purchasePrice": zod.number().describe('Закупочная цена'),
-  "price": zod.number().describe('Продажная цена'),
-  "categoryId": zod.string().nullish(),
-  "categoryName": zod.string().nullish(),
-  "currentStock": zod.number(),
-  "minStock": zod.number().describe('Minimum stock threshold for low-stock alerts'),
-  "supplier": zod.string().nullable().describe('Поставщик'),
-  "supplierContact": zod.string().nullable().describe('Контакт поставщика'),
-  "isLowStock": zod.boolean().describe('currentStock < 30% of minStock'),
-  "createdAt": zod.coerce.date()
-})
-export const CreateProductsBulkResponse = zod.array(CreateProductsBulkResponseItem)
-
+export const CreateProductsBulkResponse = zod.object({
+  products: zod.array(
+    zod.object({
+      id: zod.string(),
+      name: zod.string(),
+      sku: zod.string(),
+      unit: zod.string().describe("Unit of measure, e.g. шт, кг, л"),
+      purchasePrice: zod.number().describe("Закупочная цена"),
+      price: zod.number().describe("Продажная цена"),
+      categoryId: zod.string().nullish(),
+      categoryName: zod.string().nullish(),
+      currentStock: zod.number(),
+      minStock: zod
+        .number()
+        .describe("Minimum stock threshold for low-stock alerts"),
+      supplier: zod.string().nullable().describe("Поставщик"),
+      supplierContact: zod.string().nullable().describe("Контакт поставщика"),
+      isLowStock: zod.boolean().describe("currentStock < 30% of minStock"),
+      createdAt: zod.coerce.date(),
+    }),
+  ),
+  created: zod.number(),
+  updated: zod.number(),
+});
 
 /**
  * @summary Get a product by id
  */
 export const GetProductParams = zod.object({
-  "id": zod.coerce.string()
-})
+  id: zod.coerce.string(),
+});
 
 export const GetProductResponse = zod.object({
-  "id": zod.string(),
-  "name": zod.string(),
-  "sku": zod.string(),
-  "unit": zod.string().describe('Unit of measure, e.g. шт, кг, л'),
-  "purchasePrice": zod.number().describe('Закупочная цена'),
-  "price": zod.number().describe('Продажная цена'),
-  "categoryId": zod.string().nullish(),
-  "categoryName": zod.string().nullish(),
-  "currentStock": zod.number(),
-  "minStock": zod.number().describe('Minimum stock threshold for low-stock alerts'),
-  "supplier": zod.string().nullable().describe('Поставщик'),
-  "supplierContact": zod.string().nullable().describe('Контакт поставщика'),
-  "isLowStock": zod.boolean().describe('currentStock < 30% of minStock'),
-  "createdAt": zod.coerce.date()
-})
-
+  id: zod.string(),
+  name: zod.string(),
+  sku: zod.string(),
+  unit: zod.string().describe("Unit of measure, e.g. шт, кг, л"),
+  purchasePrice: zod.number().describe("Закупочная цена"),
+  price: zod.number().describe("Продажная цена"),
+  categoryId: zod.string().nullish(),
+  categoryName: zod.string().nullish(),
+  currentStock: zod.number(),
+  minStock: zod
+    .number()
+    .describe("Minimum stock threshold for low-stock alerts"),
+  supplier: zod.string().nullable().describe("Поставщик"),
+  supplierContact: zod.string().nullable().describe("Контакт поставщика"),
+  isLowStock: zod.boolean().describe("currentStock < 30% of minStock"),
+  createdAt: zod.coerce.date(),
+});
 
 /**
  * @summary Update a product
  */
 export const UpdateProductParams = zod.object({
-  "id": zod.coerce.string()
-})
+  id: zod.coerce.string(),
+});
 
 export const UpdateProductBody = zod.object({
-  "name": zod.string().optional(),
-  "sku": zod.string().optional(),
-  "unit": zod.string().optional(),
-  "purchasePrice": zod.number().optional(),
-  "price": zod.number().optional(),
-  "categoryId": zod.string().nullish(),
-  "minStock": zod.number().optional(),
-  "supplier": zod.string().nullish(),
-  "supplierContact": zod.string().nullish()
-})
+  name: zod.string().optional(),
+  sku: zod.string().optional(),
+  unit: zod.string().optional(),
+  purchasePrice: zod.number().optional(),
+  price: zod.number().optional(),
+  categoryId: zod.string().nullish(),
+  minStock: zod.number().optional(),
+  supplier: zod.string().nullish(),
+  supplierContact: zod.string().nullish(),
+});
 
 export const UpdateProductResponse = zod.object({
-  "id": zod.string(),
-  "name": zod.string(),
-  "sku": zod.string(),
-  "unit": zod.string().describe('Unit of measure, e.g. шт, кг, л'),
-  "purchasePrice": zod.number().describe('Закупочная цена'),
-  "price": zod.number().describe('Продажная цена'),
-  "categoryId": zod.string().nullish(),
-  "categoryName": zod.string().nullish(),
-  "currentStock": zod.number(),
-  "minStock": zod.number().describe('Minimum stock threshold for low-stock alerts'),
-  "supplier": zod.string().nullable().describe('Поставщик'),
-  "supplierContact": zod.string().nullable().describe('Контакт поставщика'),
-  "isLowStock": zod.boolean().describe('currentStock < 30% of minStock'),
-  "createdAt": zod.coerce.date()
-})
-
+  id: zod.string(),
+  name: zod.string(),
+  sku: zod.string(),
+  unit: zod.string().describe("Unit of measure, e.g. шт, кг, л"),
+  purchasePrice: zod.number().describe("Закупочная цена"),
+  price: zod.number().describe("Продажная цена"),
+  categoryId: zod.string().nullish(),
+  categoryName: zod.string().nullish(),
+  currentStock: zod.number(),
+  minStock: zod
+    .number()
+    .describe("Minimum stock threshold for low-stock alerts"),
+  supplier: zod.string().nullable().describe("Поставщик"),
+  supplierContact: zod.string().nullable().describe("Контакт поставщика"),
+  isLowStock: zod.boolean().describe("currentStock < 30% of minStock"),
+  createdAt: zod.coerce.date(),
+});
 
 /**
  * @summary Delete a product
  */
 export const DeleteProductParams = zod.object({
-  "id": zod.coerce.string()
-})
+  id: zod.coerce.string(),
+});
 
-export const DeleteProductResponse = zod.void()
-
+export const DeleteProductResponse = zod.void();
 
 /**
  * @summary List goods receipt documents (история поступлений товара)
  */
 export const ListGoodsReceiptsResponseItem = zod.object({
-  "id": zod.string(),
-  "docNumber": zod.string().describe('Номер документа поставщика'),
-  "docType": zod.string().describe('Вид документа (накладная, УПД, счёт-фактура и т.п.)'),
-  "totalSum": zod.number().describe('Сумма по документу поставщика'),
-  "note": zod.string().nullable(),
-  "isPosted": zod.boolean().describe('Документ проведён (read-only after posting)'),
-  "suppliers": zod.array(zod.string()).describe('Distinct suppliers of the products in this receipt (for filtering)'),
-  "items": zod.array(zod.object({
-  "id": zod.string(),
-  "productId": zod.string(),
-  "productName": zod.string(),
-  "productUnit": zod.string(),
-  "quantity": zod.number(),
-  "price": zod.number(),
-  "createdNewProductCard": zod.boolean().describe('True if a new price-variant (or brand-new) product card was created for this item.')
-})),
-  "createdAt": zod.coerce.date()
-})
-export const ListGoodsReceiptsResponse = zod.array(ListGoodsReceiptsResponseItem)
-
+  id: zod.string(),
+  docNumber: zod.string().describe("Номер документа поставщика"),
+  docType: zod
+    .string()
+    .describe("Вид документа (накладная, УПД, счёт-фактура и т.п.)"),
+  totalSum: zod.number().describe("Сумма по документу поставщика"),
+  note: zod.string().nullable(),
+  isPosted: zod
+    .boolean()
+    .describe("Документ проведён (read-only after posting)"),
+  suppliers: zod
+    .array(zod.string())
+    .describe(
+      "Distinct suppliers of the products in this receipt (for filtering)",
+    ),
+  items: zod.array(
+    zod.object({
+      id: zod.string(),
+      productId: zod.string(),
+      productName: zod.string(),
+      productUnit: zod.string(),
+      quantity: zod.number(),
+      price: zod.number(),
+      createdNewProductCard: zod
+        .boolean()
+        .describe(
+          "True if a new price-variant (or brand-new) product card was created for this item.",
+        ),
+    }),
+  ),
+  createdAt: zod.coerce.date(),
+});
+export const ListGoodsReceiptsResponse = zod.array(
+  ListGoodsReceiptsResponseItem,
+);
 
 /**
  * @summary Register a "Поступление товара" document with a supplier document number, type, total sum, and a list of received items. For each item, adds stock to an existing product, creates a new product, or creates a new price-variant card if the sale price changed.
@@ -272,1298 +638,3513 @@ export const ListGoodsReceiptsResponse = zod.array(ListGoodsReceiptsResponseItem
  */
 export const createGoodsReceiptBodyItemsItemQuantityExclusiveMin = 0;
 
-
 export const CreateGoodsReceiptBody = zod.object({
-  "docNumber": zod.string(),
-  "docType": zod.string(),
-  "totalSum": zod.number(),
-  "note": zod.string().nullish(),
-  "items": zod.array(zod.object({
-  "productId": zod.string().nullish().describe('Existing product to receive stock against. Omit to create a brand-new product.'),
-  "name": zod.string(),
-  "sku": zod.string().nullish().describe('Auto-generated if omitted or if a price-variant card needs to be created.'),
-  "unit": zod.string(),
-  "purchasePrice": zod.number().optional(),
-  "price": zod.number(),
-  "categoryId": zod.string().nullish(),
-  "minStock": zod.number().optional(),
-  "supplier": zod.string().nullish(),
-  "supplierContact": zod.string().nullish(),
-  "quantity": zod.number().gt(createGoodsReceiptBodyItemsItemQuantityExclusiveMin)
-})).min(1)
-})
+  docNumber: zod.string(),
+  docType: zod.string(),
+  totalSum: zod.number(),
+  note: zod.string().nullish(),
+  items: zod
+    .array(
+      zod.object({
+        productId: zod
+          .string()
+          .nullish()
+          .describe(
+            "Existing product to receive stock against. Omit to create a brand-new product.",
+          ),
+        name: zod.string(),
+        sku: zod
+          .string()
+          .nullish()
+          .describe(
+            "Auto-generated if omitted or if a price-variant card needs to be created.",
+          ),
+        unit: zod.string(),
+        purchasePrice: zod.number().optional(),
+        price: zod.number(),
+        categoryId: zod.string().nullish(),
+        minStock: zod.number().optional(),
+        supplier: zod.string().nullish(),
+        supplierContact: zod.string().nullish(),
+        quantity: zod
+          .number()
+          .gt(createGoodsReceiptBodyItemsItemQuantityExclusiveMin),
+      }),
+    )
+    .min(1),
+});
 
 export const CreateGoodsReceiptResponse = zod.object({
-  "id": zod.string(),
-  "docNumber": zod.string().describe('Номер документа поставщика'),
-  "docType": zod.string().describe('Вид документа (накладная, УПД, счёт-фактура и т.п.)'),
-  "totalSum": zod.number().describe('Сумма по документу поставщика'),
-  "note": zod.string().nullable(),
-  "isPosted": zod.boolean().describe('Документ проведён (read-only after posting)'),
-  "suppliers": zod.array(zod.string()).describe('Distinct suppliers of the products in this receipt (for filtering)'),
-  "items": zod.array(zod.object({
-  "id": zod.string(),
-  "productId": zod.string(),
-  "productName": zod.string(),
-  "productUnit": zod.string(),
-  "quantity": zod.number(),
-  "price": zod.number(),
-  "createdNewProductCard": zod.boolean().describe('True if a new price-variant (or brand-new) product card was created for this item.')
-})),
-  "createdAt": zod.coerce.date()
-})
-
+  id: zod.string(),
+  docNumber: zod.string().describe("Номер документа поставщика"),
+  docType: zod
+    .string()
+    .describe("Вид документа (накладная, УПД, счёт-фактура и т.п.)"),
+  totalSum: zod.number().describe("Сумма по документу поставщика"),
+  note: zod.string().nullable(),
+  isPosted: zod
+    .boolean()
+    .describe("Документ проведён (read-only after posting)"),
+  suppliers: zod
+    .array(zod.string())
+    .describe(
+      "Distinct suppliers of the products in this receipt (for filtering)",
+    ),
+  items: zod.array(
+    zod.object({
+      id: zod.string(),
+      productId: zod.string(),
+      productName: zod.string(),
+      productUnit: zod.string(),
+      quantity: zod.number(),
+      price: zod.number(),
+      createdNewProductCard: zod
+        .boolean()
+        .describe(
+          "True if a new price-variant (or brand-new) product card was created for this item.",
+        ),
+    }),
+  ),
+  createdAt: zod.coerce.date(),
+});
 
 /**
  * @summary Get a goods receipt document by id
  */
 export const GetGoodsReceiptParams = zod.object({
-  "id": zod.coerce.string()
-})
+  id: zod.coerce.string(),
+});
 
 export const GetGoodsReceiptResponse = zod.object({
-  "id": zod.string(),
-  "docNumber": zod.string().describe('Номер документа поставщика'),
-  "docType": zod.string().describe('Вид документа (накладная, УПД, счёт-фактура и т.п.)'),
-  "totalSum": zod.number().describe('Сумма по документу поставщика'),
-  "note": zod.string().nullable(),
-  "isPosted": zod.boolean().describe('Документ проведён (read-only after posting)'),
-  "suppliers": zod.array(zod.string()).describe('Distinct suppliers of the products in this receipt (for filtering)'),
-  "items": zod.array(zod.object({
-  "id": zod.string(),
-  "productId": zod.string(),
-  "productName": zod.string(),
-  "productUnit": zod.string(),
-  "quantity": zod.number(),
-  "price": zod.number(),
-  "createdNewProductCard": zod.boolean().describe('True if a new price-variant (or brand-new) product card was created for this item.')
-})),
-  "createdAt": zod.coerce.date()
-})
-
+  id: zod.string(),
+  docNumber: zod.string().describe("Номер документа поставщика"),
+  docType: zod
+    .string()
+    .describe("Вид документа (накладная, УПД, счёт-фактура и т.п.)"),
+  totalSum: zod.number().describe("Сумма по документу поставщика"),
+  note: zod.string().nullable(),
+  isPosted: zod
+    .boolean()
+    .describe("Документ проведён (read-only after posting)"),
+  suppliers: zod
+    .array(zod.string())
+    .describe(
+      "Distinct suppliers of the products in this receipt (for filtering)",
+    ),
+  items: zod.array(
+    zod.object({
+      id: zod.string(),
+      productId: zod.string(),
+      productName: zod.string(),
+      productUnit: zod.string(),
+      quantity: zod.number(),
+      price: zod.number(),
+      createdNewProductCard: zod
+        .boolean()
+        .describe(
+          "True if a new price-variant (or brand-new) product card was created for this item.",
+        ),
+    }),
+  ),
+  createdAt: zod.coerce.date(),
+});
 
 /**
  * @summary Update a draft (not posted) goods receipt: header fields (docNumber, docType, note) and item quantities, or remove items. Rejected with 400 if the document is posted. Item quantity changes and removals are synced to the movements ledger.
 
  */
 export const UpdateGoodsReceiptParams = zod.object({
-  "id": zod.coerce.string()
-})
+  id: zod.coerce.string(),
+});
 
 export const updateGoodsReceiptBodyItemsItemQuantityExclusiveMin = 0;
 
-
 export const UpdateGoodsReceiptBody = zod.object({
-  "docNumber": zod.string().optional(),
-  "docType": zod.string().optional(),
-  "note": zod.string().nullish(),
-  "items": zod.array(zod.object({
-  "id": zod.string().describe('Existing goods_receipt_items id'),
-  "quantity": zod.number().gt(updateGoodsReceiptBodyItemsItemQuantityExclusiveMin)
-})).optional().describe('Full list of remaining items with (possibly updated) quantities. Items of the document missing from this list are removed. New items cannot be added here.\n')
-})
+  docNumber: zod.string().optional(),
+  docType: zod.string().optional(),
+  note: zod.string().nullish(),
+  items: zod
+    .array(
+      zod.object({
+        id: zod.string().describe("Existing goods_receipt_items id"),
+        quantity: zod
+          .number()
+          .gt(updateGoodsReceiptBodyItemsItemQuantityExclusiveMin),
+      }),
+    )
+    .optional()
+    .describe(
+      "Full list of remaining items with (possibly updated) quantities. Items of the document missing from this list are removed. New items cannot be added here.\n",
+    ),
+});
 
 export const UpdateGoodsReceiptResponse = zod.object({
-  "id": zod.string(),
-  "docNumber": zod.string().describe('Номер документа поставщика'),
-  "docType": zod.string().describe('Вид документа (накладная, УПД, счёт-фактура и т.п.)'),
-  "totalSum": zod.number().describe('Сумма по документу поставщика'),
-  "note": zod.string().nullable(),
-  "isPosted": zod.boolean().describe('Документ проведён (read-only after posting)'),
-  "suppliers": zod.array(zod.string()).describe('Distinct suppliers of the products in this receipt (for filtering)'),
-  "items": zod.array(zod.object({
-  "id": zod.string(),
-  "productId": zod.string(),
-  "productName": zod.string(),
-  "productUnit": zod.string(),
-  "quantity": zod.number(),
-  "price": zod.number(),
-  "createdNewProductCard": zod.boolean().describe('True if a new price-variant (or brand-new) product card was created for this item.')
-})),
-  "createdAt": zod.coerce.date()
-})
-
+  id: zod.string(),
+  docNumber: zod.string().describe("Номер документа поставщика"),
+  docType: zod
+    .string()
+    .describe("Вид документа (накладная, УПД, счёт-фактура и т.п.)"),
+  totalSum: zod.number().describe("Сумма по документу поставщика"),
+  note: zod.string().nullable(),
+  isPosted: zod
+    .boolean()
+    .describe("Документ проведён (read-only after posting)"),
+  suppliers: zod
+    .array(zod.string())
+    .describe(
+      "Distinct suppliers of the products in this receipt (for filtering)",
+    ),
+  items: zod.array(
+    zod.object({
+      id: zod.string(),
+      productId: zod.string(),
+      productName: zod.string(),
+      productUnit: zod.string(),
+      quantity: zod.number(),
+      price: zod.number(),
+      createdNewProductCard: zod
+        .boolean()
+        .describe(
+          "True if a new price-variant (or brand-new) product card was created for this item.",
+        ),
+    }),
+  ),
+  createdAt: zod.coerce.date(),
+});
 
 /**
  * @summary Delete a goods receipt document (admin only). Removes the document, its items, and all linked "in" movements, so the received stock is reversed.
 
  */
 export const DeleteGoodsReceiptParams = zod.object({
-  "id": zod.coerce.string()
-})
+  id: zod.coerce.string(),
+});
 
-export const DeleteGoodsReceiptResponse = zod.void()
-
+export const DeleteGoodsReceiptResponse = zod.void();
 
 /**
  * @summary Провести документ поступления. After posting, the document becomes read-only (no edits allowed); only an admin can delete it.
 
  */
 export const PostGoodsReceiptParams = zod.object({
-  "id": zod.coerce.string()
-})
+  id: zod.coerce.string(),
+});
 
 export const PostGoodsReceiptResponse = zod.object({
-  "id": zod.string(),
-  "docNumber": zod.string().describe('Номер документа поставщика'),
-  "docType": zod.string().describe('Вид документа (накладная, УПД, счёт-фактура и т.п.)'),
-  "totalSum": zod.number().describe('Сумма по документу поставщика'),
-  "note": zod.string().nullable(),
-  "isPosted": zod.boolean().describe('Документ проведён (read-only after posting)'),
-  "suppliers": zod.array(zod.string()).describe('Distinct suppliers of the products in this receipt (for filtering)'),
-  "items": zod.array(zod.object({
-  "id": zod.string(),
-  "productId": zod.string(),
-  "productName": zod.string(),
-  "productUnit": zod.string(),
-  "quantity": zod.number(),
-  "price": zod.number(),
-  "createdNewProductCard": zod.boolean().describe('True if a new price-variant (or brand-new) product card was created for this item.')
-})),
-  "createdAt": zod.coerce.date()
-})
-
+  id: zod.string(),
+  docNumber: zod.string().describe("Номер документа поставщика"),
+  docType: zod
+    .string()
+    .describe("Вид документа (накладная, УПД, счёт-фактура и т.п.)"),
+  totalSum: zod.number().describe("Сумма по документу поставщика"),
+  note: zod.string().nullable(),
+  isPosted: zod
+    .boolean()
+    .describe("Документ проведён (read-only after posting)"),
+  suppliers: zod
+    .array(zod.string())
+    .describe(
+      "Distinct suppliers of the products in this receipt (for filtering)",
+    ),
+  items: zod.array(
+    zod.object({
+      id: zod.string(),
+      productId: zod.string(),
+      productName: zod.string(),
+      productUnit: zod.string(),
+      quantity: zod.number(),
+      price: zod.number(),
+      createdNewProductCard: zod
+        .boolean()
+        .describe(
+          "True if a new price-variant (or brand-new) product card was created for this item.",
+        ),
+    }),
+  ),
+  createdAt: zod.coerce.date(),
+});
 
 /**
  * @summary List all serviced sites
  */
 export const ListSitesQueryParams = zod.object({
-  "search": zod.coerce.string().optional()
-})
+  search: zod.coerce.string().optional(),
+});
 
 export const ListSitesResponseItem = zod.object({
-  "id": zod.string(),
-  "name": zod.string().describe('Unique site name'),
-  "address": zod.string(),
-  "branch": zod.string().describe('Куст'),
-  "customer": zod.string().describe('Торговое название объекта (необязательно; непустое значение строго из справочника trade_names)'),
-  "client": zod.string().describe('Клиент'),
-  "manager": zod.string().describe('Закреплённый менеджер'),
-  "managerContact": zod.string().describe('Контакт менеджера'),
-  "director": zod.string().describe('Закреплённый руководитель'),
-  "project": zod.string().describe('Закреплённый проект'),
-  "driverUserId": zod.string().uuid().nullable().describe('UUID закреплённого пользователя-водителя'),
-  "driver": zod.string().describe('Отображаемое имя водителя или «Не назначен»'),
-  "deliveryType": zod.string().describe('Тип поставки (из справочника delivery_types; может быть пустым)'),
-  "closedFrom": zod.coerce.date().nullable().describe('Дата, с которой объект закрыт (null — объект работает)'),
-  "reopenDate": zod.coerce.date().nullable().describe('Планируемая дата открытия (если известна)'),
-  "closureReason": zod.string().nullable(),
-  "closedBy": zod.string().nullable(),
-  "isClosed": zod.boolean().describe('Закрыт ли объект на текущую дату (учитывает closedFrom\/reopenDate)'),
-  "createdAt": zod.coerce.date()
-})
-export const ListSitesResponse = zod.array(ListSitesResponseItem)
-
+  id: zod.string(),
+  name: zod.string().describe("Unique site name"),
+  address: zod.string(),
+  branch: zod.string().describe("Куст"),
+  customer: zod
+    .string()
+    .describe(
+      "Торговое название объекта (необязательно; непустое значение строго из справочника trade_names)",
+    ),
+  client: zod
+    .string()
+    .describe("Отображаемое название клиента, сохранённое вместе с объектом"),
+  clientId: zod
+    .string()
+    .uuid()
+    .describe("Стабильная обязательная связь с клиентом"),
+  manager: zod.string().describe("Закреплённый менеджер"),
+  managerContact: zod.string().describe("Контакт менеджера"),
+  director: zod.string().describe("Закреплённый руководитель"),
+  project: zod.string().describe("Закреплённый проект"),
+  driverUserId: zod
+    .string()
+    .uuid()
+    .nullable()
+    .describe("UUID закреплённого пользователя-водителя"),
+  driver: zod.string().describe("Отображаемое имя водителя или «Не назначен»"),
+  deliveryType: zod
+    .string()
+    .describe(
+      "Тип поставки (из справочника delivery_types; может быть пустым)",
+    ),
+  serviceMode: zod
+    .enum(["monthly", "additional_only"])
+    .optional()
+    .describe(
+      "Формат обслуживания объекта, независимый от типа отдельной доставки",
+    ),
+  features: zod
+    .string()
+    .describe("Особенности работы объекта или подъезда большой машины"),
+  closedFrom: zod.coerce
+    .date()
+    .nullable()
+    .describe("Дата, с которой объект закрыт (null — объект работает)"),
+  reopenDate: zod.coerce
+    .date()
+    .nullable()
+    .describe("Планируемая дата открытия (если известна)"),
+  closureReason: zod.string().nullable(),
+  closedBy: zod.string().nullable(),
+  isClosed: zod
+    .boolean()
+    .describe(
+      "Закрыт ли объект на текущую дату (учитывает closedFrom\/reopenDate)",
+    ),
+  createdAt: zod.coerce.date(),
+  pendingClosureRequest: zod
+    .object({
+      id: zod.string().uuid(),
+      siteId: zod.string().uuid(),
+      siteName: zod.string(),
+      authorName: zod.string(),
+      closedFrom: zod.coerce.date(),
+      reopenDate: zod.coerce.date().nullable(),
+      closureReason: zod.string().nullable(),
+      createdAt: zod.coerce.date(),
+    })
+    .nullable()
+    .describe("Ожидающее подтверждения предложение закрытия объекта"),
+});
+export const ListSitesResponse = zod.array(ListSitesResponseItem);
 
 /**
  * @summary Create a serviced site
  */
-export const CreateSiteBody = zod.object({
-  "name": zod.string(),
-  "address": zod.string(),
-  "branch": zod.string(),
-  "customer": zod.string().optional().describe('Необязательное торговое название объекта'),
-  "client": zod.string(),
-  "manager": zod.string(),
-  "managerContact": zod.string().optional(),
-  "director": zod.string(),
-  "project": zod.string(),
-  "driverUserId": zod.string().uuid().nullish(),
-  "deliveryType": zod.string().optional()
-})
+
+export const createSiteBodyTwoCustomerRegExp = new RegExp(".*\\S.*");
+
+export const CreateSiteBody = zod
+  .object({
+    name: zod.string(),
+    address: zod.string(),
+    branch: zod.string(),
+    clientId: zod.string().uuid(),
+    manager: zod.string(),
+    managerContact: zod.string().optional(),
+    director: zod.string(),
+    project: zod.string(),
+    driverUserId: zod.string().uuid().nullish(),
+    deliveryType: zod.string().optional(),
+    serviceMode: zod
+      .enum(["monthly", "additional_only"])
+      .optional()
+      .describe(
+        "Формат обслуживания объекта, независимый от типа отдельной доставки",
+      ),
+    features: zod.string().optional(),
+  })
+  .and(
+    zod.object({
+      customer: zod
+        .string()
+        .min(1)
+        .regex(createSiteBodyTwoCustomerRegExp)
+        .describe(
+          "Обязательное непустое торговое название объекта из справочника",
+        ),
+    }),
+  );
 
 export const CreateSiteResponse = zod.object({
-  "id": zod.string(),
-  "name": zod.string().describe('Unique site name'),
-  "address": zod.string(),
-  "branch": zod.string().describe('Куст'),
-  "customer": zod.string().describe('Торговое название объекта (необязательно; непустое значение строго из справочника trade_names)'),
-  "client": zod.string().describe('Клиент'),
-  "manager": zod.string().describe('Закреплённый менеджер'),
-  "managerContact": zod.string().describe('Контакт менеджера'),
-  "director": zod.string().describe('Закреплённый руководитель'),
-  "project": zod.string().describe('Закреплённый проект'),
-  "driverUserId": zod.string().uuid().nullable().describe('UUID закреплённого пользователя-водителя'),
-  "driver": zod.string().describe('Отображаемое имя водителя или «Не назначен»'),
-  "deliveryType": zod.string().describe('Тип поставки (из справочника delivery_types; может быть пустым)'),
-  "closedFrom": zod.coerce.date().nullable().describe('Дата, с которой объект закрыт (null — объект работает)'),
-  "reopenDate": zod.coerce.date().nullable().describe('Планируемая дата открытия (если известна)'),
-  "closureReason": zod.string().nullable(),
-  "closedBy": zod.string().nullable(),
-  "isClosed": zod.boolean().describe('Закрыт ли объект на текущую дату (учитывает closedFrom\/reopenDate)'),
-  "createdAt": zod.coerce.date()
-})
-
+  id: zod.string(),
+  name: zod.string().describe("Unique site name"),
+  address: zod.string(),
+  branch: zod.string().describe("Куст"),
+  customer: zod
+    .string()
+    .describe(
+      "Торговое название объекта (необязательно; непустое значение строго из справочника trade_names)",
+    ),
+  client: zod
+    .string()
+    .describe("Отображаемое название клиента, сохранённое вместе с объектом"),
+  clientId: zod
+    .string()
+    .uuid()
+    .describe("Стабильная обязательная связь с клиентом"),
+  manager: zod.string().describe("Закреплённый менеджер"),
+  managerContact: zod.string().describe("Контакт менеджера"),
+  director: zod.string().describe("Закреплённый руководитель"),
+  project: zod.string().describe("Закреплённый проект"),
+  driverUserId: zod
+    .string()
+    .uuid()
+    .nullable()
+    .describe("UUID закреплённого пользователя-водителя"),
+  driver: zod.string().describe("Отображаемое имя водителя или «Не назначен»"),
+  deliveryType: zod
+    .string()
+    .describe(
+      "Тип поставки (из справочника delivery_types; может быть пустым)",
+    ),
+  serviceMode: zod
+    .enum(["monthly", "additional_only"])
+    .optional()
+    .describe(
+      "Формат обслуживания объекта, независимый от типа отдельной доставки",
+    ),
+  features: zod
+    .string()
+    .describe("Особенности работы объекта или подъезда большой машины"),
+  closedFrom: zod.coerce
+    .date()
+    .nullable()
+    .describe("Дата, с которой объект закрыт (null — объект работает)"),
+  reopenDate: zod.coerce
+    .date()
+    .nullable()
+    .describe("Планируемая дата открытия (если известна)"),
+  closureReason: zod.string().nullable(),
+  closedBy: zod.string().nullable(),
+  isClosed: zod
+    .boolean()
+    .describe(
+      "Закрыт ли объект на текущую дату (учитывает closedFrom\/reopenDate)",
+    ),
+  createdAt: zod.coerce.date(),
+  pendingClosureRequest: zod
+    .object({
+      id: zod.string().uuid(),
+      siteId: zod.string().uuid(),
+      siteName: zod.string(),
+      authorName: zod.string(),
+      closedFrom: zod.coerce.date(),
+      reopenDate: zod.coerce.date().nullable(),
+      closureReason: zod.string().nullable(),
+      createdAt: zod.coerce.date(),
+    })
+    .nullable()
+    .describe("Ожидающее подтверждения предложение закрытия объекта"),
+});
 
 /**
  * @summary Create multiple sites at once (импорт из Excel), upsert by name
  */
 export const CreateSitesBulkBody = zod.object({
-  "items": zod.array(zod.object({
-  "name": zod.string(),
-  "address": zod.string(),
-  "branch": zod.string(),
-  "customer": zod.string().optional().describe('Необязательное торговое название объекта'),
-  "client": zod.string(),
-  "manager": zod.string(),
-  "managerContact": zod.string().optional(),
-  "director": zod.string(),
-  "project": zod.string(),
-  "driverUserId": zod.string().uuid().nullish(),
-  "deliveryType": zod.string().optional()
-}))
-})
+  items: zod.array(
+    zod
+      .object({
+        name: zod.string(),
+        address: zod.string(),
+        branch: zod.string(),
+        clientId: zod.string().uuid(),
+        manager: zod.string(),
+        managerContact: zod.string().optional(),
+        director: zod.string(),
+        project: zod.string(),
+        driverUserId: zod.string().uuid().nullish(),
+        deliveryType: zod.string().optional(),
+        serviceMode: zod
+          .enum(["monthly", "additional_only"])
+          .optional()
+          .describe(
+            "Формат обслуживания объекта, независимый от типа отдельной доставки",
+          ),
+        features: zod.string().optional(),
+      })
+      .and(
+        zod.object({
+          customer: zod
+            .string()
+            .optional()
+            .describe("Необязательное торговое название объекта"),
+          id: zod.string().uuid().optional(),
+        }),
+      ),
+  ),
+});
 
 export const CreateSitesBulkResponseItem = zod.object({
-  "id": zod.string(),
-  "name": zod.string().describe('Unique site name'),
-  "address": zod.string(),
-  "branch": zod.string().describe('Куст'),
-  "customer": zod.string().describe('Торговое название объекта (необязательно; непустое значение строго из справочника trade_names)'),
-  "client": zod.string().describe('Клиент'),
-  "manager": zod.string().describe('Закреплённый менеджер'),
-  "managerContact": zod.string().describe('Контакт менеджера'),
-  "director": zod.string().describe('Закреплённый руководитель'),
-  "project": zod.string().describe('Закреплённый проект'),
-  "driverUserId": zod.string().uuid().nullable().describe('UUID закреплённого пользователя-водителя'),
-  "driver": zod.string().describe('Отображаемое имя водителя или «Не назначен»'),
-  "deliveryType": zod.string().describe('Тип поставки (из справочника delivery_types; может быть пустым)'),
-  "closedFrom": zod.coerce.date().nullable().describe('Дата, с которой объект закрыт (null — объект работает)'),
-  "reopenDate": zod.coerce.date().nullable().describe('Планируемая дата открытия (если известна)'),
-  "closureReason": zod.string().nullable(),
-  "closedBy": zod.string().nullable(),
-  "isClosed": zod.boolean().describe('Закрыт ли объект на текущую дату (учитывает closedFrom\/reopenDate)'),
-  "createdAt": zod.coerce.date()
-})
-export const CreateSitesBulkResponse = zod.array(CreateSitesBulkResponseItem)
+  id: zod.string(),
+  name: zod.string().describe("Unique site name"),
+  address: zod.string(),
+  branch: zod.string().describe("Куст"),
+  customer: zod
+    .string()
+    .describe(
+      "Торговое название объекта (необязательно; непустое значение строго из справочника trade_names)",
+    ),
+  client: zod
+    .string()
+    .describe("Отображаемое название клиента, сохранённое вместе с объектом"),
+  clientId: zod
+    .string()
+    .uuid()
+    .describe("Стабильная обязательная связь с клиентом"),
+  manager: zod.string().describe("Закреплённый менеджер"),
+  managerContact: zod.string().describe("Контакт менеджера"),
+  director: zod.string().describe("Закреплённый руководитель"),
+  project: zod.string().describe("Закреплённый проект"),
+  driverUserId: zod
+    .string()
+    .uuid()
+    .nullable()
+    .describe("UUID закреплённого пользователя-водителя"),
+  driver: zod.string().describe("Отображаемое имя водителя или «Не назначен»"),
+  deliveryType: zod
+    .string()
+    .describe(
+      "Тип поставки (из справочника delivery_types; может быть пустым)",
+    ),
+  serviceMode: zod
+    .enum(["monthly", "additional_only"])
+    .optional()
+    .describe(
+      "Формат обслуживания объекта, независимый от типа отдельной доставки",
+    ),
+  features: zod
+    .string()
+    .describe("Особенности работы объекта или подъезда большой машины"),
+  closedFrom: zod.coerce
+    .date()
+    .nullable()
+    .describe("Дата, с которой объект закрыт (null — объект работает)"),
+  reopenDate: zod.coerce
+    .date()
+    .nullable()
+    .describe("Планируемая дата открытия (если известна)"),
+  closureReason: zod.string().nullable(),
+  closedBy: zod.string().nullable(),
+  isClosed: zod
+    .boolean()
+    .describe(
+      "Закрыт ли объект на текущую дату (учитывает closedFrom\/reopenDate)",
+    ),
+  createdAt: zod.coerce.date(),
+  pendingClosureRequest: zod
+    .object({
+      id: zod.string().uuid(),
+      siteId: zod.string().uuid(),
+      siteName: zod.string(),
+      authorName: zod.string(),
+      closedFrom: zod.coerce.date(),
+      reopenDate: zod.coerce.date().nullable(),
+      closureReason: zod.string().nullable(),
+      createdAt: zod.coerce.date(),
+    })
+    .nullable()
+    .describe("Ожидающее подтверждения предложение закрытия объекта"),
+});
+export const CreateSitesBulkResponse = zod.array(CreateSitesBulkResponseItem);
 
+/**
+ * @summary Список предложений правок объектов (только администратор)
+ */
+export const ListSiteChangeRequestsQueryParams = zod.object({
+  status: zod.enum(["pending", "approved", "rejected"]).optional(),
+});
+
+export const ListSiteChangeRequestsResponseItem = zod.object({
+  id: zod.string().uuid(),
+  siteId: zod.string().uuid().nullable(),
+  siteName: zod.string(),
+  authorUserId: zod.string().uuid().nullable(),
+  authorName: zod.string(),
+  authorEmail: zod.string(),
+  kind: zod.enum(["edit", "closure"]),
+  payload: zod.union([
+    zod.object({
+      kind: zod.enum(["closure"]),
+      closedFrom: zod.coerce.date(),
+      reopenDate: zod.coerce.date().nullable(),
+      closureReason: zod.string().nullable(),
+    }),
+    zod.object({
+      name: zod.string().optional(),
+      address: zod.string().optional(),
+      branch: zod.string().optional(),
+      customer: zod.string().optional(),
+      clientId: zod.string().uuid().optional(),
+      manager: zod.string().optional(),
+      managerContact: zod.string().optional(),
+      director: zod.string().optional(),
+      project: zod.string().optional(),
+      driverUserId: zod.string().uuid().nullish(),
+      deliveryType: zod.string().optional(),
+      serviceMode: zod
+        .enum(["monthly", "additional_only"])
+        .optional()
+        .describe(
+          "Формат обслуживания объекта, независимый от типа отдельной доставки",
+        ),
+    }),
+  ]),
+  originalPayload: zod.union([
+    zod.object({
+      kind: zod.enum(["closure"]),
+      closedFrom: zod.coerce.date().nullable(),
+      reopenDate: zod.coerce.date().nullable(),
+      closureReason: zod.string().nullable(),
+    }),
+    zod.object({
+      name: zod.string().optional(),
+      address: zod.string().optional(),
+      branch: zod.string().optional(),
+      customer: zod.string().optional(),
+      clientId: zod.string().uuid().optional(),
+      manager: zod.string().optional(),
+      managerContact: zod.string().optional(),
+      director: zod.string().optional(),
+      project: zod.string().optional(),
+      driverUserId: zod.string().uuid().nullish(),
+      deliveryType: zod.string().optional(),
+      serviceMode: zod
+        .enum(["monthly", "additional_only"])
+        .optional()
+        .describe(
+          "Формат обслуживания объекта, независимый от типа отдельной доставки",
+        ),
+    }),
+  ]),
+  status: zod.enum(["pending", "approved", "rejected"]),
+  createdAt: zod.coerce.date(),
+  decidedAt: zod.coerce.date().nullable(),
+  decidedByUserId: zod.string().uuid().nullable(),
+  decidedByName: zod.string().nullable(),
+  decidedByEmail: zod.string().nullable(),
+});
+export const ListSiteChangeRequestsResponse = zod.array(
+  ListSiteChangeRequestsResponseItem,
+);
+
+/**
+ * @summary Предложить правки объекта (логист с доступом к разделу Объекты)
+ */
+export const CreateSiteChangeRequestParams = zod.object({
+  id: zod.coerce.string().uuid(),
+});
+
+export const CreateSiteChangeRequestBody = zod.object({
+  name: zod.string().optional(),
+  address: zod.string().optional(),
+  branch: zod.string().optional(),
+  customer: zod.string().optional(),
+  clientId: zod.string().uuid().optional(),
+  manager: zod.string().optional(),
+  managerContact: zod.string().optional(),
+  director: zod.string().optional(),
+  project: zod.string().optional(),
+  driverUserId: zod.string().uuid().nullish(),
+  deliveryType: zod.string().optional(),
+  serviceMode: zod
+    .enum(["monthly", "additional_only"])
+    .optional()
+    .describe(
+      "Формат обслуживания объекта, независимый от типа отдельной доставки",
+    ),
+});
+
+export const CreateSiteChangeRequestResponse = zod.object({
+  id: zod.string().uuid(),
+  siteId: zod.string().uuid().nullable(),
+  siteName: zod.string(),
+  authorUserId: zod.string().uuid().nullable(),
+  authorName: zod.string(),
+  authorEmail: zod.string(),
+  kind: zod.enum(["edit", "closure"]),
+  payload: zod.union([
+    zod.object({
+      kind: zod.enum(["closure"]),
+      closedFrom: zod.coerce.date(),
+      reopenDate: zod.coerce.date().nullable(),
+      closureReason: zod.string().nullable(),
+    }),
+    zod.object({
+      name: zod.string().optional(),
+      address: zod.string().optional(),
+      branch: zod.string().optional(),
+      customer: zod.string().optional(),
+      clientId: zod.string().uuid().optional(),
+      manager: zod.string().optional(),
+      managerContact: zod.string().optional(),
+      director: zod.string().optional(),
+      project: zod.string().optional(),
+      driverUserId: zod.string().uuid().nullish(),
+      deliveryType: zod.string().optional(),
+      serviceMode: zod
+        .enum(["monthly", "additional_only"])
+        .optional()
+        .describe(
+          "Формат обслуживания объекта, независимый от типа отдельной доставки",
+        ),
+    }),
+  ]),
+  originalPayload: zod.union([
+    zod.object({
+      kind: zod.enum(["closure"]),
+      closedFrom: zod.coerce.date().nullable(),
+      reopenDate: zod.coerce.date().nullable(),
+      closureReason: zod.string().nullable(),
+    }),
+    zod.object({
+      name: zod.string().optional(),
+      address: zod.string().optional(),
+      branch: zod.string().optional(),
+      customer: zod.string().optional(),
+      clientId: zod.string().uuid().optional(),
+      manager: zod.string().optional(),
+      managerContact: zod.string().optional(),
+      director: zod.string().optional(),
+      project: zod.string().optional(),
+      driverUserId: zod.string().uuid().nullish(),
+      deliveryType: zod.string().optional(),
+      serviceMode: zod
+        .enum(["monthly", "additional_only"])
+        .optional()
+        .describe(
+          "Формат обслуживания объекта, независимый от типа отдельной доставки",
+        ),
+    }),
+  ]),
+  status: zod.enum(["pending", "approved", "rejected"]),
+  createdAt: zod.coerce.date(),
+  decidedAt: zod.coerce.date().nullable(),
+  decidedByUserId: zod.string().uuid().nullable(),
+  decidedByName: zod.string().nullable(),
+  decidedByEmail: zod.string().nullable(),
+});
+
+/**
+ * @summary Изменить особенности объекта
+ */
+export const UpdateSiteFeaturesParams = zod.object({
+  id: zod.coerce.string().uuid(),
+});
+
+export const UpdateSiteFeaturesBody = zod.object({
+  features: zod.string(),
+});
+
+export const UpdateSiteFeaturesResponse = zod.object({
+  id: zod.string(),
+  name: zod.string().describe("Unique site name"),
+  address: zod.string(),
+  branch: zod.string().describe("Куст"),
+  customer: zod
+    .string()
+    .describe(
+      "Торговое название объекта (необязательно; непустое значение строго из справочника trade_names)",
+    ),
+  client: zod
+    .string()
+    .describe("Отображаемое название клиента, сохранённое вместе с объектом"),
+  clientId: zod
+    .string()
+    .uuid()
+    .describe("Стабильная обязательная связь с клиентом"),
+  manager: zod.string().describe("Закреплённый менеджер"),
+  managerContact: zod.string().describe("Контакт менеджера"),
+  director: zod.string().describe("Закреплённый руководитель"),
+  project: zod.string().describe("Закреплённый проект"),
+  driverUserId: zod
+    .string()
+    .uuid()
+    .nullable()
+    .describe("UUID закреплённого пользователя-водителя"),
+  driver: zod.string().describe("Отображаемое имя водителя или «Не назначен»"),
+  deliveryType: zod
+    .string()
+    .describe(
+      "Тип поставки (из справочника delivery_types; может быть пустым)",
+    ),
+  serviceMode: zod
+    .enum(["monthly", "additional_only"])
+    .optional()
+    .describe(
+      "Формат обслуживания объекта, независимый от типа отдельной доставки",
+    ),
+  features: zod
+    .string()
+    .describe("Особенности работы объекта или подъезда большой машины"),
+  closedFrom: zod.coerce
+    .date()
+    .nullable()
+    .describe("Дата, с которой объект закрыт (null — объект работает)"),
+  reopenDate: zod.coerce
+    .date()
+    .nullable()
+    .describe("Планируемая дата открытия (если известна)"),
+  closureReason: zod.string().nullable(),
+  closedBy: zod.string().nullable(),
+  isClosed: zod
+    .boolean()
+    .describe(
+      "Закрыт ли объект на текущую дату (учитывает closedFrom\/reopenDate)",
+    ),
+  createdAt: zod.coerce.date(),
+  pendingClosureRequest: zod
+    .object({
+      id: zod.string().uuid(),
+      siteId: zod.string().uuid(),
+      siteName: zod.string(),
+      authorName: zod.string(),
+      closedFrom: zod.coerce.date(),
+      reopenDate: zod.coerce.date().nullable(),
+      closureReason: zod.string().nullable(),
+      createdAt: zod.coerce.date(),
+    })
+    .nullable()
+    .describe("Ожидающее подтверждения предложение закрытия объекта"),
+});
+
+/**
+ * @summary Принять предложение правок (только администратор)
+ */
+export const ApproveSiteChangeRequestParams = zod.object({
+  id: zod.coerce.string().uuid(),
+});
+
+export const ApproveSiteChangeRequestResponse = zod.object({
+  id: zod.string().uuid(),
+  siteId: zod.string().uuid().nullable(),
+  siteName: zod.string(),
+  authorUserId: zod.string().uuid().nullable(),
+  authorName: zod.string(),
+  authorEmail: zod.string(),
+  kind: zod.enum(["edit", "closure"]),
+  payload: zod.union([
+    zod.object({
+      kind: zod.enum(["closure"]),
+      closedFrom: zod.coerce.date(),
+      reopenDate: zod.coerce.date().nullable(),
+      closureReason: zod.string().nullable(),
+    }),
+    zod.object({
+      name: zod.string().optional(),
+      address: zod.string().optional(),
+      branch: zod.string().optional(),
+      customer: zod.string().optional(),
+      clientId: zod.string().uuid().optional(),
+      manager: zod.string().optional(),
+      managerContact: zod.string().optional(),
+      director: zod.string().optional(),
+      project: zod.string().optional(),
+      driverUserId: zod.string().uuid().nullish(),
+      deliveryType: zod.string().optional(),
+      serviceMode: zod
+        .enum(["monthly", "additional_only"])
+        .optional()
+        .describe(
+          "Формат обслуживания объекта, независимый от типа отдельной доставки",
+        ),
+    }),
+  ]),
+  originalPayload: zod.union([
+    zod.object({
+      kind: zod.enum(["closure"]),
+      closedFrom: zod.coerce.date().nullable(),
+      reopenDate: zod.coerce.date().nullable(),
+      closureReason: zod.string().nullable(),
+    }),
+    zod.object({
+      name: zod.string().optional(),
+      address: zod.string().optional(),
+      branch: zod.string().optional(),
+      customer: zod.string().optional(),
+      clientId: zod.string().uuid().optional(),
+      manager: zod.string().optional(),
+      managerContact: zod.string().optional(),
+      director: zod.string().optional(),
+      project: zod.string().optional(),
+      driverUserId: zod.string().uuid().nullish(),
+      deliveryType: zod.string().optional(),
+      serviceMode: zod
+        .enum(["monthly", "additional_only"])
+        .optional()
+        .describe(
+          "Формат обслуживания объекта, независимый от типа отдельной доставки",
+        ),
+    }),
+  ]),
+  status: zod.enum(["pending", "approved", "rejected"]),
+  createdAt: zod.coerce.date(),
+  decidedAt: zod.coerce.date().nullable(),
+  decidedByUserId: zod.string().uuid().nullable(),
+  decidedByName: zod.string().nullable(),
+  decidedByEmail: zod.string().nullable(),
+});
+
+/**
+ * @summary Отклонить предложение правок (только администратор)
+ */
+export const RejectSiteChangeRequestParams = zod.object({
+  id: zod.coerce.string().uuid(),
+});
+
+export const RejectSiteChangeRequestResponse = zod.object({
+  id: zod.string().uuid(),
+  siteId: zod.string().uuid().nullable(),
+  siteName: zod.string(),
+  authorUserId: zod.string().uuid().nullable(),
+  authorName: zod.string(),
+  authorEmail: zod.string(),
+  kind: zod.enum(["edit", "closure"]),
+  payload: zod.union([
+    zod.object({
+      kind: zod.enum(["closure"]),
+      closedFrom: zod.coerce.date(),
+      reopenDate: zod.coerce.date().nullable(),
+      closureReason: zod.string().nullable(),
+    }),
+    zod.object({
+      name: zod.string().optional(),
+      address: zod.string().optional(),
+      branch: zod.string().optional(),
+      customer: zod.string().optional(),
+      clientId: zod.string().uuid().optional(),
+      manager: zod.string().optional(),
+      managerContact: zod.string().optional(),
+      director: zod.string().optional(),
+      project: zod.string().optional(),
+      driverUserId: zod.string().uuid().nullish(),
+      deliveryType: zod.string().optional(),
+      serviceMode: zod
+        .enum(["monthly", "additional_only"])
+        .optional()
+        .describe(
+          "Формат обслуживания объекта, независимый от типа отдельной доставки",
+        ),
+    }),
+  ]),
+  originalPayload: zod.union([
+    zod.object({
+      kind: zod.enum(["closure"]),
+      closedFrom: zod.coerce.date().nullable(),
+      reopenDate: zod.coerce.date().nullable(),
+      closureReason: zod.string().nullable(),
+    }),
+    zod.object({
+      name: zod.string().optional(),
+      address: zod.string().optional(),
+      branch: zod.string().optional(),
+      customer: zod.string().optional(),
+      clientId: zod.string().uuid().optional(),
+      manager: zod.string().optional(),
+      managerContact: zod.string().optional(),
+      director: zod.string().optional(),
+      project: zod.string().optional(),
+      driverUserId: zod.string().uuid().nullish(),
+      deliveryType: zod.string().optional(),
+      serviceMode: zod
+        .enum(["monthly", "additional_only"])
+        .optional()
+        .describe(
+          "Формат обслуживания объекта, независимый от типа отдельной доставки",
+        ),
+    }),
+  ]),
+  status: zod.enum(["pending", "approved", "rejected"]),
+  createdAt: zod.coerce.date(),
+  decidedAt: zod.coerce.date().nullable(),
+  decidedByUserId: zod.string().uuid().nullable(),
+  decidedByName: zod.string().nullable(),
+  decidedByEmail: zod.string().nullable(),
+});
 
 /**
  * @summary Get a site by id
  */
 export const GetSiteParams = zod.object({
-  "id": zod.coerce.string()
-})
+  id: zod.coerce.string(),
+});
 
 export const GetSiteResponse = zod.object({
-  "id": zod.string(),
-  "name": zod.string().describe('Unique site name'),
-  "address": zod.string(),
-  "branch": zod.string().describe('Куст'),
-  "customer": zod.string().describe('Торговое название объекта (необязательно; непустое значение строго из справочника trade_names)'),
-  "client": zod.string().describe('Клиент'),
-  "manager": zod.string().describe('Закреплённый менеджер'),
-  "managerContact": zod.string().describe('Контакт менеджера'),
-  "director": zod.string().describe('Закреплённый руководитель'),
-  "project": zod.string().describe('Закреплённый проект'),
-  "driverUserId": zod.string().uuid().nullable().describe('UUID закреплённого пользователя-водителя'),
-  "driver": zod.string().describe('Отображаемое имя водителя или «Не назначен»'),
-  "deliveryType": zod.string().describe('Тип поставки (из справочника delivery_types; может быть пустым)'),
-  "closedFrom": zod.coerce.date().nullable().describe('Дата, с которой объект закрыт (null — объект работает)'),
-  "reopenDate": zod.coerce.date().nullable().describe('Планируемая дата открытия (если известна)'),
-  "closureReason": zod.string().nullable(),
-  "closedBy": zod.string().nullable(),
-  "isClosed": zod.boolean().describe('Закрыт ли объект на текущую дату (учитывает closedFrom\/reopenDate)'),
-  "createdAt": zod.coerce.date()
-})
-
+  id: zod.string(),
+  name: zod.string().describe("Unique site name"),
+  address: zod.string(),
+  branch: zod.string().describe("Куст"),
+  customer: zod
+    .string()
+    .describe(
+      "Торговое название объекта (необязательно; непустое значение строго из справочника trade_names)",
+    ),
+  client: zod
+    .string()
+    .describe("Отображаемое название клиента, сохранённое вместе с объектом"),
+  clientId: zod
+    .string()
+    .uuid()
+    .describe("Стабильная обязательная связь с клиентом"),
+  manager: zod.string().describe("Закреплённый менеджер"),
+  managerContact: zod.string().describe("Контакт менеджера"),
+  director: zod.string().describe("Закреплённый руководитель"),
+  project: zod.string().describe("Закреплённый проект"),
+  driverUserId: zod
+    .string()
+    .uuid()
+    .nullable()
+    .describe("UUID закреплённого пользователя-водителя"),
+  driver: zod.string().describe("Отображаемое имя водителя или «Не назначен»"),
+  deliveryType: zod
+    .string()
+    .describe(
+      "Тип поставки (из справочника delivery_types; может быть пустым)",
+    ),
+  serviceMode: zod
+    .enum(["monthly", "additional_only"])
+    .optional()
+    .describe(
+      "Формат обслуживания объекта, независимый от типа отдельной доставки",
+    ),
+  features: zod
+    .string()
+    .describe("Особенности работы объекта или подъезда большой машины"),
+  closedFrom: zod.coerce
+    .date()
+    .nullable()
+    .describe("Дата, с которой объект закрыт (null — объект работает)"),
+  reopenDate: zod.coerce
+    .date()
+    .nullable()
+    .describe("Планируемая дата открытия (если известна)"),
+  closureReason: zod.string().nullable(),
+  closedBy: zod.string().nullable(),
+  isClosed: zod
+    .boolean()
+    .describe(
+      "Закрыт ли объект на текущую дату (учитывает closedFrom\/reopenDate)",
+    ),
+  createdAt: zod.coerce.date(),
+  pendingClosureRequest: zod
+    .object({
+      id: zod.string().uuid(),
+      siteId: zod.string().uuid(),
+      siteName: zod.string(),
+      authorName: zod.string(),
+      closedFrom: zod.coerce.date(),
+      reopenDate: zod.coerce.date().nullable(),
+      closureReason: zod.string().nullable(),
+      createdAt: zod.coerce.date(),
+    })
+    .nullable()
+    .describe("Ожидающее подтверждения предложение закрытия объекта"),
+});
 
 /**
  * @summary Update a serviced site
  */
 export const UpdateSiteParams = zod.object({
-  "id": zod.coerce.string()
-})
+  id: zod.coerce.string(),
+});
 
 export const UpdateSiteBody = zod.object({
-  "name": zod.string().optional(),
-  "address": zod.string().optional(),
-  "branch": zod.string().optional(),
-  "customer": zod.string().optional(),
-  "client": zod.string().optional(),
-  "manager": zod.string().optional(),
-  "managerContact": zod.string().optional(),
-  "director": zod.string().optional(),
-  "project": zod.string().optional(),
-  "driverUserId": zod.string().uuid().nullish(),
-  "deliveryType": zod.string().optional()
-})
+  name: zod.string().optional(),
+  address: zod.string().optional(),
+  branch: zod.string().optional(),
+  customer: zod.string().optional(),
+  clientId: zod.string().uuid(),
+  manager: zod.string().optional(),
+  managerContact: zod.string().optional(),
+  director: zod.string().optional(),
+  project: zod.string().optional(),
+  driverUserId: zod.string().uuid().nullish(),
+  deliveryType: zod.string().optional(),
+  serviceMode: zod
+    .enum(["monthly", "additional_only"])
+    .optional()
+    .describe(
+      "Формат обслуживания объекта, независимый от типа отдельной доставки",
+    ),
+  features: zod.string().optional(),
+});
 
 export const UpdateSiteResponse = zod.object({
-  "id": zod.string(),
-  "name": zod.string().describe('Unique site name'),
-  "address": zod.string(),
-  "branch": zod.string().describe('Куст'),
-  "customer": zod.string().describe('Торговое название объекта (необязательно; непустое значение строго из справочника trade_names)'),
-  "client": zod.string().describe('Клиент'),
-  "manager": zod.string().describe('Закреплённый менеджер'),
-  "managerContact": zod.string().describe('Контакт менеджера'),
-  "director": zod.string().describe('Закреплённый руководитель'),
-  "project": zod.string().describe('Закреплённый проект'),
-  "driverUserId": zod.string().uuid().nullable().describe('UUID закреплённого пользователя-водителя'),
-  "driver": zod.string().describe('Отображаемое имя водителя или «Не назначен»'),
-  "deliveryType": zod.string().describe('Тип поставки (из справочника delivery_types; может быть пустым)'),
-  "closedFrom": zod.coerce.date().nullable().describe('Дата, с которой объект закрыт (null — объект работает)'),
-  "reopenDate": zod.coerce.date().nullable().describe('Планируемая дата открытия (если известна)'),
-  "closureReason": zod.string().nullable(),
-  "closedBy": zod.string().nullable(),
-  "isClosed": zod.boolean().describe('Закрыт ли объект на текущую дату (учитывает closedFrom\/reopenDate)'),
-  "createdAt": zod.coerce.date()
-})
-
+  id: zod.string(),
+  name: zod.string().describe("Unique site name"),
+  address: zod.string(),
+  branch: zod.string().describe("Куст"),
+  customer: zod
+    .string()
+    .describe(
+      "Торговое название объекта (необязательно; непустое значение строго из справочника trade_names)",
+    ),
+  client: zod
+    .string()
+    .describe("Отображаемое название клиента, сохранённое вместе с объектом"),
+  clientId: zod
+    .string()
+    .uuid()
+    .describe("Стабильная обязательная связь с клиентом"),
+  manager: zod.string().describe("Закреплённый менеджер"),
+  managerContact: zod.string().describe("Контакт менеджера"),
+  director: zod.string().describe("Закреплённый руководитель"),
+  project: zod.string().describe("Закреплённый проект"),
+  driverUserId: zod
+    .string()
+    .uuid()
+    .nullable()
+    .describe("UUID закреплённого пользователя-водителя"),
+  driver: zod.string().describe("Отображаемое имя водителя или «Не назначен»"),
+  deliveryType: zod
+    .string()
+    .describe(
+      "Тип поставки (из справочника delivery_types; может быть пустым)",
+    ),
+  serviceMode: zod
+    .enum(["monthly", "additional_only"])
+    .optional()
+    .describe(
+      "Формат обслуживания объекта, независимый от типа отдельной доставки",
+    ),
+  features: zod
+    .string()
+    .describe("Особенности работы объекта или подъезда большой машины"),
+  closedFrom: zod.coerce
+    .date()
+    .nullable()
+    .describe("Дата, с которой объект закрыт (null — объект работает)"),
+  reopenDate: zod.coerce
+    .date()
+    .nullable()
+    .describe("Планируемая дата открытия (если известна)"),
+  closureReason: zod.string().nullable(),
+  closedBy: zod.string().nullable(),
+  isClosed: zod
+    .boolean()
+    .describe(
+      "Закрыт ли объект на текущую дату (учитывает closedFrom\/reopenDate)",
+    ),
+  createdAt: zod.coerce.date(),
+  pendingClosureRequest: zod
+    .object({
+      id: zod.string().uuid(),
+      siteId: zod.string().uuid(),
+      siteName: zod.string(),
+      authorName: zod.string(),
+      closedFrom: zod.coerce.date(),
+      reopenDate: zod.coerce.date().nullable(),
+      closureReason: zod.string().nullable(),
+      createdAt: zod.coerce.date(),
+    })
+    .nullable()
+    .describe("Ожидающее подтверждения предложение закрытия объекта"),
+});
 
 /**
  * @summary Delete a serviced site
  */
 export const DeleteSiteParams = zod.object({
-  "id": zod.coerce.string()
-})
+  id: zod.coerce.string(),
+});
 
-export const DeleteSiteResponse = zod.void()
-
+export const DeleteSiteResponse = zod.void();
 
 /**
  * @summary List delivery schedule entries
  */
+export const listDeliveriesQueryMonthMin = 7;
+export const listDeliveriesQueryMonthMax = 7;
+
+export const listDeliveriesQueryMonthRegExp = new RegExp(
+  "^[1-9]\\d{3}-(0[1-9]|1[0-2])$",
+);
+export const listDeliveriesQueryDateFromMin = 10;
+export const listDeliveriesQueryDateFromMax = 10;
+
+export const listDeliveriesQueryDateFromRegExp = new RegExp(
+  "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
+);
+export const listDeliveriesQueryDateToMin = 10;
+export const listDeliveriesQueryDateToMax = 10;
+
+export const listDeliveriesQueryDateToRegExp = new RegExp(
+  "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
+);
+export const listDeliveriesQueryArchivedDefault = false;
+
 export const ListDeliveriesQueryParams = zod.object({
-  "month": zod.coerce.string().optional().describe('Filter by month, format YYYY-MM'),
-  "dateFrom": zod.coerce.string().optional().describe('Filter deliveries with plannedDate >= dateFrom (format YYYY-MM-DD). Takes precedence over month when provided.'),
-  "dateTo": zod.coerce.string().optional().describe('Filter deliveries with plannedDate <= dateTo (format YYYY-MM-DD). Takes precedence over month when provided.'),
-  "siteId": zod.coerce.string().optional(),
-  "driverUserId": zod.coerce.string().optional(),
-  "status": zod.enum(['pending', 'on_time', 'late', 'overdue']).optional()
-})
+  month: zod.coerce
+    .string()
+    .min(listDeliveriesQueryMonthMin)
+    .max(listDeliveriesQueryMonthMax)
+    .regex(listDeliveriesQueryMonthRegExp)
+    .optional()
+    .describe("Filter by month, format YYYY-MM"),
+  dateFrom: zod.coerce
+    .string()
+    .min(listDeliveriesQueryDateFromMin)
+    .max(listDeliveriesQueryDateFromMax)
+    .regex(listDeliveriesQueryDateFromRegExp)
+    .optional()
+    .describe(
+      "Filter deliveries with plannedDate >= dateFrom (valid calendar date YYYY-MM-DD). Takes precedence over month when provided.",
+    ),
+  dateTo: zod.coerce
+    .string()
+    .min(listDeliveriesQueryDateToMin)
+    .max(listDeliveriesQueryDateToMax)
+    .regex(listDeliveriesQueryDateToRegExp)
+    .optional()
+    .describe(
+      "Filter deliveries with plannedDate <= dateTo (valid calendar date YYYY-MM-DD). Takes precedence over month when provided.",
+    ),
+  siteId: zod.coerce.string().optional(),
+  driverUserId: zod.coerce.string().optional(),
+  status: zod.enum(["pending", "on_time", "late", "overdue"]).optional(),
+  archived: zod.coerce
+    .boolean()
+    .default(listDeliveriesQueryArchivedDefault)
+    .describe(
+      "Return archived deliveries only; restricted to delivery editors",
+    ),
+});
 
-export const listDeliveriesResponseScheduleMonthRegExp = new RegExp('^\\d{4}-(0[1-9]|1[0-2])$');
+export const listDeliveriesResponseScheduleMonthOneMin = 7;
+export const listDeliveriesResponseScheduleMonthOneMax = 7;
 
+export const listDeliveriesResponseScheduleMonthOneRegExp = new RegExp(
+  "^[1-9]\\d{3}-(0[1-9]|1[0-2])$",
+);
+export const listDeliveriesResponseAdditionalOrderItemsItemQuantityExclusiveMin = 0;
 
 export const ListDeliveriesResponseItem = zod.object({
-  "id": zod.string(),
-  "siteId": zod.string(),
-  "siteName": zod.string(),
-  "siteAddress": zod.string(),
-  "driverUserId": zod.string().uuid().nullable(),
-  "driver": zod.string(),
-  "plannedDate": zod.coerce.date().nullable().describe('Плановая дата доставки (null, если дата ещё не назначена)'),
-  "scheduleMonth": zod.string().regex(listDeliveriesResponseScheduleMonthRegExp).nullable().describe('Месяц владения строкой графика; null возможен только у legacy rows'),
-  "actualDate": zod.coerce.date().nullable().describe('Фактическая дата доставки (редактируемая)'),
-  "actApprovedAt": zod.coerce.date().nullable(),
-  "actApprovedBy": zod.string().uuid().nullable(),
-  "workflowStatus": zod.enum(['planned', 'done', 'closed']).describe('planned — not completed; done — actual date set but act unapproved; closed — act approved'),
-  "note": zod.string().nullable(),
-  "status": zod.enum(['pending', 'on_time', 'late', 'overdue']).describe('pending — план в будущем, факта нет; on_time — доставлено в срок или раньше;\nlate — доставлено позже плана; overdue — план уже прошёл, факта нет\n'),
-  "lagDays": zod.number().nullable().describe('Отклонение факта от плана в днях (положительное — отставание)'),
-  "rescheduledFromDate": zod.coerce.date().nullable().describe('Исходная плановая дата до переноса (null — переносов не было)'),
-  "rescheduledBy": zod.string().nullable(),
-  "rescheduledAt": zod.coerce.date().nullable(),
-  "photosCount": zod.number().describe('Количество приложенных фото-актов'),
-  "createdAt": zod.coerce.date()
-})
-export const ListDeliveriesResponse = zod.array(ListDeliveriesResponseItem)
-
+  id: zod.string(),
+  siteId: zod.string(),
+  siteName: zod.string(),
+  siteAddress: zod.string(),
+  tradeNetworkName: zod
+    .string()
+    .nullish()
+    .describe("Торговая сеть из торгового названия объекта, не клиент-юрлицо"),
+  clientId: zod
+    .string()
+    .uuid()
+    .nullish()
+    .describe("Current client resolved from the delivery site"),
+  clientName: zod
+    .string()
+    .nullish()
+    .describe("Current client name resolved from the delivery site"),
+  managerContact: zod
+    .string()
+    .nullish()
+    .describe("Телефон менеджера объекта для связи с водителем"),
+  driverUserId: zod.string().uuid().nullable(),
+  driver: zod.string(),
+  parentDeliveryId: zod
+    .string()
+    .uuid()
+    .nullish()
+    .describe("Parent delivery for an additional order"),
+  orderId: zod
+    .string()
+    .uuid()
+    .nullish()
+    .describe("Client order linked to an additional delivery"),
+  plannedDate: zod.coerce
+    .date()
+    .nullable()
+    .describe("Плановая дата доставки (null, если дата ещё не назначена)"),
+  correctedPlannedDate: zod.coerce
+    .date()
+    .nullish()
+    .describe(
+      "Уточнённая плановая дата только для отчётности; не изменяет исходный план, график или показатели",
+    ),
+  deliveryType: zod
+    .string()
+    .nullish()
+    .describe(
+      "Тип поставки для этой доставки; null означает использовать значение объекта",
+    ),
+  scheduleMonth: zod
+    .union([
+      zod
+        .string()
+        .min(listDeliveriesResponseScheduleMonthOneMin)
+        .max(listDeliveriesResponseScheduleMonthOneMax)
+        .regex(listDeliveriesResponseScheduleMonthOneRegExp)
+        .describe("Календарный месяц YYYY-MM, год 1000–9999, месяц 01–12"),
+      zod.null(),
+    ])
+    .describe(
+      "Месяц владения строкой графика; null возможен только у legacy rows",
+    ),
+  actualDate: zod.coerce
+    .date()
+    .nullable()
+    .describe("Фактическая дата доставки (редактируемая)"),
+  actApprovedAt: zod.coerce.date().nullable(),
+  actApprovedBy: zod.string().uuid().nullable(),
+  workflowStatus: zod
+    .enum(["planned", "done", "closed"])
+    .describe(
+      "planned — not completed; done — actual date set but act unapproved; closed — act approved",
+    ),
+  note: zod
+    .string()
+    .nullable()
+    .describe("Комментарий водителя; логист видит его только для чтения"),
+  logisticianNote: zod
+    .string()
+    .nullable()
+    .describe(
+      "Примечание логиста для водителя; водитель видит его только для чтения",
+    ),
+  status: zod
+    .enum(["pending", "on_time", "late", "overdue"])
+    .describe(
+      "pending — план в будущем, факта нет; on_time — доставлено в срок или раньше;\nlate — доставлено позже плана; overdue — план уже прошёл, факта нет\n",
+    ),
+  lagDays: zod
+    .number()
+    .nullable()
+    .describe("Отклонение факта от плана в днях (положительное — отставание)"),
+  rescheduledFromDate: zod.coerce
+    .date()
+    .nullable()
+    .describe("Исходная плановая дата до переноса (null — переносов не было)"),
+  rescheduledBy: zod.string().nullable(),
+  rescheduledAt: zod.coerce.date().nullable(),
+  photosCount: zod.number().describe("Количество приложенных фото-актов"),
+  createdAt: zod.coerce.date(),
+  archivedAt: zod.coerce.date().nullable(),
+  archivedByName: zod.string().nullable(),
+  additionalOrderItems: zod
+    .array(
+      zod.object({
+        productId: zod.string().uuid(),
+        productName: zod.string(),
+        quantity: zod
+          .number()
+          .gt(
+            listDeliveriesResponseAdditionalOrderItemsItemQuantityExclusiveMin,
+          ),
+        unit: zod.string(),
+      }),
+    )
+    .nullish()
+    .describe("Additional-order contents without prices"),
+  hasAdditionalOrders: zod.boolean().optional(),
+});
+export const ListDeliveriesResponse = zod.array(ListDeliveriesResponseItem);
 
 /**
  * @summary Create a planned delivery (график)
  */
-export const createDeliveryBodyScheduleMonthRegExp = new RegExp('^\\d{4}-(0[1-9]|1[0-2])$');
+export const createDeliveryBodyScheduleMonthOneMin = 7;
+export const createDeliveryBodyScheduleMonthOneMax = 7;
 
+export const createDeliveryBodyScheduleMonthOneRegExp = new RegExp(
+  "^[1-9]\\d{3}-(0[1-9]|1[0-2])$",
+);
 
 export const CreateDeliveryBody = zod.object({
-  "siteId": zod.string(),
-  "driverUserId": zod.string().uuid().nullish(),
-  "plannedDate": zod.coerce.date().nullish(),
-  "scheduleMonth": zod.string().regex(createDeliveryBodyScheduleMonthRegExp).nullish(),
-  "note": zod.string().optional()
-})
+  siteId: zod.string(),
+  driverUserId: zod.string().uuid().nullish(),
+  plannedDate: zod.coerce.date().nullish(),
+  correctedPlannedDate: zod.coerce
+    .date()
+    .nullish()
+    .describe("Уточнённая плановая дата только для отчётности"),
+  actualDate: zod.coerce.date().nullish(),
+  deliveryType: zod
+    .string()
+    .nullish()
+    .describe(
+      "Тип поставки для этой доставки; null означает использовать значение объекта",
+    ),
+  scheduleMonth: zod
+    .union([
+      zod
+        .string()
+        .min(createDeliveryBodyScheduleMonthOneMin)
+        .max(createDeliveryBodyScheduleMonthOneMax)
+        .regex(createDeliveryBodyScheduleMonthOneRegExp)
+        .describe("Календарный месяц YYYY-MM, год 1000–9999, месяц 01–12"),
+      zod.null(),
+    ])
+    .optional(),
+});
 
-export const createDeliveryResponseScheduleMonthRegExp = new RegExp('^\\d{4}-(0[1-9]|1[0-2])$');
+export const createDeliveryResponseScheduleMonthOneMin = 7;
+export const createDeliveryResponseScheduleMonthOneMax = 7;
 
+export const createDeliveryResponseScheduleMonthOneRegExp = new RegExp(
+  "^[1-9]\\d{3}-(0[1-9]|1[0-2])$",
+);
+export const createDeliveryResponseAdditionalOrderItemsItemQuantityExclusiveMin = 0;
 
 export const CreateDeliveryResponse = zod.object({
-  "id": zod.string(),
-  "siteId": zod.string(),
-  "siteName": zod.string(),
-  "siteAddress": zod.string(),
-  "driverUserId": zod.string().uuid().nullable(),
-  "driver": zod.string(),
-  "plannedDate": zod.coerce.date().nullable().describe('Плановая дата доставки (null, если дата ещё не назначена)'),
-  "scheduleMonth": zod.string().regex(createDeliveryResponseScheduleMonthRegExp).nullable().describe('Месяц владения строкой графика; null возможен только у legacy rows'),
-  "actualDate": zod.coerce.date().nullable().describe('Фактическая дата доставки (редактируемая)'),
-  "actApprovedAt": zod.coerce.date().nullable(),
-  "actApprovedBy": zod.string().uuid().nullable(),
-  "workflowStatus": zod.enum(['planned', 'done', 'closed']).describe('planned — not completed; done — actual date set but act unapproved; closed — act approved'),
-  "note": zod.string().nullable(),
-  "status": zod.enum(['pending', 'on_time', 'late', 'overdue']).describe('pending — план в будущем, факта нет; on_time — доставлено в срок или раньше;\nlate — доставлено позже плана; overdue — план уже прошёл, факта нет\n'),
-  "lagDays": zod.number().nullable().describe('Отклонение факта от плана в днях (положительное — отставание)'),
-  "rescheduledFromDate": zod.coerce.date().nullable().describe('Исходная плановая дата до переноса (null — переносов не было)'),
-  "rescheduledBy": zod.string().nullable(),
-  "rescheduledAt": zod.coerce.date().nullable(),
-  "photosCount": zod.number().describe('Количество приложенных фото-актов'),
-  "createdAt": zod.coerce.date()
-})
-
+  id: zod.string(),
+  siteId: zod.string(),
+  siteName: zod.string(),
+  siteAddress: zod.string(),
+  tradeNetworkName: zod
+    .string()
+    .nullish()
+    .describe("Торговая сеть из торгового названия объекта, не клиент-юрлицо"),
+  clientId: zod
+    .string()
+    .uuid()
+    .nullish()
+    .describe("Current client resolved from the delivery site"),
+  clientName: zod
+    .string()
+    .nullish()
+    .describe("Current client name resolved from the delivery site"),
+  managerContact: zod
+    .string()
+    .nullish()
+    .describe("Телефон менеджера объекта для связи с водителем"),
+  driverUserId: zod.string().uuid().nullable(),
+  driver: zod.string(),
+  parentDeliveryId: zod
+    .string()
+    .uuid()
+    .nullish()
+    .describe("Parent delivery for an additional order"),
+  orderId: zod
+    .string()
+    .uuid()
+    .nullish()
+    .describe("Client order linked to an additional delivery"),
+  plannedDate: zod.coerce
+    .date()
+    .nullable()
+    .describe("Плановая дата доставки (null, если дата ещё не назначена)"),
+  correctedPlannedDate: zod.coerce
+    .date()
+    .nullish()
+    .describe(
+      "Уточнённая плановая дата только для отчётности; не изменяет исходный план, график или показатели",
+    ),
+  deliveryType: zod
+    .string()
+    .nullish()
+    .describe(
+      "Тип поставки для этой доставки; null означает использовать значение объекта",
+    ),
+  scheduleMonth: zod
+    .union([
+      zod
+        .string()
+        .min(createDeliveryResponseScheduleMonthOneMin)
+        .max(createDeliveryResponseScheduleMonthOneMax)
+        .regex(createDeliveryResponseScheduleMonthOneRegExp)
+        .describe("Календарный месяц YYYY-MM, год 1000–9999, месяц 01–12"),
+      zod.null(),
+    ])
+    .describe(
+      "Месяц владения строкой графика; null возможен только у legacy rows",
+    ),
+  actualDate: zod.coerce
+    .date()
+    .nullable()
+    .describe("Фактическая дата доставки (редактируемая)"),
+  actApprovedAt: zod.coerce.date().nullable(),
+  actApprovedBy: zod.string().uuid().nullable(),
+  workflowStatus: zod
+    .enum(["planned", "done", "closed"])
+    .describe(
+      "planned — not completed; done — actual date set but act unapproved; closed — act approved",
+    ),
+  note: zod
+    .string()
+    .nullable()
+    .describe("Комментарий водителя; логист видит его только для чтения"),
+  logisticianNote: zod
+    .string()
+    .nullable()
+    .describe(
+      "Примечание логиста для водителя; водитель видит его только для чтения",
+    ),
+  status: zod
+    .enum(["pending", "on_time", "late", "overdue"])
+    .describe(
+      "pending — план в будущем, факта нет; on_time — доставлено в срок или раньше;\nlate — доставлено позже плана; overdue — план уже прошёл, факта нет\n",
+    ),
+  lagDays: zod
+    .number()
+    .nullable()
+    .describe("Отклонение факта от плана в днях (положительное — отставание)"),
+  rescheduledFromDate: zod.coerce
+    .date()
+    .nullable()
+    .describe("Исходная плановая дата до переноса (null — переносов не было)"),
+  rescheduledBy: zod.string().nullable(),
+  rescheduledAt: zod.coerce.date().nullable(),
+  photosCount: zod.number().describe("Количество приложенных фото-актов"),
+  createdAt: zod.coerce.date(),
+  archivedAt: zod.coerce.date().nullable(),
+  archivedByName: zod.string().nullable(),
+  additionalOrderItems: zod
+    .array(
+      zod.object({
+        productId: zod.string().uuid(),
+        productName: zod.string(),
+        quantity: zod
+          .number()
+          .gt(
+            createDeliveryResponseAdditionalOrderItemsItemQuantityExclusiveMin,
+          ),
+        unit: zod.string(),
+      }),
+    )
+    .nullish()
+    .describe("Additional-order contents without prices"),
+  hasAdditionalOrders: zod.boolean().optional(),
+});
 
 /**
  * @summary Create multiple planned deliveries at once (генерация графика на месяц)
  */
-export const createDeliveriesBulkBodyItemsItemScheduleMonthRegExp = new RegExp('^\\d{4}-(0[1-9]|1[0-2])$');
+export const createDeliveriesBulkBodyItemsItemScheduleMonthOneMin = 7;
+export const createDeliveriesBulkBodyItemsItemScheduleMonthOneMax = 7;
 
+export const createDeliveriesBulkBodyItemsItemScheduleMonthOneRegExp =
+  new RegExp("^[1-9]\\d{3}-(0[1-9]|1[0-2])$");
 
 export const CreateDeliveriesBulkBody = zod.object({
-  "items": zod.array(zod.object({
-  "siteId": zod.string(),
-  "driverUserId": zod.string().uuid().nullish(),
-  "plannedDate": zod.coerce.date().nullish(),
-  "scheduleMonth": zod.string().regex(createDeliveriesBulkBodyItemsItemScheduleMonthRegExp).nullish(),
-  "note": zod.string().optional()
-}))
-})
+  items: zod.array(
+    zod.object({
+      siteId: zod.string(),
+      driverUserId: zod.string().uuid().nullish(),
+      plannedDate: zod.coerce.date().nullish(),
+      correctedPlannedDate: zod.coerce
+        .date()
+        .nullish()
+        .describe("Уточнённая плановая дата только для отчётности"),
+      actualDate: zod.coerce.date().nullish(),
+      deliveryType: zod
+        .string()
+        .nullish()
+        .describe(
+          "Тип поставки для этой доставки; null означает использовать значение объекта",
+        ),
+      scheduleMonth: zod
+        .union([
+          zod
+            .string()
+            .min(createDeliveriesBulkBodyItemsItemScheduleMonthOneMin)
+            .max(createDeliveriesBulkBodyItemsItemScheduleMonthOneMax)
+            .regex(createDeliveriesBulkBodyItemsItemScheduleMonthOneRegExp)
+            .describe("Календарный месяц YYYY-MM, год 1000–9999, месяц 01–12"),
+          zod.null(),
+        ])
+        .optional(),
+    }),
+  ),
+});
 
-export const createDeliveriesBulkResponseScheduleMonthRegExp = new RegExp('^\\d{4}-(0[1-9]|1[0-2])$');
+export const createDeliveriesBulkResponseScheduleMonthOneMin = 7;
+export const createDeliveriesBulkResponseScheduleMonthOneMax = 7;
 
+export const createDeliveriesBulkResponseScheduleMonthOneRegExp = new RegExp(
+  "^[1-9]\\d{3}-(0[1-9]|1[0-2])$",
+);
+export const createDeliveriesBulkResponseAdditionalOrderItemsItemQuantityExclusiveMin = 0;
 
 export const CreateDeliveriesBulkResponseItem = zod.object({
-  "id": zod.string(),
-  "siteId": zod.string(),
-  "siteName": zod.string(),
-  "siteAddress": zod.string(),
-  "driverUserId": zod.string().uuid().nullable(),
-  "driver": zod.string(),
-  "plannedDate": zod.coerce.date().nullable().describe('Плановая дата доставки (null, если дата ещё не назначена)'),
-  "scheduleMonth": zod.string().regex(createDeliveriesBulkResponseScheduleMonthRegExp).nullable().describe('Месяц владения строкой графика; null возможен только у legacy rows'),
-  "actualDate": zod.coerce.date().nullable().describe('Фактическая дата доставки (редактируемая)'),
-  "actApprovedAt": zod.coerce.date().nullable(),
-  "actApprovedBy": zod.string().uuid().nullable(),
-  "workflowStatus": zod.enum(['planned', 'done', 'closed']).describe('planned — not completed; done — actual date set but act unapproved; closed — act approved'),
-  "note": zod.string().nullable(),
-  "status": zod.enum(['pending', 'on_time', 'late', 'overdue']).describe('pending — план в будущем, факта нет; on_time — доставлено в срок или раньше;\nlate — доставлено позже плана; overdue — план уже прошёл, факта нет\n'),
-  "lagDays": zod.number().nullable().describe('Отклонение факта от плана в днях (положительное — отставание)'),
-  "rescheduledFromDate": zod.coerce.date().nullable().describe('Исходная плановая дата до переноса (null — переносов не было)'),
-  "rescheduledBy": zod.string().nullable(),
-  "rescheduledAt": zod.coerce.date().nullable(),
-  "photosCount": zod.number().describe('Количество приложенных фото-актов'),
-  "createdAt": zod.coerce.date()
-})
-export const CreateDeliveriesBulkResponse = zod.array(CreateDeliveriesBulkResponseItem)
+  id: zod.string(),
+  siteId: zod.string(),
+  siteName: zod.string(),
+  siteAddress: zod.string(),
+  tradeNetworkName: zod
+    .string()
+    .nullish()
+    .describe("Торговая сеть из торгового названия объекта, не клиент-юрлицо"),
+  clientId: zod
+    .string()
+    .uuid()
+    .nullish()
+    .describe("Current client resolved from the delivery site"),
+  clientName: zod
+    .string()
+    .nullish()
+    .describe("Current client name resolved from the delivery site"),
+  managerContact: zod
+    .string()
+    .nullish()
+    .describe("Телефон менеджера объекта для связи с водителем"),
+  driverUserId: zod.string().uuid().nullable(),
+  driver: zod.string(),
+  parentDeliveryId: zod
+    .string()
+    .uuid()
+    .nullish()
+    .describe("Parent delivery for an additional order"),
+  orderId: zod
+    .string()
+    .uuid()
+    .nullish()
+    .describe("Client order linked to an additional delivery"),
+  plannedDate: zod.coerce
+    .date()
+    .nullable()
+    .describe("Плановая дата доставки (null, если дата ещё не назначена)"),
+  correctedPlannedDate: zod.coerce
+    .date()
+    .nullish()
+    .describe(
+      "Уточнённая плановая дата только для отчётности; не изменяет исходный план, график или показатели",
+    ),
+  deliveryType: zod
+    .string()
+    .nullish()
+    .describe(
+      "Тип поставки для этой доставки; null означает использовать значение объекта",
+    ),
+  scheduleMonth: zod
+    .union([
+      zod
+        .string()
+        .min(createDeliveriesBulkResponseScheduleMonthOneMin)
+        .max(createDeliveriesBulkResponseScheduleMonthOneMax)
+        .regex(createDeliveriesBulkResponseScheduleMonthOneRegExp)
+        .describe("Календарный месяц YYYY-MM, год 1000–9999, месяц 01–12"),
+      zod.null(),
+    ])
+    .describe(
+      "Месяц владения строкой графика; null возможен только у legacy rows",
+    ),
+  actualDate: zod.coerce
+    .date()
+    .nullable()
+    .describe("Фактическая дата доставки (редактируемая)"),
+  actApprovedAt: zod.coerce.date().nullable(),
+  actApprovedBy: zod.string().uuid().nullable(),
+  workflowStatus: zod
+    .enum(["planned", "done", "closed"])
+    .describe(
+      "planned — not completed; done — actual date set but act unapproved; closed — act approved",
+    ),
+  note: zod
+    .string()
+    .nullable()
+    .describe("Комментарий водителя; логист видит его только для чтения"),
+  logisticianNote: zod
+    .string()
+    .nullable()
+    .describe(
+      "Примечание логиста для водителя; водитель видит его только для чтения",
+    ),
+  status: zod
+    .enum(["pending", "on_time", "late", "overdue"])
+    .describe(
+      "pending — план в будущем, факта нет; on_time — доставлено в срок или раньше;\nlate — доставлено позже плана; overdue — план уже прошёл, факта нет\n",
+    ),
+  lagDays: zod
+    .number()
+    .nullable()
+    .describe("Отклонение факта от плана в днях (положительное — отставание)"),
+  rescheduledFromDate: zod.coerce
+    .date()
+    .nullable()
+    .describe("Исходная плановая дата до переноса (null — переносов не было)"),
+  rescheduledBy: zod.string().nullable(),
+  rescheduledAt: zod.coerce.date().nullable(),
+  photosCount: zod.number().describe("Количество приложенных фото-актов"),
+  createdAt: zod.coerce.date(),
+  archivedAt: zod.coerce.date().nullable(),
+  archivedByName: zod.string().nullable(),
+  additionalOrderItems: zod
+    .array(
+      zod.object({
+        productId: zod.string().uuid(),
+        productName: zod.string(),
+        quantity: zod
+          .number()
+          .gt(
+            createDeliveriesBulkResponseAdditionalOrderItemsItemQuantityExclusiveMin,
+          ),
+        unit: zod.string(),
+      }),
+    )
+    .nullish()
+    .describe("Additional-order contents without prices"),
+  hasAdditionalOrders: zod.boolean().optional(),
+});
+export const CreateDeliveriesBulkResponse = zod.array(
+  CreateDeliveriesBulkResponseItem,
+);
 
+/**
+ * @summary Скачать ZIP актов доставок за диапазон фактических дат
+ */
+export const DownloadDeliveryActsForPeriodQueryParams = zod.object({
+  from: zod.date(),
+  to: zod.date(),
+});
+
+export const DownloadDeliveryActsForPeriodResponse = zod.unknown();
 
 /**
  * @summary Replace all deliveries for a selected month
  */
-export const replaceDeliveriesBulkBodyMonthRegExp = new RegExp('^\\d{4}-(0[1-9]|1[0-2])$');
-export const replaceDeliveriesBulkBodyItemsItemScheduleMonthRegExp = new RegExp('^\\d{4}-(0[1-9]|1[0-2])$');
+export const replaceDeliveriesBulkBodyMonthMin = 7;
+export const replaceDeliveriesBulkBodyMonthMax = 7;
 
+export const replaceDeliveriesBulkBodyMonthRegExp = new RegExp(
+  "^[1-9]\\d{3}-(0[1-9]|1[0-2])$",
+);
+export const replaceDeliveriesBulkBodyItemsItemScheduleMonthOneMin = 7;
+export const replaceDeliveriesBulkBodyItemsItemScheduleMonthOneMax = 7;
+
+export const replaceDeliveriesBulkBodyItemsItemScheduleMonthOneRegExp =
+  new RegExp("^[1-9]\\d{3}-(0[1-9]|1[0-2])$");
 
 export const ReplaceDeliveriesBulkBody = zod.object({
-  "month": zod.string().regex(replaceDeliveriesBulkBodyMonthRegExp),
-  "items": zod.array(zod.object({
-  "siteId": zod.string(),
-  "driverUserId": zod.string().uuid().nullish(),
-  "plannedDate": zod.coerce.date().nullish(),
-  "scheduleMonth": zod.string().regex(replaceDeliveriesBulkBodyItemsItemScheduleMonthRegExp).nullish(),
-  "note": zod.string().optional()
-}))
-})
+  month: zod
+    .string()
+    .min(replaceDeliveriesBulkBodyMonthMin)
+    .max(replaceDeliveriesBulkBodyMonthMax)
+    .regex(replaceDeliveriesBulkBodyMonthRegExp)
+    .describe("Календарный месяц YYYY-MM, год 1000–9999, месяц 01–12"),
+  items: zod.array(
+    zod.object({
+      siteId: zod.string(),
+      driverUserId: zod.string().uuid().nullish(),
+      plannedDate: zod.coerce.date().nullish(),
+      correctedPlannedDate: zod.coerce
+        .date()
+        .nullish()
+        .describe("Уточнённая плановая дата только для отчётности"),
+      actualDate: zod.coerce.date().nullish(),
+      deliveryType: zod
+        .string()
+        .nullish()
+        .describe(
+          "Тип поставки для этой доставки; null означает использовать значение объекта",
+        ),
+      scheduleMonth: zod
+        .union([
+          zod
+            .string()
+            .min(replaceDeliveriesBulkBodyItemsItemScheduleMonthOneMin)
+            .max(replaceDeliveriesBulkBodyItemsItemScheduleMonthOneMax)
+            .regex(replaceDeliveriesBulkBodyItemsItemScheduleMonthOneRegExp)
+            .describe("Календарный месяц YYYY-MM, год 1000–9999, месяц 01–12"),
+          zod.null(),
+        ])
+        .optional(),
+    }),
+  ),
+});
 
-export const replaceDeliveriesBulkResponseScheduleMonthRegExp = new RegExp('^\\d{4}-(0[1-9]|1[0-2])$');
+export const replaceDeliveriesBulkResponseScheduleMonthOneMin = 7;
+export const replaceDeliveriesBulkResponseScheduleMonthOneMax = 7;
 
+export const replaceDeliveriesBulkResponseScheduleMonthOneRegExp = new RegExp(
+  "^[1-9]\\d{3}-(0[1-9]|1[0-2])$",
+);
+export const replaceDeliveriesBulkResponseAdditionalOrderItemsItemQuantityExclusiveMin = 0;
 
 export const ReplaceDeliveriesBulkResponseItem = zod.object({
-  "id": zod.string(),
-  "siteId": zod.string(),
-  "siteName": zod.string(),
-  "siteAddress": zod.string(),
-  "driverUserId": zod.string().uuid().nullable(),
-  "driver": zod.string(),
-  "plannedDate": zod.coerce.date().nullable().describe('Плановая дата доставки (null, если дата ещё не назначена)'),
-  "scheduleMonth": zod.string().regex(replaceDeliveriesBulkResponseScheduleMonthRegExp).nullable().describe('Месяц владения строкой графика; null возможен только у legacy rows'),
-  "actualDate": zod.coerce.date().nullable().describe('Фактическая дата доставки (редактируемая)'),
-  "actApprovedAt": zod.coerce.date().nullable(),
-  "actApprovedBy": zod.string().uuid().nullable(),
-  "workflowStatus": zod.enum(['planned', 'done', 'closed']).describe('planned — not completed; done — actual date set but act unapproved; closed — act approved'),
-  "note": zod.string().nullable(),
-  "status": zod.enum(['pending', 'on_time', 'late', 'overdue']).describe('pending — план в будущем, факта нет; on_time — доставлено в срок или раньше;\nlate — доставлено позже плана; overdue — план уже прошёл, факта нет\n'),
-  "lagDays": zod.number().nullable().describe('Отклонение факта от плана в днях (положительное — отставание)'),
-  "rescheduledFromDate": zod.coerce.date().nullable().describe('Исходная плановая дата до переноса (null — переносов не было)'),
-  "rescheduledBy": zod.string().nullable(),
-  "rescheduledAt": zod.coerce.date().nullable(),
-  "photosCount": zod.number().describe('Количество приложенных фото-актов'),
-  "createdAt": zod.coerce.date()
-})
-export const ReplaceDeliveriesBulkResponse = zod.array(ReplaceDeliveriesBulkResponseItem)
-
+  id: zod.string(),
+  siteId: zod.string(),
+  siteName: zod.string(),
+  siteAddress: zod.string(),
+  tradeNetworkName: zod
+    .string()
+    .nullish()
+    .describe("Торговая сеть из торгового названия объекта, не клиент-юрлицо"),
+  clientId: zod
+    .string()
+    .uuid()
+    .nullish()
+    .describe("Current client resolved from the delivery site"),
+  clientName: zod
+    .string()
+    .nullish()
+    .describe("Current client name resolved from the delivery site"),
+  managerContact: zod
+    .string()
+    .nullish()
+    .describe("Телефон менеджера объекта для связи с водителем"),
+  driverUserId: zod.string().uuid().nullable(),
+  driver: zod.string(),
+  parentDeliveryId: zod
+    .string()
+    .uuid()
+    .nullish()
+    .describe("Parent delivery for an additional order"),
+  orderId: zod
+    .string()
+    .uuid()
+    .nullish()
+    .describe("Client order linked to an additional delivery"),
+  plannedDate: zod.coerce
+    .date()
+    .nullable()
+    .describe("Плановая дата доставки (null, если дата ещё не назначена)"),
+  correctedPlannedDate: zod.coerce
+    .date()
+    .nullish()
+    .describe(
+      "Уточнённая плановая дата только для отчётности; не изменяет исходный план, график или показатели",
+    ),
+  deliveryType: zod
+    .string()
+    .nullish()
+    .describe(
+      "Тип поставки для этой доставки; null означает использовать значение объекта",
+    ),
+  scheduleMonth: zod
+    .union([
+      zod
+        .string()
+        .min(replaceDeliveriesBulkResponseScheduleMonthOneMin)
+        .max(replaceDeliveriesBulkResponseScheduleMonthOneMax)
+        .regex(replaceDeliveriesBulkResponseScheduleMonthOneRegExp)
+        .describe("Календарный месяц YYYY-MM, год 1000–9999, месяц 01–12"),
+      zod.null(),
+    ])
+    .describe(
+      "Месяц владения строкой графика; null возможен только у legacy rows",
+    ),
+  actualDate: zod.coerce
+    .date()
+    .nullable()
+    .describe("Фактическая дата доставки (редактируемая)"),
+  actApprovedAt: zod.coerce.date().nullable(),
+  actApprovedBy: zod.string().uuid().nullable(),
+  workflowStatus: zod
+    .enum(["planned", "done", "closed"])
+    .describe(
+      "planned — not completed; done — actual date set but act unapproved; closed — act approved",
+    ),
+  note: zod
+    .string()
+    .nullable()
+    .describe("Комментарий водителя; логист видит его только для чтения"),
+  logisticianNote: zod
+    .string()
+    .nullable()
+    .describe(
+      "Примечание логиста для водителя; водитель видит его только для чтения",
+    ),
+  status: zod
+    .enum(["pending", "on_time", "late", "overdue"])
+    .describe(
+      "pending — план в будущем, факта нет; on_time — доставлено в срок или раньше;\nlate — доставлено позже плана; overdue — план уже прошёл, факта нет\n",
+    ),
+  lagDays: zod
+    .number()
+    .nullable()
+    .describe("Отклонение факта от плана в днях (положительное — отставание)"),
+  rescheduledFromDate: zod.coerce
+    .date()
+    .nullable()
+    .describe("Исходная плановая дата до переноса (null — переносов не было)"),
+  rescheduledBy: zod.string().nullable(),
+  rescheduledAt: zod.coerce.date().nullable(),
+  photosCount: zod.number().describe("Количество приложенных фото-актов"),
+  createdAt: zod.coerce.date(),
+  archivedAt: zod.coerce.date().nullable(),
+  archivedByName: zod.string().nullable(),
+  additionalOrderItems: zod
+    .array(
+      zod.object({
+        productId: zod.string().uuid(),
+        productName: zod.string(),
+        quantity: zod
+          .number()
+          .gt(
+            replaceDeliveriesBulkResponseAdditionalOrderItemsItemQuantityExclusiveMin,
+          ),
+        unit: zod.string(),
+      }),
+    )
+    .nullish()
+    .describe("Additional-order contents without prices"),
+  hasAdditionalOrders: zod.boolean().optional(),
+});
+export const ReplaceDeliveriesBulkResponse = zod.array(
+  ReplaceDeliveriesBulkResponseItem,
+);
 
 /**
  * @summary Upload actual delivery dates (superadmin only)
  */
 export const UpdateDeliveriesActualBulkBody = zod.object({
-  "items": zod.array(zod.object({
-  "id": zod.string(),
-  "actualDate": zod.coerce.date()
-}))
-})
+  items: zod.array(
+    zod.object({
+      id: zod.string(),
+      actualDate: zod.coerce.date(),
+    }),
+  ),
+});
 
 export const updateDeliveriesActualBulkResponseUpdatedMin = 0;
 
-
 export const UpdateDeliveriesActualBulkResponse = zod.object({
-  "updated": zod.number().min(updateDeliveriesActualBulkResponseUpdatedMin)
-})
+  updated: zod.number().min(updateDeliveriesActualBulkResponseUpdatedMin),
+});
 
+/**
+ * @summary Atomically update the driver or planned date for an explicit delivery snapshot
+ */
+export const updateDeliveriesBulkBodyDeliveriesMax = 5000;
+
+export const UpdateDeliveriesBulkBody = zod.object({
+  deliveries: zod
+    .array(
+      zod.object({
+        id: zod.string().uuid(),
+        expectedDriverUserId: zod.string().uuid().nullable(),
+        expectedPlannedDate: zod.coerce.date().nullable(),
+      }),
+    )
+    .min(1)
+    .max(updateDeliveriesBulkBodyDeliveriesMax)
+    .describe(
+      "Explicit snapshot of every client-filtered delivery across all pages, not only the current page",
+    ),
+  driverUserId: zod.string().uuid().nullish(),
+  plannedDate: zod.coerce.date().optional(),
+});
+
+export const updateDeliveriesBulkResponseUpdatedMin = 0;
+
+export const UpdateDeliveriesBulkResponse = zod.object({
+  updated: zod.number().min(updateDeliveriesBulkResponseUpdatedMin),
+});
+
+/**
+ * @summary Create an independent additional delivery order from an existing delivery
+ */
+export const CreateAdditionalDeliveryOrderParams = zod.object({
+  id: zod.coerce.string().uuid(),
+});
+
+export const createAdditionalDeliveryOrderBodyItemsItemQuantityExclusiveMin = 0;
+
+export const createAdditionalDeliveryOrderBodyItemsItemPriceMin = 0;
+
+export const createAdditionalDeliveryOrderBodyItemsMin = 0;
+
+export const CreateAdditionalDeliveryOrderBody = zod.object({
+  deliveryType: zod
+    .string()
+    .min(1)
+    .describe("Delivery type selected independently from the catalog"),
+  note: zod.string().nullish(),
+  items: zod
+    .array(
+      zod.object({
+        productId: zod.string(),
+        quantity: zod
+          .number()
+          .gt(createAdditionalDeliveryOrderBodyItemsItemQuantityExclusiveMin),
+        price: zod
+          .number()
+          .min(createAdditionalDeliveryOrderBodyItemsItemPriceMin),
+      }),
+    )
+    .min(createAdditionalDeliveryOrderBodyItemsMin)
+    .describe(
+      "Empty only for standard service types закрытие, открывашка, отмывка",
+    ),
+  requestId: zod.string().uuid(),
+});
+
+export const CreateAdditionalDeliveryOrderResponse = zod.object({
+  orderId: zod.string().uuid(),
+  deliveryId: zod.string().uuid(),
+});
 
 /**
  * @summary Record actual delivery date (факт), planned date stays immutable
  */
 export const UpdateDeliveryParams = zod.object({
-  "id": zod.coerce.string()
-})
+  id: zod.coerce.string(),
+});
 
 export const UpdateDeliveryBody = zod.object({
-  "plannedDate": zod.coerce.date().nullish(),
-  "actualDate": zod.coerce.date().nullish(),
-  "note": zod.string().nullish(),
-  "driverUserId": zod.string().uuid().nullish().describe('Замена водителя на эту конкретную доставку (не меняет привязку объекта)')
-})
+  plannedDate: zod.coerce.date().nullish(),
+  correctedPlannedDate: zod.coerce
+    .date()
+    .nullish()
+    .describe(
+      "Уточнённая плановая дата только для отчётности; null очищает значение",
+    ),
+  actualDate: zod.coerce.date().nullish(),
+  logisticianNote: zod
+    .string()
+    .nullish()
+    .describe("Примечание для водителя; изменять может только логист"),
+  driverUserId: zod
+    .string()
+    .uuid()
+    .nullish()
+    .describe(
+      "Замена водителя на эту конкретную доставку (не меняет привязку объекта)",
+    ),
+});
 
-export const updateDeliveryResponseScheduleMonthRegExp = new RegExp('^\\d{4}-(0[1-9]|1[0-2])$');
+export const updateDeliveryResponseScheduleMonthOneMin = 7;
+export const updateDeliveryResponseScheduleMonthOneMax = 7;
 
+export const updateDeliveryResponseScheduleMonthOneRegExp = new RegExp(
+  "^[1-9]\\d{3}-(0[1-9]|1[0-2])$",
+);
+export const updateDeliveryResponseAdditionalOrderItemsItemQuantityExclusiveMin = 0;
 
 export const UpdateDeliveryResponse = zod.object({
-  "id": zod.string(),
-  "siteId": zod.string(),
-  "siteName": zod.string(),
-  "siteAddress": zod.string(),
-  "driverUserId": zod.string().uuid().nullable(),
-  "driver": zod.string(),
-  "plannedDate": zod.coerce.date().nullable().describe('Плановая дата доставки (null, если дата ещё не назначена)'),
-  "scheduleMonth": zod.string().regex(updateDeliveryResponseScheduleMonthRegExp).nullable().describe('Месяц владения строкой графика; null возможен только у legacy rows'),
-  "actualDate": zod.coerce.date().nullable().describe('Фактическая дата доставки (редактируемая)'),
-  "actApprovedAt": zod.coerce.date().nullable(),
-  "actApprovedBy": zod.string().uuid().nullable(),
-  "workflowStatus": zod.enum(['planned', 'done', 'closed']).describe('planned — not completed; done — actual date set but act unapproved; closed — act approved'),
-  "note": zod.string().nullable(),
-  "status": zod.enum(['pending', 'on_time', 'late', 'overdue']).describe('pending — план в будущем, факта нет; on_time — доставлено в срок или раньше;\nlate — доставлено позже плана; overdue — план уже прошёл, факта нет\n'),
-  "lagDays": zod.number().nullable().describe('Отклонение факта от плана в днях (положительное — отставание)'),
-  "rescheduledFromDate": zod.coerce.date().nullable().describe('Исходная плановая дата до переноса (null — переносов не было)'),
-  "rescheduledBy": zod.string().nullable(),
-  "rescheduledAt": zod.coerce.date().nullable(),
-  "photosCount": zod.number().describe('Количество приложенных фото-актов'),
-  "createdAt": zod.coerce.date()
-})
-
+  id: zod.string(),
+  siteId: zod.string(),
+  siteName: zod.string(),
+  siteAddress: zod.string(),
+  tradeNetworkName: zod
+    .string()
+    .nullish()
+    .describe("Торговая сеть из торгового названия объекта, не клиент-юрлицо"),
+  clientId: zod
+    .string()
+    .uuid()
+    .nullish()
+    .describe("Current client resolved from the delivery site"),
+  clientName: zod
+    .string()
+    .nullish()
+    .describe("Current client name resolved from the delivery site"),
+  managerContact: zod
+    .string()
+    .nullish()
+    .describe("Телефон менеджера объекта для связи с водителем"),
+  driverUserId: zod.string().uuid().nullable(),
+  driver: zod.string(),
+  parentDeliveryId: zod
+    .string()
+    .uuid()
+    .nullish()
+    .describe("Parent delivery for an additional order"),
+  orderId: zod
+    .string()
+    .uuid()
+    .nullish()
+    .describe("Client order linked to an additional delivery"),
+  plannedDate: zod.coerce
+    .date()
+    .nullable()
+    .describe("Плановая дата доставки (null, если дата ещё не назначена)"),
+  correctedPlannedDate: zod.coerce
+    .date()
+    .nullish()
+    .describe(
+      "Уточнённая плановая дата только для отчётности; не изменяет исходный план, график или показатели",
+    ),
+  deliveryType: zod
+    .string()
+    .nullish()
+    .describe(
+      "Тип поставки для этой доставки; null означает использовать значение объекта",
+    ),
+  scheduleMonth: zod
+    .union([
+      zod
+        .string()
+        .min(updateDeliveryResponseScheduleMonthOneMin)
+        .max(updateDeliveryResponseScheduleMonthOneMax)
+        .regex(updateDeliveryResponseScheduleMonthOneRegExp)
+        .describe("Календарный месяц YYYY-MM, год 1000–9999, месяц 01–12"),
+      zod.null(),
+    ])
+    .describe(
+      "Месяц владения строкой графика; null возможен только у legacy rows",
+    ),
+  actualDate: zod.coerce
+    .date()
+    .nullable()
+    .describe("Фактическая дата доставки (редактируемая)"),
+  actApprovedAt: zod.coerce.date().nullable(),
+  actApprovedBy: zod.string().uuid().nullable(),
+  workflowStatus: zod
+    .enum(["planned", "done", "closed"])
+    .describe(
+      "planned — not completed; done — actual date set but act unapproved; closed — act approved",
+    ),
+  note: zod
+    .string()
+    .nullable()
+    .describe("Комментарий водителя; логист видит его только для чтения"),
+  logisticianNote: zod
+    .string()
+    .nullable()
+    .describe(
+      "Примечание логиста для водителя; водитель видит его только для чтения",
+    ),
+  status: zod
+    .enum(["pending", "on_time", "late", "overdue"])
+    .describe(
+      "pending — план в будущем, факта нет; on_time — доставлено в срок или раньше;\nlate — доставлено позже плана; overdue — план уже прошёл, факта нет\n",
+    ),
+  lagDays: zod
+    .number()
+    .nullable()
+    .describe("Отклонение факта от плана в днях (положительное — отставание)"),
+  rescheduledFromDate: zod.coerce
+    .date()
+    .nullable()
+    .describe("Исходная плановая дата до переноса (null — переносов не было)"),
+  rescheduledBy: zod.string().nullable(),
+  rescheduledAt: zod.coerce.date().nullable(),
+  photosCount: zod.number().describe("Количество приложенных фото-актов"),
+  createdAt: zod.coerce.date(),
+  archivedAt: zod.coerce.date().nullable(),
+  archivedByName: zod.string().nullable(),
+  additionalOrderItems: zod
+    .array(
+      zod.object({
+        productId: zod.string().uuid(),
+        productName: zod.string(),
+        quantity: zod
+          .number()
+          .gt(
+            updateDeliveryResponseAdditionalOrderItemsItemQuantityExclusiveMin,
+          ),
+        unit: zod.string(),
+      }),
+    )
+    .nullish()
+    .describe("Additional-order contents without prices"),
+  hasAdditionalOrders: zod.boolean().optional(),
+});
 
 /**
  * @summary Delete a delivery schedule entry
  */
 export const DeleteDeliveryParams = zod.object({
-  "id": zod.coerce.string()
-})
+  id: zod.coerce.string(),
+});
 
-export const DeleteDeliveryResponse = zod.void()
+export const DeleteDeliveryResponse = zod.void();
 
+/**
+ * @summary Restore an archived delivery
+ */
+export const RestoreDeliveryParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const restoreDeliveryResponseScheduleMonthOneMin = 7;
+export const restoreDeliveryResponseScheduleMonthOneMax = 7;
+
+export const restoreDeliveryResponseScheduleMonthOneRegExp = new RegExp(
+  "^[1-9]\\d{3}-(0[1-9]|1[0-2])$",
+);
+export const restoreDeliveryResponseAdditionalOrderItemsItemQuantityExclusiveMin = 0;
+
+export const RestoreDeliveryResponse = zod.object({
+  id: zod.string(),
+  siteId: zod.string(),
+  siteName: zod.string(),
+  siteAddress: zod.string(),
+  tradeNetworkName: zod
+    .string()
+    .nullish()
+    .describe("Торговая сеть из торгового названия объекта, не клиент-юрлицо"),
+  clientId: zod
+    .string()
+    .uuid()
+    .nullish()
+    .describe("Current client resolved from the delivery site"),
+  clientName: zod
+    .string()
+    .nullish()
+    .describe("Current client name resolved from the delivery site"),
+  managerContact: zod
+    .string()
+    .nullish()
+    .describe("Телефон менеджера объекта для связи с водителем"),
+  driverUserId: zod.string().uuid().nullable(),
+  driver: zod.string(),
+  parentDeliveryId: zod
+    .string()
+    .uuid()
+    .nullish()
+    .describe("Parent delivery for an additional order"),
+  orderId: zod
+    .string()
+    .uuid()
+    .nullish()
+    .describe("Client order linked to an additional delivery"),
+  plannedDate: zod.coerce
+    .date()
+    .nullable()
+    .describe("Плановая дата доставки (null, если дата ещё не назначена)"),
+  correctedPlannedDate: zod.coerce
+    .date()
+    .nullish()
+    .describe(
+      "Уточнённая плановая дата только для отчётности; не изменяет исходный план, график или показатели",
+    ),
+  deliveryType: zod
+    .string()
+    .nullish()
+    .describe(
+      "Тип поставки для этой доставки; null означает использовать значение объекта",
+    ),
+  scheduleMonth: zod
+    .union([
+      zod
+        .string()
+        .min(restoreDeliveryResponseScheduleMonthOneMin)
+        .max(restoreDeliveryResponseScheduleMonthOneMax)
+        .regex(restoreDeliveryResponseScheduleMonthOneRegExp)
+        .describe("Календарный месяц YYYY-MM, год 1000–9999, месяц 01–12"),
+      zod.null(),
+    ])
+    .describe(
+      "Месяц владения строкой графика; null возможен только у legacy rows",
+    ),
+  actualDate: zod.coerce
+    .date()
+    .nullable()
+    .describe("Фактическая дата доставки (редактируемая)"),
+  actApprovedAt: zod.coerce.date().nullable(),
+  actApprovedBy: zod.string().uuid().nullable(),
+  workflowStatus: zod
+    .enum(["planned", "done", "closed"])
+    .describe(
+      "planned — not completed; done — actual date set but act unapproved; closed — act approved",
+    ),
+  note: zod
+    .string()
+    .nullable()
+    .describe("Комментарий водителя; логист видит его только для чтения"),
+  logisticianNote: zod
+    .string()
+    .nullable()
+    .describe(
+      "Примечание логиста для водителя; водитель видит его только для чтения",
+    ),
+  status: zod
+    .enum(["pending", "on_time", "late", "overdue"])
+    .describe(
+      "pending — план в будущем, факта нет; on_time — доставлено в срок или раньше;\nlate — доставлено позже плана; overdue — план уже прошёл, факта нет\n",
+    ),
+  lagDays: zod
+    .number()
+    .nullable()
+    .describe("Отклонение факта от плана в днях (положительное — отставание)"),
+  rescheduledFromDate: zod.coerce
+    .date()
+    .nullable()
+    .describe("Исходная плановая дата до переноса (null — переносов не было)"),
+  rescheduledBy: zod.string().nullable(),
+  rescheduledAt: zod.coerce.date().nullable(),
+  photosCount: zod.number().describe("Количество приложенных фото-актов"),
+  createdAt: zod.coerce.date(),
+  archivedAt: zod.coerce.date().nullable(),
+  archivedByName: zod.string().nullable(),
+  additionalOrderItems: zod
+    .array(
+      zod.object({
+        productId: zod.string().uuid(),
+        productName: zod.string(),
+        quantity: zod
+          .number()
+          .gt(
+            restoreDeliveryResponseAdditionalOrderItemsItemQuantityExclusiveMin,
+          ),
+        unit: zod.string(),
+      }),
+    )
+    .nullish()
+    .describe("Additional-order contents without prices"),
+  hasAdditionalOrders: zod.boolean().optional(),
+});
 
 /**
  * @summary Перенести доставку на другую дату (сохраняет исходную дату и автора переноса)
  */
 export const RescheduleDeliveryParams = zod.object({
-  "id": zod.coerce.string()
-})
+  id: zod.coerce.string(),
+});
 
 export const RescheduleDeliveryBody = zod.object({
-  "newDate": zod.coerce.date().describe('Новая плановая дата доставки')
-})
+  newDate: zod.coerce.date().describe("Новая плановая дата доставки"),
+});
 
-export const rescheduleDeliveryResponseScheduleMonthRegExp = new RegExp('^\\d{4}-(0[1-9]|1[0-2])$');
+export const rescheduleDeliveryResponseScheduleMonthOneMin = 7;
+export const rescheduleDeliveryResponseScheduleMonthOneMax = 7;
 
+export const rescheduleDeliveryResponseScheduleMonthOneRegExp = new RegExp(
+  "^[1-9]\\d{3}-(0[1-9]|1[0-2])$",
+);
+export const rescheduleDeliveryResponseAdditionalOrderItemsItemQuantityExclusiveMin = 0;
 
 export const RescheduleDeliveryResponse = zod.object({
-  "id": zod.string(),
-  "siteId": zod.string(),
-  "siteName": zod.string(),
-  "siteAddress": zod.string(),
-  "driverUserId": zod.string().uuid().nullable(),
-  "driver": zod.string(),
-  "plannedDate": zod.coerce.date().nullable().describe('Плановая дата доставки (null, если дата ещё не назначена)'),
-  "scheduleMonth": zod.string().regex(rescheduleDeliveryResponseScheduleMonthRegExp).nullable().describe('Месяц владения строкой графика; null возможен только у legacy rows'),
-  "actualDate": zod.coerce.date().nullable().describe('Фактическая дата доставки (редактируемая)'),
-  "actApprovedAt": zod.coerce.date().nullable(),
-  "actApprovedBy": zod.string().uuid().nullable(),
-  "workflowStatus": zod.enum(['planned', 'done', 'closed']).describe('planned — not completed; done — actual date set but act unapproved; closed — act approved'),
-  "note": zod.string().nullable(),
-  "status": zod.enum(['pending', 'on_time', 'late', 'overdue']).describe('pending — план в будущем, факта нет; on_time — доставлено в срок или раньше;\nlate — доставлено позже плана; overdue — план уже прошёл, факта нет\n'),
-  "lagDays": zod.number().nullable().describe('Отклонение факта от плана в днях (положительное — отставание)'),
-  "rescheduledFromDate": zod.coerce.date().nullable().describe('Исходная плановая дата до переноса (null — переносов не было)'),
-  "rescheduledBy": zod.string().nullable(),
-  "rescheduledAt": zod.coerce.date().nullable(),
-  "photosCount": zod.number().describe('Количество приложенных фото-актов'),
-  "createdAt": zod.coerce.date()
-})
+  id: zod.string(),
+  siteId: zod.string(),
+  siteName: zod.string(),
+  siteAddress: zod.string(),
+  tradeNetworkName: zod
+    .string()
+    .nullish()
+    .describe("Торговая сеть из торгового названия объекта, не клиент-юрлицо"),
+  clientId: zod
+    .string()
+    .uuid()
+    .nullish()
+    .describe("Current client resolved from the delivery site"),
+  clientName: zod
+    .string()
+    .nullish()
+    .describe("Current client name resolved from the delivery site"),
+  managerContact: zod
+    .string()
+    .nullish()
+    .describe("Телефон менеджера объекта для связи с водителем"),
+  driverUserId: zod.string().uuid().nullable(),
+  driver: zod.string(),
+  parentDeliveryId: zod
+    .string()
+    .uuid()
+    .nullish()
+    .describe("Parent delivery for an additional order"),
+  orderId: zod
+    .string()
+    .uuid()
+    .nullish()
+    .describe("Client order linked to an additional delivery"),
+  plannedDate: zod.coerce
+    .date()
+    .nullable()
+    .describe("Плановая дата доставки (null, если дата ещё не назначена)"),
+  correctedPlannedDate: zod.coerce
+    .date()
+    .nullish()
+    .describe(
+      "Уточнённая плановая дата только для отчётности; не изменяет исходный план, график или показатели",
+    ),
+  deliveryType: zod
+    .string()
+    .nullish()
+    .describe(
+      "Тип поставки для этой доставки; null означает использовать значение объекта",
+    ),
+  scheduleMonth: zod
+    .union([
+      zod
+        .string()
+        .min(rescheduleDeliveryResponseScheduleMonthOneMin)
+        .max(rescheduleDeliveryResponseScheduleMonthOneMax)
+        .regex(rescheduleDeliveryResponseScheduleMonthOneRegExp)
+        .describe("Календарный месяц YYYY-MM, год 1000–9999, месяц 01–12"),
+      zod.null(),
+    ])
+    .describe(
+      "Месяц владения строкой графика; null возможен только у legacy rows",
+    ),
+  actualDate: zod.coerce
+    .date()
+    .nullable()
+    .describe("Фактическая дата доставки (редактируемая)"),
+  actApprovedAt: zod.coerce.date().nullable(),
+  actApprovedBy: zod.string().uuid().nullable(),
+  workflowStatus: zod
+    .enum(["planned", "done", "closed"])
+    .describe(
+      "planned — not completed; done — actual date set but act unapproved; closed — act approved",
+    ),
+  note: zod
+    .string()
+    .nullable()
+    .describe("Комментарий водителя; логист видит его только для чтения"),
+  logisticianNote: zod
+    .string()
+    .nullable()
+    .describe(
+      "Примечание логиста для водителя; водитель видит его только для чтения",
+    ),
+  status: zod
+    .enum(["pending", "on_time", "late", "overdue"])
+    .describe(
+      "pending — план в будущем, факта нет; on_time — доставлено в срок или раньше;\nlate — доставлено позже плана; overdue — план уже прошёл, факта нет\n",
+    ),
+  lagDays: zod
+    .number()
+    .nullable()
+    .describe("Отклонение факта от плана в днях (положительное — отставание)"),
+  rescheduledFromDate: zod.coerce
+    .date()
+    .nullable()
+    .describe("Исходная плановая дата до переноса (null — переносов не было)"),
+  rescheduledBy: zod.string().nullable(),
+  rescheduledAt: zod.coerce.date().nullable(),
+  photosCount: zod.number().describe("Количество приложенных фото-актов"),
+  createdAt: zod.coerce.date(),
+  archivedAt: zod.coerce.date().nullable(),
+  archivedByName: zod.string().nullable(),
+  additionalOrderItems: zod
+    .array(
+      zod.object({
+        productId: zod.string().uuid(),
+        productName: zod.string(),
+        quantity: zod
+          .number()
+          .gt(
+            rescheduleDeliveryResponseAdditionalOrderItemsItemQuantityExclusiveMin,
+          ),
+        unit: zod.string(),
+      }),
+    )
+    .nullish()
+    .describe("Additional-order contents without prices"),
+  hasAdditionalOrders: zod.boolean().optional(),
+});
 
+/**
+ * @summary Скачать ZIP всех актов доставки
+ */
+export const DownloadDeliveryActsParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const DownloadDeliveryActsResponse = zod.unknown();
 
 /**
  * @summary Confirm the attached act and close a completed delivery
  */
 export const ApproveDeliveryActParams = zod.object({
-  "id": zod.coerce.string()
-})
+  id: zod.coerce.string(),
+});
 
-export const approveDeliveryActResponseScheduleMonthRegExp = new RegExp('^\\d{4}-(0[1-9]|1[0-2])$');
+export const approveDeliveryActResponseScheduleMonthOneMin = 7;
+export const approveDeliveryActResponseScheduleMonthOneMax = 7;
 
+export const approveDeliveryActResponseScheduleMonthOneRegExp = new RegExp(
+  "^[1-9]\\d{3}-(0[1-9]|1[0-2])$",
+);
+export const approveDeliveryActResponseAdditionalOrderItemsItemQuantityExclusiveMin = 0;
 
 export const ApproveDeliveryActResponse = zod.object({
-  "id": zod.string(),
-  "siteId": zod.string(),
-  "siteName": zod.string(),
-  "siteAddress": zod.string(),
-  "driverUserId": zod.string().uuid().nullable(),
-  "driver": zod.string(),
-  "plannedDate": zod.coerce.date().nullable().describe('Плановая дата доставки (null, если дата ещё не назначена)'),
-  "scheduleMonth": zod.string().regex(approveDeliveryActResponseScheduleMonthRegExp).nullable().describe('Месяц владения строкой графика; null возможен только у legacy rows'),
-  "actualDate": zod.coerce.date().nullable().describe('Фактическая дата доставки (редактируемая)'),
-  "actApprovedAt": zod.coerce.date().nullable(),
-  "actApprovedBy": zod.string().uuid().nullable(),
-  "workflowStatus": zod.enum(['planned', 'done', 'closed']).describe('planned — not completed; done — actual date set but act unapproved; closed — act approved'),
-  "note": zod.string().nullable(),
-  "status": zod.enum(['pending', 'on_time', 'late', 'overdue']).describe('pending — план в будущем, факта нет; on_time — доставлено в срок или раньше;\nlate — доставлено позже плана; overdue — план уже прошёл, факта нет\n'),
-  "lagDays": zod.number().nullable().describe('Отклонение факта от плана в днях (положительное — отставание)'),
-  "rescheduledFromDate": zod.coerce.date().nullable().describe('Исходная плановая дата до переноса (null — переносов не было)'),
-  "rescheduledBy": zod.string().nullable(),
-  "rescheduledAt": zod.coerce.date().nullable(),
-  "photosCount": zod.number().describe('Количество приложенных фото-актов'),
-  "createdAt": zod.coerce.date()
-})
-
+  id: zod.string(),
+  siteId: zod.string(),
+  siteName: zod.string(),
+  siteAddress: zod.string(),
+  tradeNetworkName: zod
+    .string()
+    .nullish()
+    .describe("Торговая сеть из торгового названия объекта, не клиент-юрлицо"),
+  clientId: zod
+    .string()
+    .uuid()
+    .nullish()
+    .describe("Current client resolved from the delivery site"),
+  clientName: zod
+    .string()
+    .nullish()
+    .describe("Current client name resolved from the delivery site"),
+  managerContact: zod
+    .string()
+    .nullish()
+    .describe("Телефон менеджера объекта для связи с водителем"),
+  driverUserId: zod.string().uuid().nullable(),
+  driver: zod.string(),
+  parentDeliveryId: zod
+    .string()
+    .uuid()
+    .nullish()
+    .describe("Parent delivery for an additional order"),
+  orderId: zod
+    .string()
+    .uuid()
+    .nullish()
+    .describe("Client order linked to an additional delivery"),
+  plannedDate: zod.coerce
+    .date()
+    .nullable()
+    .describe("Плановая дата доставки (null, если дата ещё не назначена)"),
+  correctedPlannedDate: zod.coerce
+    .date()
+    .nullish()
+    .describe(
+      "Уточнённая плановая дата только для отчётности; не изменяет исходный план, график или показатели",
+    ),
+  deliveryType: zod
+    .string()
+    .nullish()
+    .describe(
+      "Тип поставки для этой доставки; null означает использовать значение объекта",
+    ),
+  scheduleMonth: zod
+    .union([
+      zod
+        .string()
+        .min(approveDeliveryActResponseScheduleMonthOneMin)
+        .max(approveDeliveryActResponseScheduleMonthOneMax)
+        .regex(approveDeliveryActResponseScheduleMonthOneRegExp)
+        .describe("Календарный месяц YYYY-MM, год 1000–9999, месяц 01–12"),
+      zod.null(),
+    ])
+    .describe(
+      "Месяц владения строкой графика; null возможен только у legacy rows",
+    ),
+  actualDate: zod.coerce
+    .date()
+    .nullable()
+    .describe("Фактическая дата доставки (редактируемая)"),
+  actApprovedAt: zod.coerce.date().nullable(),
+  actApprovedBy: zod.string().uuid().nullable(),
+  workflowStatus: zod
+    .enum(["planned", "done", "closed"])
+    .describe(
+      "planned — not completed; done — actual date set but act unapproved; closed — act approved",
+    ),
+  note: zod
+    .string()
+    .nullable()
+    .describe("Комментарий водителя; логист видит его только для чтения"),
+  logisticianNote: zod
+    .string()
+    .nullable()
+    .describe(
+      "Примечание логиста для водителя; водитель видит его только для чтения",
+    ),
+  status: zod
+    .enum(["pending", "on_time", "late", "overdue"])
+    .describe(
+      "pending — план в будущем, факта нет; on_time — доставлено в срок или раньше;\nlate — доставлено позже плана; overdue — план уже прошёл, факта нет\n",
+    ),
+  lagDays: zod
+    .number()
+    .nullable()
+    .describe("Отклонение факта от плана в днях (положительное — отставание)"),
+  rescheduledFromDate: zod.coerce
+    .date()
+    .nullable()
+    .describe("Исходная плановая дата до переноса (null — переносов не было)"),
+  rescheduledBy: zod.string().nullable(),
+  rescheduledAt: zod.coerce.date().nullable(),
+  photosCount: zod.number().describe("Количество приложенных фото-актов"),
+  createdAt: zod.coerce.date(),
+  archivedAt: zod.coerce.date().nullable(),
+  archivedByName: zod.string().nullable(),
+  additionalOrderItems: zod
+    .array(
+      zod.object({
+        productId: zod.string().uuid(),
+        productName: zod.string(),
+        quantity: zod
+          .number()
+          .gt(
+            approveDeliveryActResponseAdditionalOrderItemsItemQuantityExclusiveMin,
+          ),
+        unit: zod.string(),
+      }),
+    )
+    .nullish()
+    .describe("Additional-order contents without prices"),
+  hasAdditionalOrders: zod.boolean().optional(),
+});
 
 /**
  * @summary Список фото-актов доставки
  */
 export const ListDeliveryPhotosParams = zod.object({
-  "id": zod.coerce.string()
-})
+  id: zod.coerce.string(),
+});
+
+export const listDeliveryPhotosResponseCaptionMax = 200;
 
 export const ListDeliveryPhotosResponseItem = zod.object({
-  "id": zod.string(),
-  "deliveryId": zod.string(),
-  "objectPath": zod.string().describe('Путь объекта в хранилище (использовать как \/api\/storage{objectPath})'),
-  "fileName": zod.string(),
-  "mimeType": zod.string(),
-  "uploadedBy": zod.string(),
-  "createdAt": zod.coerce.date()
-})
-export const ListDeliveryPhotosResponse = zod.array(ListDeliveryPhotosResponseItem)
-
+  id: zod.string(),
+  deliveryId: zod.string(),
+  objectPath: zod
+    .string()
+    .describe(
+      "Путь объекта в хранилище (использовать как \/api\/storage{objectPath})",
+    ),
+  fileName: zod.string(),
+  caption: zod.string().max(listDeliveryPhotosResponseCaptionMax).nullable(),
+  mimeType: zod.string(),
+  uploadedBy: zod.string(),
+  createdAt: zod.coerce.date(),
+});
+export const ListDeliveryPhotosResponse = zod.array(
+  ListDeliveryPhotosResponseItem,
+);
 
 /**
  * @summary Приложить фото-акт к доставке (редактор графика или водитель этой доставки)
  */
 export const AddDeliveryPhotoParams = zod.object({
-  "id": zod.coerce.string()
-})
+  id: zod.coerce.string(),
+});
+
+export const addDeliveryPhotoBodyConfirmedActualDateRegExp = new RegExp(
+  "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+);
 
 export const AddDeliveryPhotoBody = zod.object({
-  "objectPath": zod.string().describe('objectPath из ответа на запрос ссылки загрузки'),
-  "fileName": zod.string(),
-  "mimeType": zod.string()
-})
+  confirmedActualDate: zod
+    .string()
+    .regex(addDeliveryPhotoBodyConfirmedActualDateRegExp)
+    .optional()
+    .describe(
+      "Явно подтверждённая фактическая дата для одновременной отметки выполнения и прикрепления акта",
+    ),
+  objectPath: zod
+    .string()
+    .describe("objectPath из ответа на запрос ссылки загрузки"),
+  fileName: zod.string(),
+  mimeType: zod.string(),
+});
+
+export const addDeliveryPhotoResponseCaptionMax = 200;
 
 export const AddDeliveryPhotoResponse = zod.object({
-  "id": zod.string(),
-  "deliveryId": zod.string(),
-  "objectPath": zod.string().describe('Путь объекта в хранилище (использовать как \/api\/storage{objectPath})'),
-  "fileName": zod.string(),
-  "mimeType": zod.string(),
-  "uploadedBy": zod.string(),
-  "createdAt": zod.coerce.date()
-})
+  id: zod.string(),
+  deliveryId: zod.string(),
+  objectPath: zod
+    .string()
+    .describe(
+      "Путь объекта в хранилище (использовать как \/api\/storage{objectPath})",
+    ),
+  fileName: zod.string(),
+  caption: zod.string().max(addDeliveryPhotoResponseCaptionMax).nullable(),
+  mimeType: zod.string(),
+  uploadedBy: zod.string(),
+  createdAt: zod.coerce.date(),
+});
 
+/**
+ * @summary Изменить подпись отдельного акта доставки
+ */
+export const UpdateDeliveryPhotoCaptionParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const updateDeliveryPhotoCaptionBodyCaptionMax = 200;
+
+export const UpdateDeliveryPhotoCaptionBody = zod.object({
+  caption: zod
+    .string()
+    .max(updateDeliveryPhotoCaptionBodyCaptionMax)
+    .nullable(),
+});
+
+export const updateDeliveryPhotoCaptionResponseCaptionMax = 200;
+
+export const UpdateDeliveryPhotoCaptionResponse = zod.object({
+  id: zod.string(),
+  deliveryId: zod.string(),
+  objectPath: zod
+    .string()
+    .describe(
+      "Путь объекта в хранилище (использовать как \/api\/storage{objectPath})",
+    ),
+  fileName: zod.string(),
+  caption: zod
+    .string()
+    .max(updateDeliveryPhotoCaptionResponseCaptionMax)
+    .nullable(),
+  mimeType: zod.string(),
+  uploadedBy: zod.string(),
+  createdAt: zod.coerce.date(),
+});
 
 /**
  * @summary Удалить фото-акт
  */
 export const DeleteDeliveryPhotoParams = zod.object({
-  "id": zod.coerce.string()
-})
+  id: zod.coerce.string(),
+});
 
-export const DeleteDeliveryPhotoResponse = zod.void()
-
+export const DeleteDeliveryPhotoResponse = zod.void();
 
 /**
  * @summary Закрыть объект (временно исключить из развоза)
  */
 export const CloseSiteParams = zod.object({
-  "id": zod.coerce.string()
-})
+  id: zod.coerce.string(),
+});
 
 export const CloseSiteBody = zod.object({
-  "closedFrom": zod.coerce.date().describe('Дата, с которой объект закрыт'),
-  "reopenDate": zod.coerce.date().nullish(),
-  "reason": zod.string().nullish()
-})
+  closedFrom: zod.coerce.date().describe("Дата, с которой объект закрыт"),
+  reopenDate: zod.coerce.date().nullish(),
+  reason: zod.string().nullish(),
+});
 
 export const CloseSiteResponse = zod.object({
-  "id": zod.string(),
-  "name": zod.string().describe('Unique site name'),
-  "address": zod.string(),
-  "branch": zod.string().describe('Куст'),
-  "customer": zod.string().describe('Торговое название объекта (необязательно; непустое значение строго из справочника trade_names)'),
-  "client": zod.string().describe('Клиент'),
-  "manager": zod.string().describe('Закреплённый менеджер'),
-  "managerContact": zod.string().describe('Контакт менеджера'),
-  "director": zod.string().describe('Закреплённый руководитель'),
-  "project": zod.string().describe('Закреплённый проект'),
-  "driverUserId": zod.string().uuid().nullable().describe('UUID закреплённого пользователя-водителя'),
-  "driver": zod.string().describe('Отображаемое имя водителя или «Не назначен»'),
-  "deliveryType": zod.string().describe('Тип поставки (из справочника delivery_types; может быть пустым)'),
-  "closedFrom": zod.coerce.date().nullable().describe('Дата, с которой объект закрыт (null — объект работает)'),
-  "reopenDate": zod.coerce.date().nullable().describe('Планируемая дата открытия (если известна)'),
-  "closureReason": zod.string().nullable(),
-  "closedBy": zod.string().nullable(),
-  "isClosed": zod.boolean().describe('Закрыт ли объект на текущую дату (учитывает closedFrom\/reopenDate)'),
-  "createdAt": zod.coerce.date()
-})
-
+  id: zod.string(),
+  name: zod.string().describe("Unique site name"),
+  address: zod.string(),
+  branch: zod.string().describe("Куст"),
+  customer: zod
+    .string()
+    .describe(
+      "Торговое название объекта (необязательно; непустое значение строго из справочника trade_names)",
+    ),
+  client: zod
+    .string()
+    .describe("Отображаемое название клиента, сохранённое вместе с объектом"),
+  clientId: zod
+    .string()
+    .uuid()
+    .describe("Стабильная обязательная связь с клиентом"),
+  manager: zod.string().describe("Закреплённый менеджер"),
+  managerContact: zod.string().describe("Контакт менеджера"),
+  director: zod.string().describe("Закреплённый руководитель"),
+  project: zod.string().describe("Закреплённый проект"),
+  driverUserId: zod
+    .string()
+    .uuid()
+    .nullable()
+    .describe("UUID закреплённого пользователя-водителя"),
+  driver: zod.string().describe("Отображаемое имя водителя или «Не назначен»"),
+  deliveryType: zod
+    .string()
+    .describe(
+      "Тип поставки (из справочника delivery_types; может быть пустым)",
+    ),
+  serviceMode: zod
+    .enum(["monthly", "additional_only"])
+    .optional()
+    .describe(
+      "Формат обслуживания объекта, независимый от типа отдельной доставки",
+    ),
+  features: zod
+    .string()
+    .describe("Особенности работы объекта или подъезда большой машины"),
+  closedFrom: zod.coerce
+    .date()
+    .nullable()
+    .describe("Дата, с которой объект закрыт (null — объект работает)"),
+  reopenDate: zod.coerce
+    .date()
+    .nullable()
+    .describe("Планируемая дата открытия (если известна)"),
+  closureReason: zod.string().nullable(),
+  closedBy: zod.string().nullable(),
+  isClosed: zod
+    .boolean()
+    .describe(
+      "Закрыт ли объект на текущую дату (учитывает closedFrom\/reopenDate)",
+    ),
+  createdAt: zod.coerce.date(),
+  pendingClosureRequest: zod
+    .object({
+      id: zod.string().uuid(),
+      siteId: zod.string().uuid(),
+      siteName: zod.string(),
+      authorName: zod.string(),
+      closedFrom: zod.coerce.date(),
+      reopenDate: zod.coerce.date().nullable(),
+      closureReason: zod.string().nullable(),
+      createdAt: zod.coerce.date(),
+    })
+    .nullable()
+    .describe("Ожидающее подтверждения предложение закрытия объекта"),
+});
 
 /**
  * @summary Открыть объект снова
  */
 export const ReopenSiteParams = zod.object({
-  "id": zod.coerce.string()
-})
+  id: zod.coerce.string(),
+});
 
 export const ReopenSiteResponse = zod.object({
-  "id": zod.string(),
-  "name": zod.string().describe('Unique site name'),
-  "address": zod.string(),
-  "branch": zod.string().describe('Куст'),
-  "customer": zod.string().describe('Торговое название объекта (необязательно; непустое значение строго из справочника trade_names)'),
-  "client": zod.string().describe('Клиент'),
-  "manager": zod.string().describe('Закреплённый менеджер'),
-  "managerContact": zod.string().describe('Контакт менеджера'),
-  "director": zod.string().describe('Закреплённый руководитель'),
-  "project": zod.string().describe('Закреплённый проект'),
-  "driverUserId": zod.string().uuid().nullable().describe('UUID закреплённого пользователя-водителя'),
-  "driver": zod.string().describe('Отображаемое имя водителя или «Не назначен»'),
-  "deliveryType": zod.string().describe('Тип поставки (из справочника delivery_types; может быть пустым)'),
-  "closedFrom": zod.coerce.date().nullable().describe('Дата, с которой объект закрыт (null — объект работает)'),
-  "reopenDate": zod.coerce.date().nullable().describe('Планируемая дата открытия (если известна)'),
-  "closureReason": zod.string().nullable(),
-  "closedBy": zod.string().nullable(),
-  "isClosed": zod.boolean().describe('Закрыт ли объект на текущую дату (учитывает closedFrom\/reopenDate)'),
-  "createdAt": zod.coerce.date()
-})
-
+  id: zod.string(),
+  name: zod.string().describe("Unique site name"),
+  address: zod.string(),
+  branch: zod.string().describe("Куст"),
+  customer: zod
+    .string()
+    .describe(
+      "Торговое название объекта (необязательно; непустое значение строго из справочника trade_names)",
+    ),
+  client: zod
+    .string()
+    .describe("Отображаемое название клиента, сохранённое вместе с объектом"),
+  clientId: zod
+    .string()
+    .uuid()
+    .describe("Стабильная обязательная связь с клиентом"),
+  manager: zod.string().describe("Закреплённый менеджер"),
+  managerContact: zod.string().describe("Контакт менеджера"),
+  director: zod.string().describe("Закреплённый руководитель"),
+  project: zod.string().describe("Закреплённый проект"),
+  driverUserId: zod
+    .string()
+    .uuid()
+    .nullable()
+    .describe("UUID закреплённого пользователя-водителя"),
+  driver: zod.string().describe("Отображаемое имя водителя или «Не назначен»"),
+  deliveryType: zod
+    .string()
+    .describe(
+      "Тип поставки (из справочника delivery_types; может быть пустым)",
+    ),
+  serviceMode: zod
+    .enum(["monthly", "additional_only"])
+    .optional()
+    .describe(
+      "Формат обслуживания объекта, независимый от типа отдельной доставки",
+    ),
+  features: zod
+    .string()
+    .describe("Особенности работы объекта или подъезда большой машины"),
+  closedFrom: zod.coerce
+    .date()
+    .nullable()
+    .describe("Дата, с которой объект закрыт (null — объект работает)"),
+  reopenDate: zod.coerce
+    .date()
+    .nullable()
+    .describe("Планируемая дата открытия (если известна)"),
+  closureReason: zod.string().nullable(),
+  closedBy: zod.string().nullable(),
+  isClosed: zod
+    .boolean()
+    .describe(
+      "Закрыт ли объект на текущую дату (учитывает closedFrom\/reopenDate)",
+    ),
+  createdAt: zod.coerce.date(),
+  pendingClosureRequest: zod
+    .object({
+      id: zod.string().uuid(),
+      siteId: zod.string().uuid(),
+      siteName: zod.string(),
+      authorName: zod.string(),
+      closedFrom: zod.coerce.date(),
+      reopenDate: zod.coerce.date().nullable(),
+      closureReason: zod.string().nullable(),
+      createdAt: zod.coerce.date(),
+    })
+    .nullable()
+    .describe("Ожидающее подтверждения предложение закрытия объекта"),
+});
 
 /**
  * @summary Справочник инвентаря
  */
 export const ListInventoryItemsResponseItem = zod.object({
-  "id": zod.string(),
-  "name": zod.string(),
-  "unit": zod.string(),
-  "category": zod.string().nullable(),
-  "sort": zod.number(),
-  "active": zod.boolean(),
-  "createdAt": zod.coerce.date()
-})
-export const ListInventoryItemsResponse = zod.array(ListInventoryItemsResponseItem)
-
+  id: zod.string(),
+  name: zod.string(),
+  unit: zod.string(),
+  category: zod.string().nullable(),
+  sort: zod.number(),
+  active: zod.boolean(),
+  createdAt: zod.coerce.date(),
+});
+export const ListInventoryItemsResponse = zod.array(
+  ListInventoryItemsResponseItem,
+);
 
 /**
  * @summary Добавить позицию инвентаря
  */
 export const CreateInventoryItemBody = zod.object({
-  "name": zod.string(),
-  "unit": zod.string(),
-  "category": zod.string().nullish(),
-  "sort": zod.number().optional()
-})
+  name: zod.string(),
+  unit: zod.string(),
+  category: zod.string().nullish(),
+  sort: zod.number().optional(),
+});
 
 export const CreateInventoryItemResponse = zod.object({
-  "id": zod.string(),
-  "name": zod.string(),
-  "unit": zod.string(),
-  "category": zod.string().nullable(),
-  "sort": zod.number(),
-  "active": zod.boolean(),
-  "createdAt": zod.coerce.date()
-})
-
+  id: zod.string(),
+  name: zod.string(),
+  unit: zod.string(),
+  category: zod.string().nullable(),
+  sort: zod.number(),
+  active: zod.boolean(),
+  createdAt: zod.coerce.date(),
+});
 
 /**
  * @summary Изменить позицию инвентаря
  */
 export const UpdateInventoryItemParams = zod.object({
-  "id": zod.coerce.string()
-})
+  id: zod.coerce.string(),
+});
 
 export const UpdateInventoryItemBody = zod.object({
-  "name": zod.string().optional(),
-  "unit": zod.string().optional(),
-  "category": zod.string().nullish(),
-  "sort": zod.number().optional(),
-  "active": zod.boolean().optional()
-})
+  name: zod.string().optional(),
+  unit: zod.string().optional(),
+  category: zod.string().nullish(),
+  sort: zod.number().optional(),
+  active: zod.boolean().optional(),
+});
 
 export const UpdateInventoryItemResponse = zod.object({
-  "id": zod.string(),
-  "name": zod.string(),
-  "unit": zod.string(),
-  "category": zod.string().nullable(),
-  "sort": zod.number(),
-  "active": zod.boolean(),
-  "createdAt": zod.coerce.date()
-})
-
+  id: zod.string(),
+  name: zod.string(),
+  unit: zod.string(),
+  category: zod.string().nullable(),
+  sort: zod.number(),
+  active: zod.boolean(),
+  createdAt: zod.coerce.date(),
+});
 
 /**
  * @summary Удалить позицию инвентаря
  */
 export const DeleteInventoryItemParams = zod.object({
-  "id": zod.coerce.string()
-})
+  id: zod.coerce.string(),
+});
 
-export const DeleteInventoryItemResponse = zod.void()
-
+export const DeleteInventoryItemResponse = zod.void();
 
 /**
  * @summary Заявки на инвентарь
  */
 export const ListInventoryRequestsQueryParams = zod.object({
-  "status": zod.enum(['new', 'approved', 'rejected', 'done']).optional(),
-  "siteId": zod.coerce.string().optional()
-})
+  status: zod.enum(["new", "approved", "rejected", "done"]).optional(),
+  siteId: zod.coerce.string().optional(),
+});
 
 export const ListInventoryRequestsResponseItem = zod.object({
-  "id": zod.string(),
-  "siteId": zod.string().nullable(),
-  "siteName": zod.string().nullable(),
-  "status": zod.enum(['new', 'approved', 'rejected', 'done']).describe('new — новая; approved — одобрена; rejected — отклонена; done — выдана'),
-  "note": zod.string().nullable(),
-  "createdBy": zod.string(),
-  "decidedBy": zod.string().nullable(),
-  "decidedAt": zod.coerce.date().nullable(),
-  "decisionNote": zod.string().nullable(),
-  "doneBy": zod.string().nullable(),
-  "doneAt": zod.coerce.date().nullable(),
-  "items": zod.array(zod.object({
-  "id": zod.string(),
-  "itemId": zod.string().nullable(),
-  "name": zod.string(),
-  "unit": zod.string(),
-  "qty": zod.number()
-})),
-  "createdAt": zod.coerce.date()
-})
-export const ListInventoryRequestsResponse = zod.array(ListInventoryRequestsResponseItem)
-
+  id: zod.string(),
+  siteId: zod.string().nullable(),
+  siteName: zod.string().nullable(),
+  status: zod
+    .enum(["new", "approved", "rejected", "done"])
+    .describe(
+      "new — новая; approved — одобрена; rejected — отклонена; done — выдана",
+    ),
+  note: zod.string().nullable(),
+  createdBy: zod.string(),
+  decidedBy: zod.string().nullable(),
+  decidedAt: zod.coerce.date().nullable(),
+  decisionNote: zod.string().nullable(),
+  doneBy: zod.string().nullable(),
+  doneAt: zod.coerce.date().nullable(),
+  items: zod.array(
+    zod.object({
+      id: zod.string(),
+      itemId: zod.string().nullable(),
+      name: zod.string(),
+      unit: zod.string(),
+      qty: zod.number(),
+    }),
+  ),
+  createdAt: zod.coerce.date(),
+});
+export const ListInventoryRequestsResponse = zod.array(
+  ListInventoryRequestsResponseItem,
+);
 
 /**
  * @summary Создать заявку на инвентарь (доступно любому вошедшему сотруднику)
  */
 export const createInventoryRequestBodyItemsItemQtyMin = 0.01;
 
-
 export const CreateInventoryRequestBody = zod.object({
-  "siteId": zod.string().nullish(),
-  "note": zod.string().nullish(),
-  "items": zod.array(zod.object({
-  "itemId": zod.string().describe('Позиция из справочника инвентаря'),
-  "qty": zod.number().min(createInventoryRequestBodyItemsItemQtyMin)
-})).min(1)
-})
+  siteId: zod.string().nullish(),
+  note: zod.string().nullish(),
+  items: zod
+    .array(
+      zod.object({
+        itemId: zod.string().describe("Позиция из справочника инвентаря"),
+        qty: zod.number().min(createInventoryRequestBodyItemsItemQtyMin),
+      }),
+    )
+    .min(1),
+});
 
 export const CreateInventoryRequestResponse = zod.object({
-  "id": zod.string(),
-  "siteId": zod.string().nullable(),
-  "siteName": zod.string().nullable(),
-  "status": zod.enum(['new', 'approved', 'rejected', 'done']).describe('new — новая; approved — одобрена; rejected — отклонена; done — выдана'),
-  "note": zod.string().nullable(),
-  "createdBy": zod.string(),
-  "decidedBy": zod.string().nullable(),
-  "decidedAt": zod.coerce.date().nullable(),
-  "decisionNote": zod.string().nullable(),
-  "doneBy": zod.string().nullable(),
-  "doneAt": zod.coerce.date().nullable(),
-  "items": zod.array(zod.object({
-  "id": zod.string(),
-  "itemId": zod.string().nullable(),
-  "name": zod.string(),
-  "unit": zod.string(),
-  "qty": zod.number()
-})),
-  "createdAt": zod.coerce.date()
-})
-
+  id: zod.string(),
+  siteId: zod.string().nullable(),
+  siteName: zod.string().nullable(),
+  status: zod
+    .enum(["new", "approved", "rejected", "done"])
+    .describe(
+      "new — новая; approved — одобрена; rejected — отклонена; done — выдана",
+    ),
+  note: zod.string().nullable(),
+  createdBy: zod.string(),
+  decidedBy: zod.string().nullable(),
+  decidedAt: zod.coerce.date().nullable(),
+  decisionNote: zod.string().nullable(),
+  doneBy: zod.string().nullable(),
+  doneAt: zod.coerce.date().nullable(),
+  items: zod.array(
+    zod.object({
+      id: zod.string(),
+      itemId: zod.string().nullable(),
+      name: zod.string(),
+      unit: zod.string(),
+      qty: zod.number(),
+    }),
+  ),
+  createdAt: zod.coerce.date(),
+});
 
 /**
  * @summary Одобрить заявку
  */
 export const ApproveInventoryRequestParams = zod.object({
-  "id": zod.coerce.string()
-})
+  id: zod.coerce.string(),
+});
 
 export const ApproveInventoryRequestBody = zod.object({
-  "note": zod.string().nullish()
-})
+  note: zod.string().nullish(),
+});
 
 export const ApproveInventoryRequestResponse = zod.object({
-  "id": zod.string(),
-  "siteId": zod.string().nullable(),
-  "siteName": zod.string().nullable(),
-  "status": zod.enum(['new', 'approved', 'rejected', 'done']).describe('new — новая; approved — одобрена; rejected — отклонена; done — выдана'),
-  "note": zod.string().nullable(),
-  "createdBy": zod.string(),
-  "decidedBy": zod.string().nullable(),
-  "decidedAt": zod.coerce.date().nullable(),
-  "decisionNote": zod.string().nullable(),
-  "doneBy": zod.string().nullable(),
-  "doneAt": zod.coerce.date().nullable(),
-  "items": zod.array(zod.object({
-  "id": zod.string(),
-  "itemId": zod.string().nullable(),
-  "name": zod.string(),
-  "unit": zod.string(),
-  "qty": zod.number()
-})),
-  "createdAt": zod.coerce.date()
-})
-
+  id: zod.string(),
+  siteId: zod.string().nullable(),
+  siteName: zod.string().nullable(),
+  status: zod
+    .enum(["new", "approved", "rejected", "done"])
+    .describe(
+      "new — новая; approved — одобрена; rejected — отклонена; done — выдана",
+    ),
+  note: zod.string().nullable(),
+  createdBy: zod.string(),
+  decidedBy: zod.string().nullable(),
+  decidedAt: zod.coerce.date().nullable(),
+  decisionNote: zod.string().nullable(),
+  doneBy: zod.string().nullable(),
+  doneAt: zod.coerce.date().nullable(),
+  items: zod.array(
+    zod.object({
+      id: zod.string(),
+      itemId: zod.string().nullable(),
+      name: zod.string(),
+      unit: zod.string(),
+      qty: zod.number(),
+    }),
+  ),
+  createdAt: zod.coerce.date(),
+});
 
 /**
  * @summary Отклонить заявку
  */
 export const RejectInventoryRequestParams = zod.object({
-  "id": zod.coerce.string()
-})
+  id: zod.coerce.string(),
+});
 
 export const RejectInventoryRequestBody = zod.object({
-  "note": zod.string().nullish()
-})
+  note: zod.string().nullish(),
+});
 
 export const RejectInventoryRequestResponse = zod.object({
-  "id": zod.string(),
-  "siteId": zod.string().nullable(),
-  "siteName": zod.string().nullable(),
-  "status": zod.enum(['new', 'approved', 'rejected', 'done']).describe('new — новая; approved — одобрена; rejected — отклонена; done — выдана'),
-  "note": zod.string().nullable(),
-  "createdBy": zod.string(),
-  "decidedBy": zod.string().nullable(),
-  "decidedAt": zod.coerce.date().nullable(),
-  "decisionNote": zod.string().nullable(),
-  "doneBy": zod.string().nullable(),
-  "doneAt": zod.coerce.date().nullable(),
-  "items": zod.array(zod.object({
-  "id": zod.string(),
-  "itemId": zod.string().nullable(),
-  "name": zod.string(),
-  "unit": zod.string(),
-  "qty": zod.number()
-})),
-  "createdAt": zod.coerce.date()
-})
-
+  id: zod.string(),
+  siteId: zod.string().nullable(),
+  siteName: zod.string().nullable(),
+  status: zod
+    .enum(["new", "approved", "rejected", "done"])
+    .describe(
+      "new — новая; approved — одобрена; rejected — отклонена; done — выдана",
+    ),
+  note: zod.string().nullable(),
+  createdBy: zod.string(),
+  decidedBy: zod.string().nullable(),
+  decidedAt: zod.coerce.date().nullable(),
+  decisionNote: zod.string().nullable(),
+  doneBy: zod.string().nullable(),
+  doneAt: zod.coerce.date().nullable(),
+  items: zod.array(
+    zod.object({
+      id: zod.string(),
+      itemId: zod.string().nullable(),
+      name: zod.string(),
+      unit: zod.string(),
+      qty: zod.number(),
+    }),
+  ),
+  createdAt: zod.coerce.date(),
+});
 
 /**
  * @summary Отметить заявку выданной (исполненной)
  */
 export const MarkInventoryRequestDoneParams = zod.object({
-  "id": zod.coerce.string()
-})
+  id: zod.coerce.string(),
+});
 
 export const MarkInventoryRequestDoneResponse = zod.object({
-  "id": zod.string(),
-  "siteId": zod.string().nullable(),
-  "siteName": zod.string().nullable(),
-  "status": zod.enum(['new', 'approved', 'rejected', 'done']).describe('new — новая; approved — одобрена; rejected — отклонена; done — выдана'),
-  "note": zod.string().nullable(),
-  "createdBy": zod.string(),
-  "decidedBy": zod.string().nullable(),
-  "decidedAt": zod.coerce.date().nullable(),
-  "decisionNote": zod.string().nullable(),
-  "doneBy": zod.string().nullable(),
-  "doneAt": zod.coerce.date().nullable(),
-  "items": zod.array(zod.object({
-  "id": zod.string(),
-  "itemId": zod.string().nullable(),
-  "name": zod.string(),
-  "unit": zod.string(),
-  "qty": zod.number()
-})),
-  "createdAt": zod.coerce.date()
-})
-
+  id: zod.string(),
+  siteId: zod.string().nullable(),
+  siteName: zod.string().nullable(),
+  status: zod
+    .enum(["new", "approved", "rejected", "done"])
+    .describe(
+      "new — новая; approved — одобрена; rejected — отклонена; done — выдана",
+    ),
+  note: zod.string().nullable(),
+  createdBy: zod.string(),
+  decidedBy: zod.string().nullable(),
+  decidedAt: zod.coerce.date().nullable(),
+  decisionNote: zod.string().nullable(),
+  doneBy: zod.string().nullable(),
+  doneAt: zod.coerce.date().nullable(),
+  items: zod.array(
+    zod.object({
+      id: zod.string(),
+      itemId: zod.string().nullable(),
+      name: zod.string(),
+      unit: zod.string(),
+      qty: zod.number(),
+    }),
+  ),
+  createdAt: zod.coerce.date(),
+});
 
 /**
  * @summary List minimum site fields needed by the deliveries workspace
  */
 export const ListDeliverySiteLookupResponseItem = zod.object({
-  "id": zod.string().uuid(),
-  "name": zod.string(),
-  "address": zod.string(),
-  "branch": zod.string(),
-  "manager": zod.string(),
-  "deliveryType": zod.string(),
-  "client": zod.string(),
-  "driver": zod.string(),
-  "driverUserId": zod.string().uuid().nullable(),
-  "isClosed": zod.boolean()
-})
-export const ListDeliverySiteLookupResponse = zod.array(ListDeliverySiteLookupResponseItem)
+  id: zod.string().uuid(),
+  name: zod.string(),
+  address: zod.string(),
+  branch: zod.string(),
+  manager: zod.string(),
+  managerContact: zod.string().optional(),
+  deliveryType: zod.string(),
+  serviceMode: zod
+    .enum(["monthly", "additional_only"])
+    .optional()
+    .describe(
+      "Формат обслуживания объекта, независимый от типа отдельной доставки",
+    ),
+  features: zod.string(),
+  client: zod.string(),
+  driver: zod.string(),
+  driverUserId: zod.string().uuid().nullable(),
+  isClosed: zod.boolean(),
+});
+export const ListDeliverySiteLookupResponse = zod.array(
+  ListDeliverySiteLookupResponseItem,
+);
 
+/**
+ * @summary List delivery types available to the deliveries workspace
+ */
+export const ListDeliveryTypeLookupResponseItem = zod.object({
+  id: zod.string(),
+  name: zod.string(),
+  createdAt: zod.coerce.date(),
+});
+export const ListDeliveryTypeLookupResponse = zod.array(
+  ListDeliveryTypeLookupResponseItem,
+);
+
+/**
+ * @summary List distinct nonblank site branches
+ */
+export const ListSiteBranchLookupResponseItem = zod.object({
+  name: zod.string(),
+});
+export const ListSiteBranchLookupResponse = zod.array(
+  ListSiteBranchLookupResponseItem,
+);
 
 /**
  * @summary List product fields needed to prepare a goods receipt
  */
 export const ListReceiptProductLookupResponseItem = zod.object({
-  "id": zod.string().uuid(),
-  "name": zod.string(),
-  "sku": zod.string(),
-  "unit": zod.string(),
-  "categoryId": zod.string().uuid().nullable(),
-  "purchasePrice": zod.number(),
-  "price": zod.number(),
-  "minStock": zod.number(),
-  "supplier": zod.string().nullable(),
-  "supplierContact": zod.string().nullable(),
-  "currentStock": zod.number()
-})
-export const ListReceiptProductLookupResponse = zod.array(ListReceiptProductLookupResponseItem)
-
+  id: zod.string().uuid(),
+  name: zod.string(),
+  sku: zod.string(),
+  unit: zod.string(),
+  categoryId: zod.string().uuid().nullable(),
+  purchasePrice: zod.number(),
+  price: zod.number(),
+  minStock: zod.number(),
+  supplier: zod.string().nullable(),
+  supplierContact: zod.string().nullable(),
+  currentStock: zod.number(),
+});
+export const ListReceiptProductLookupResponse = zod.array(
+  ListReceiptProductLookupResponseItem,
+);
 
 /**
  * @summary List categories needed to prepare a goods receipt
  */
 export const ListReceiptCategoryLookupResponseItem = zod.object({
-  "id": zod.string().uuid(),
-  "name": zod.string()
-})
-export const ListReceiptCategoryLookupResponse = zod.array(ListReceiptCategoryLookupResponseItem)
-
+  id: zod.string().uuid(),
+  name: zod.string(),
+});
+export const ListReceiptCategoryLookupResponse = zod.array(
+  ListReceiptCategoryLookupResponseItem,
+);
 
 /**
  * @summary List clients needed to prepare an order
  */
 export const ListOrderClientLookupResponseItem = zod.object({
-  "id": zod.string().uuid(),
-  "name": zod.string()
-})
-export const ListOrderClientLookupResponse = zod.array(ListOrderClientLookupResponseItem)
+  id: zod.string().uuid(),
+  name: zod.string(),
+});
+export const ListOrderClientLookupResponse = zod.array(
+  ListOrderClientLookupResponseItem,
+);
 
+/**
+ * @summary List client-linked sites needed to prepare an order
+ */
+export const ListOrderSiteLookupResponseItem = zod.object({
+  id: zod.string().uuid(),
+  name: zod.string(),
+  address: zod.string(),
+  clientId: zod.string().uuid(),
+});
+export const ListOrderSiteLookupResponse = zod.array(
+  ListOrderSiteLookupResponseItem,
+);
 
 /**
  * @summary List products needed to prepare an order
  */
 export const ListOrderProductLookupResponseItem = zod.object({
-  "id": zod.string().uuid(),
-  "name": zod.string(),
-  "unit": zod.string(),
-  "price": zod.number()
-})
-export const ListOrderProductLookupResponse = zod.array(ListOrderProductLookupResponseItem)
-
+  id: zod.string().uuid(),
+  name: zod.string(),
+  unit: zod.string(),
+  price: zod.number(),
+});
+export const ListOrderProductLookupResponse = zod.array(
+  ListOrderProductLookupResponseItem,
+);
 
 /**
  * @summary List sites needed to prepare an inventory request
  */
 export const ListInventorySiteLookupResponseItem = zod.object({
-  "id": zod.string().uuid(),
-  "name": zod.string()
-})
-export const ListInventorySiteLookupResponse = zod.array(ListInventorySiteLookupResponseItem)
-
+  id: zod.string().uuid(),
+  name: zod.string(),
+});
+export const ListInventorySiteLookupResponse = zod.array(
+  ListInventorySiteLookupResponseItem,
+);
 
 /**
  * @summary List sites needed to prepare a shipment
  */
 export const ListShipmentSiteLookupResponseItem = zod.object({
-  "id": zod.string().uuid(),
-  "name": zod.string(),
-  "driverUserId": zod.string().uuid().nullable()
-})
-export const ListShipmentSiteLookupResponse = zod.array(ListShipmentSiteLookupResponseItem)
-
+  id: zod.string().uuid(),
+  name: zod.string(),
+  driverUserId: zod.string().uuid().nullable(),
+});
+export const ListShipmentSiteLookupResponse = zod.array(
+  ListShipmentSiteLookupResponseItem,
+);
 
 /**
  * @summary List products needed while editing a shipment
  */
 export const ListShipmentProductLookupResponseItem = zod.object({
-  "id": zod.string().uuid(),
-  "name": zod.string(),
-  "unit": zod.string(),
-  "price": zod.number()
-})
-export const ListShipmentProductLookupResponse = zod.array(ListShipmentProductLookupResponseItem)
-
+  id: zod.string().uuid(),
+  name: zod.string(),
+  unit: zod.string(),
+  price: zod.number(),
+});
+export const ListShipmentProductLookupResponse = zod.array(
+  ListShipmentProductLookupResponseItem,
+);
 
 /**
  * @summary List orders eligible for shipment selection
  */
 export const ListShipmentOrderLookupResponseItem = zod.object({
-  "id": zod.string().uuid(),
-  "clientName": zod.string(),
-  "isPaid": zod.boolean(),
-  "items": zod.array(zod.object({
-  "id": zod.string().uuid(),
-  "productId": zod.string().uuid(),
-  "productName": zod.string(),
-  "quantity": zod.number(),
-  "price": zod.number(),
-  "shippedQuantity": zod.number(),
-  "remainingQuantity": zod.number()
-}))
-})
-export const ListShipmentOrderLookupResponse = zod.array(ListShipmentOrderLookupResponseItem)
-
+  id: zod.string().uuid(),
+  clientName: zod.string(),
+  isPaid: zod.boolean(),
+  status: zod.enum([
+    "draft",
+    "shipped",
+    "delivered",
+    "awaiting_payment",
+    "paid",
+  ]),
+  summaryId: zod.string().nullable(),
+  items: zod.array(
+    zod.object({
+      id: zod.string().uuid(),
+      productId: zod.string().uuid(),
+      productName: zod.string(),
+      quantity: zod.number(),
+      price: zod.number(),
+      shippedQuantity: zod.number(),
+      remainingQuantity: zod.number(),
+    }),
+  ),
+});
+export const ListShipmentOrderLookupResponse = zod.array(
+  ListShipmentOrderLookupResponseItem,
+);
 
 /**
  * @summary Get order detail needed to prepare or edit a shipment
  */
 export const GetShipmentOrderLookupParams = zod.object({
-  "id": zod.coerce.string()
-})
+  id: zod.coerce.string(),
+});
 
 export const GetShipmentOrderLookupResponse = zod.object({
-  "id": zod.string().uuid(),
-  "clientName": zod.string(),
-  "isPaid": zod.boolean(),
-  "items": zod.array(zod.object({
-  "id": zod.string().uuid(),
-  "productId": zod.string().uuid(),
-  "productName": zod.string(),
-  "quantity": zod.number(),
-  "price": zod.number(),
-  "shippedQuantity": zod.number(),
-  "remainingQuantity": zod.number()
-}))
-})
-
+  id: zod.string().uuid(),
+  clientName: zod.string(),
+  isPaid: zod.boolean(),
+  status: zod.enum([
+    "draft",
+    "shipped",
+    "delivered",
+    "awaiting_payment",
+    "paid",
+  ]),
+  summaryId: zod.string().nullable(),
+  items: zod.array(
+    zod.object({
+      id: zod.string().uuid(),
+      productId: zod.string().uuid(),
+      productName: zod.string(),
+      quantity: zod.number(),
+      price: zod.number(),
+      shippedQuantity: zod.number(),
+      remainingQuantity: zod.number(),
+    }),
+  ),
+});
 
 /**
  * @summary List shipment summary rows for an order workspace
  */
 export const ListOrderShipmentLookupParams = zod.object({
-  "id": zod.coerce.string()
-})
+  id: zod.coerce.string(),
+});
 
 export const ListOrderShipmentLookupResponseItem = zod.object({
-  "id": zod.string().uuid(),
-  "siteName": zod.string(),
-  "driver": zod.string(),
-  "shipmentDate": zod.string(),
-  "totalAmount": zod.number(),
-  "isDispatched": zod.boolean(),
-  "isDeleted": zod.boolean()
-})
-export const ListOrderShipmentLookupResponse = zod.array(ListOrderShipmentLookupResponseItem)
-
+  id: zod.string().uuid(),
+  siteName: zod.string(),
+  driver: zod.string(),
+  shipmentDate: zod.string(),
+  totalAmount: zod.number(),
+  isDispatched: zod.boolean(),
+  isDeleted: zod.boolean(),
+});
+export const ListOrderShipmentLookupResponse = zod.array(
+  ListOrderShipmentLookupResponseItem,
+);
 
 /**
  * @summary Request a presigned URL for a delivery act upload
  */
 
-
 export const RequestUploadUrlBody = zod.object({
-  "deliveryId": zod.string().uuid(),
-  "name": zod.string().min(1),
-  "size": zod.number().min(1),
-  "contentType": zod.string().min(1)
-})
+  deliveryId: zod.string().uuid(),
+  name: zod.string().min(1),
+  size: zod.number().min(1),
+  contentType: zod.string().min(1),
+});
 
 export const RequestUploadUrlResponse = zod.object({
-  "uploadURL": zod.string().url(),
-  "objectPath": zod.string().describe('Normalized object path (e.g. \/objects\/uploads\/uuid). Store this in the database.')
-})
-
+  uploadURL: zod.string().url(),
+  objectPath: zod
+    .string()
+    .describe(
+      "Normalized object path (e.g. \/objects\/uploads\/uuid). Store this in the database.",
+    ),
+});
 
 /**
  * @summary Serve an uploaded object
  */
 export const GetStorageObjectParams = zod.object({
-  "objectPath": zod.coerce.string()
-})
+  objectPath: zod.coerce.string(),
+});
 
-export const GetStorageObjectResponse = zod.unknown()
-
+export const GetStorageObjectResponse = zod.unknown();
 
 /**
  * @summary Get current authenticated user's role and permissions
  */
 export const GetCurrentUserResponse = zod.object({
-  "id": zod.string(),
-  "clerkUserId": zod.string(),
-  "email": zod.string(),
-  "name": zod.string().nullable(),
-  "phone": zod.string().nullable(),
-  "role": zod.enum(['admin', 'driver', 'logistician', 'manager']),
-  "editableSections": zod.array(zod.enum(['products', 'receipts', 'sites', 'deliveries', 'clients', 'orders', 'shipments', 'inventory'])).describe('Разделы, доступные пользователю'),
-  "assignedSiteIds": zod.array(zod.string()).nullable().describe('Объекты, закреплённые за пользователем (менеджер\/руководитель проекта)'),
-  "createdAt": zod.coerce.date()
-})
-
+  id: zod.string(),
+  clerkUserId: zod.string(),
+  email: zod.string(),
+  name: zod.string().nullable(),
+  phone: zod.string().nullable(),
+  role: zod.enum(["admin", "driver", "logistician", "manager"]),
+  isDriver: zod.boolean().describe("Legacy-флаг водительской учётной записи"),
+  editableSections: zod
+    .array(
+      zod.enum([
+        "products",
+        "receipts",
+        "sites",
+        "deliveries",
+        "clients",
+        "orders",
+        "shipments",
+        "inventory",
+      ]),
+    )
+    .describe("Разделы, доступные пользователю"),
+  assignedSiteIds: zod
+    .array(zod.string())
+    .nullable()
+    .describe(
+      "Объекты, закреплённые за пользователем (менеджер\/руководитель проекта)",
+    ),
+  createdAt: zod.coerce.date(),
+});
 
 /**
  * @summary List all app users (admin only)
  */
 export const ListUsersResponseItem = zod.object({
-  "id": zod.string(),
-  "clerkUserId": zod.string(),
-  "email": zod.string(),
-  "name": zod.string().nullable(),
-  "phone": zod.string().nullable(),
-  "role": zod.enum(['admin', 'driver', 'logistician', 'manager']),
-  "editableSections": zod.array(zod.enum(['products', 'receipts', 'sites', 'deliveries', 'clients', 'orders', 'shipments', 'inventory'])).describe('Разделы, доступные пользователю'),
-  "assignedSiteIds": zod.array(zod.string()).nullable().describe('Объекты, закреплённые за пользователем (менеджер\/руководитель проекта)'),
-  "createdAt": zod.coerce.date()
-})
-export const ListUsersResponse = zod.array(ListUsersResponseItem)
-
+  id: zod.string(),
+  clerkUserId: zod.string(),
+  email: zod.string(),
+  name: zod.string().nullable(),
+  phone: zod.string().nullable(),
+  role: zod.enum(["admin", "driver", "logistician", "manager"]),
+  isDriver: zod.boolean().describe("Legacy-флаг водительской учётной записи"),
+  editableSections: zod
+    .array(
+      zod.enum([
+        "products",
+        "receipts",
+        "sites",
+        "deliveries",
+        "clients",
+        "orders",
+        "shipments",
+        "inventory",
+      ]),
+    )
+    .describe("Разделы, доступные пользователю"),
+  assignedSiteIds: zod
+    .array(zod.string())
+    .nullable()
+    .describe(
+      "Объекты, закреплённые за пользователем (менеджер\/руководитель проекта)",
+    ),
+  createdAt: zod.coerce.date(),
+});
+export const ListUsersResponse = zod.array(ListUsersResponseItem);
 
 /**
  * @summary List users marked as drivers
  */
 export const ListDriversResponseItem = zod.object({
-  "id": zod.string().uuid(),
-  "name": zod.string().nullable(),
-  "email": zod.string()
-})
-export const ListDriversResponse = zod.array(ListDriversResponseItem)
-
+  id: zod.string().uuid(),
+  name: zod.string().nullable(),
+  email: zod.string(),
+});
+export const ListDriversResponse = zod.array(ListDriversResponseItem);
 
 /**
- * @summary Update a user's role and assigned sections (admin only)
+ * @summary Update a user's profile, email, role and assigned sections (admin only)
  */
 export const UpdateUserRoleParams = zod.object({
-  "id": zod.coerce.string()
-})
+  id: zod.coerce.string(),
+});
 
 export const UpdateUserRoleBody = zod.object({
-  "name": zod.string().nullish(),
-  "phone": zod.string().nullish(),
-  "role": zod.enum(['admin', 'driver', 'logistician', 'manager']),
-  "editableSections": zod.array(zod.enum(['products', 'receipts', 'sites', 'deliveries', 'clients', 'orders', 'shipments', 'inventory'])).describe('Разделы, назначенные логисту или руководителю'),
-  "assignedSiteIds": zod.array(zod.string()).nullish()
-})
+  email: zod.string().email().optional(),
+  name: zod.string().nullish(),
+  phone: zod.string().nullish(),
+  role: zod.enum(["admin", "driver", "logistician", "manager"]),
+  editableSections: zod
+    .array(
+      zod.enum([
+        "products",
+        "receipts",
+        "sites",
+        "deliveries",
+        "clients",
+        "orders",
+        "shipments",
+        "inventory",
+      ]),
+    )
+    .describe("Разделы, назначенные логисту или руководителю"),
+  assignedSiteIds: zod.array(zod.string()).nullish(),
+});
 
 export const UpdateUserRoleResponse = zod.object({
-  "id": zod.string(),
-  "clerkUserId": zod.string(),
-  "email": zod.string(),
-  "name": zod.string().nullable(),
-  "phone": zod.string().nullable(),
-  "role": zod.enum(['admin', 'driver', 'logistician', 'manager']),
-  "editableSections": zod.array(zod.enum(['products', 'receipts', 'sites', 'deliveries', 'clients', 'orders', 'shipments', 'inventory'])).describe('Разделы, доступные пользователю'),
-  "assignedSiteIds": zod.array(zod.string()).nullable().describe('Объекты, закреплённые за пользователем (менеджер\/руководитель проекта)'),
-  "createdAt": zod.coerce.date()
-})
+  id: zod.string(),
+  clerkUserId: zod.string(),
+  email: zod.string(),
+  name: zod.string().nullable(),
+  phone: zod.string().nullable(),
+  role: zod.enum(["admin", "driver", "logistician", "manager"]),
+  isDriver: zod.boolean().describe("Legacy-флаг водительской учётной записи"),
+  editableSections: zod
+    .array(
+      zod.enum([
+        "products",
+        "receipts",
+        "sites",
+        "deliveries",
+        "clients",
+        "orders",
+        "shipments",
+        "inventory",
+      ]),
+    )
+    .describe("Разделы, доступные пользователю"),
+  assignedSiteIds: zod
+    .array(zod.string())
+    .nullable()
+    .describe(
+      "Объекты, закреплённые за пользователем (менеджер\/руководитель проекта)",
+    ),
+  createdAt: zod.coerce.date(),
+});
 
+/**
+ * @summary Create a short-lived Clerk actor ticket for an admin to enter a user account
+ */
+export const CreateUserImpersonationTokenParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const CreateUserImpersonationTokenResponse = zod.object({
+  token: zod.string().min(1).describe("Short-lived, one-time Clerk ticket"),
+});
+
+/**
+ * @summary Create a short-lived sign-in ticket back to the actor administrator
+ */
+
+export const CreateImpersonationReturnUrlResponse = zod.object({
+  token: zod.string().min(1).describe("Short-lived, one-time Clerk ticket"),
+});
 
 /**
  * @summary Delete all business data (admin only, destructive)
  */
 export const ClearAllDataResponse = zod.object({
-  "cleared": zod.boolean()
-})
-
+  cleared: zod.boolean(),
+});
 
 /**
  * @summary List unresolved legacy driver assignments (admin only)
@@ -1575,20 +4156,54 @@ export const getLegacyDriverAssignmentsResponseOneDeliveryCountMin = 0;
 
 export const getLegacyDriverAssignmentsResponseOneTotalCountMin = 0;
 
-
-export const GetLegacyDriverAssignmentsResponseItem = zod.object({
-  "legacyName": zod.string().min(1),
-  "siteCount": zod.number().min(getLegacyDriverAssignmentsResponseOneSiteCountMin),
-  "deliveryCount": zod.number().min(getLegacyDriverAssignmentsResponseOneDeliveryCountMin),
-  "totalCount": zod.number().min(getLegacyDriverAssignmentsResponseOneTotalCountMin)
-}).and(zod.object({
-  "similarityGroup": zod.string().nullable().describe('Одинаковый идентификатор у вероятных дублей; null у имён без похожих вариантов. Не влияет на применение сопоставления.'),
-  "similarityReviewed": zod.boolean().describe('Администратор уже подтвердил, что варианты этой группы не нужно автоматически объединять.'),
-  "similarityReviewedAt": zod.coerce.date().nullable().describe('Время актуальной проверки группы; null у непроверенной группы.'),
-  "similarityReviewedByName": zod.string().nullable().describe('Имя проверившего администратора; null у непроверенной группы или после удаления его учётной записи.')
-}))
-export const GetLegacyDriverAssignmentsResponse = zod.array(GetLegacyDriverAssignmentsResponseItem)
-
+export const GetLegacyDriverAssignmentsResponseItem = zod
+  .object({
+    legacyName: zod.string().min(1),
+    siteCount: zod
+      .number()
+      .min(getLegacyDriverAssignmentsResponseOneSiteCountMin),
+    deliveryCount: zod
+      .number()
+      .min(getLegacyDriverAssignmentsResponseOneDeliveryCountMin),
+    totalCount: zod
+      .number()
+      .min(getLegacyDriverAssignmentsResponseOneTotalCountMin),
+  })
+  .and(
+    zod.object({
+      similarityGroup: zod
+        .string()
+        .nullable()
+        .describe(
+          "Одинаковый идентификатор у вероятных дублей; null у имён без похожих вариантов. Не влияет на применение сопоставления.",
+        ),
+      similarityReviewed: zod
+        .boolean()
+        .describe(
+          "Администратор уже подтвердил, что варианты этой группы не нужно автоматически объединять.",
+        ),
+      similarityReviewedAt: zod.coerce
+        .date()
+        .nullable()
+        .describe(
+          "Время актуальной проверки группы; null у непроверенной группы.",
+        ),
+      similarityReviewedByName: zod
+        .string()
+        .nullable()
+        .describe(
+          "Текущее или сохранённое историческое имя проверившего администратора; null у непроверенной группы или старой записи без снимка имени.",
+        ),
+      similarityReviewedByDeleted: zod
+        .boolean()
+        .describe(
+          "Учётная запись проверившего администратора была удалена. Для старой записи имя при этом может быть null.",
+        ),
+    }),
+  );
+export const GetLegacyDriverAssignmentsResponse = zod.array(
+  GetLegacyDriverAssignmentsResponseItem,
+);
 
 /**
  * @summary Resolve legacy driver names to driver users (admin only)
@@ -1596,14 +4211,17 @@ export const GetLegacyDriverAssignmentsResponse = zod.array(GetLegacyDriverAssig
 
 export const resolveLegacyDriverAssignmentsBodyMappingsMax = 200;
 
-
 export const ResolveLegacyDriverAssignmentsBody = zod.object({
-  "mappings": zod.array(zod.object({
-  "legacyName": zod.string().min(1),
-  "driverUserId": zod.string().uuid()
-})).min(1).max(resolveLegacyDriverAssignmentsBodyMappingsMax)
-})
-
+  mappings: zod
+    .array(
+      zod.object({
+        legacyName: zod.string().min(1),
+        driverUserId: zod.string().uuid(),
+      }),
+    )
+    .min(1)
+    .max(resolveLegacyDriverAssignmentsBodyMappingsMax),
+});
 
 export const resolveLegacyDriverAssignmentsResponseResultsItemOneSiteCountMin = 0;
 
@@ -1617,65 +4235,114 @@ export const resolveLegacyDriverAssignmentsResponseDeliveriesUpdatedMin = 0;
 
 export const resolveLegacyDriverAssignmentsResponseTotalUpdatedMin = 0;
 
-
 export const ResolveLegacyDriverAssignmentsResponse = zod.object({
-  "results": zod.array(zod.object({
-  "legacyName": zod.string().min(1),
-  "siteCount": zod.number().min(resolveLegacyDriverAssignmentsResponseResultsItemOneSiteCountMin),
-  "deliveryCount": zod.number().min(resolveLegacyDriverAssignmentsResponseResultsItemOneDeliveryCountMin),
-  "totalCount": zod.number().min(resolveLegacyDriverAssignmentsResponseResultsItemOneTotalCountMin)
-}).and(zod.object({
-  "driverUserId": zod.string().uuid()
-}))),
-  "sitesUpdated": zod.number().min(resolveLegacyDriverAssignmentsResponseSitesUpdatedMin),
-  "deliveriesUpdated": zod.number().min(resolveLegacyDriverAssignmentsResponseDeliveriesUpdatedMin),
-  "totalUpdated": zod.number().min(resolveLegacyDriverAssignmentsResponseTotalUpdatedMin)
-})
-
+  results: zod.array(
+    zod
+      .object({
+        legacyName: zod.string().min(1),
+        siteCount: zod
+          .number()
+          .min(
+            resolveLegacyDriverAssignmentsResponseResultsItemOneSiteCountMin,
+          ),
+        deliveryCount: zod
+          .number()
+          .min(
+            resolveLegacyDriverAssignmentsResponseResultsItemOneDeliveryCountMin,
+          ),
+        totalCount: zod
+          .number()
+          .min(
+            resolveLegacyDriverAssignmentsResponseResultsItemOneTotalCountMin,
+          ),
+      })
+      .and(
+        zod.object({
+          driverUserId: zod.string().uuid(),
+        }),
+      ),
+  ),
+  sitesUpdated: zod
+    .number()
+    .min(resolveLegacyDriverAssignmentsResponseSitesUpdatedMin),
+  deliveriesUpdated: zod
+    .number()
+    .min(resolveLegacyDriverAssignmentsResponseDeliveriesUpdatedMin),
+  totalUpdated: zod
+    .number()
+    .min(resolveLegacyDriverAssignmentsResponseTotalUpdatedMin),
+});
 
 /**
  * @summary Mark or unmark a legacy driver similarity group as reviewed (admin only)
  */
 
-
 export const SetLegacyDriverSimilarityReviewBody = zod.object({
-  "similarityGroup": zod.string().min(1),
-  "reviewed": zod.boolean()
-})
-
+  similarityGroup: zod.string().min(1),
+  reviewed: zod.boolean(),
+});
 
 export const SetLegacyDriverSimilarityReviewResponse = zod.object({
-  "similarityGroup": zod.string().min(1),
-  "reviewed": zod.boolean()
-})
-
+  similarityGroup: zod.string().min(1),
+  reviewed: zod.boolean(),
+});
 
 /**
  * @summary Create a user account with password and access rights (admin only)
  */
 export const createUserBodyPasswordMin = 8;
 
-
 export const CreateUserBody = zod.object({
-  "email": zod.string().email(),
-  "password": zod.string().min(createUserBodyPasswordMin),
-  "name": zod.string().nullish(),
-  "role": zod.enum(['admin', 'driver', 'logistician', 'manager']),
-  "editableSections": zod.array(zod.enum(['products', 'receipts', 'sites', 'deliveries', 'clients', 'orders', 'shipments', 'inventory'])).describe('Разделы, назначенные логисту или руководителю')
-})
+  email: zod.string().email(),
+  password: zod.string().min(createUserBodyPasswordMin),
+  name: zod.string().nullish(),
+  role: zod.enum(["admin", "driver", "logistician", "manager"]),
+  editableSections: zod
+    .array(
+      zod.enum([
+        "products",
+        "receipts",
+        "sites",
+        "deliveries",
+        "clients",
+        "orders",
+        "shipments",
+        "inventory",
+      ]),
+    )
+    .describe("Разделы, назначенные логисту или руководителю"),
+});
 
 export const CreateUserResponse = zod.object({
-  "id": zod.string(),
-  "clerkUserId": zod.string(),
-  "email": zod.string(),
-  "name": zod.string().nullable(),
-  "phone": zod.string().nullable(),
-  "role": zod.enum(['admin', 'driver', 'logistician', 'manager']),
-  "editableSections": zod.array(zod.enum(['products', 'receipts', 'sites', 'deliveries', 'clients', 'orders', 'shipments', 'inventory'])).describe('Разделы, доступные пользователю'),
-  "assignedSiteIds": zod.array(zod.string()).nullable().describe('Объекты, закреплённые за пользователем (менеджер\/руководитель проекта)'),
-  "createdAt": zod.coerce.date()
-})
-
+  id: zod.string(),
+  clerkUserId: zod.string(),
+  email: zod.string(),
+  name: zod.string().nullable(),
+  phone: zod.string().nullable(),
+  role: zod.enum(["admin", "driver", "logistician", "manager"]),
+  isDriver: zod.boolean().describe("Legacy-флаг водительской учётной записи"),
+  editableSections: zod
+    .array(
+      zod.enum([
+        "products",
+        "receipts",
+        "sites",
+        "deliveries",
+        "clients",
+        "orders",
+        "shipments",
+        "inventory",
+      ]),
+    )
+    .describe("Разделы, доступные пользователю"),
+  assignedSiteIds: zod
+    .array(zod.string())
+    .nullable()
+    .describe(
+      "Объекты, закреплённые за пользователем (менеджер\/руководитель проекта)",
+    ),
+  createdAt: zod.coerce.date(),
+});
 
 /**
  * @summary List audit log entries (admin only)
@@ -1684,876 +4351,2024 @@ export const listAuditLogQueryLimitMax = 200;
 
 export const listAuditLogQueryOffsetMin = 0;
 
-
 export const ListAuditLogQueryParams = zod.object({
-  "limit": zod.coerce.number().min(1).max(listAuditLogQueryLimitMax).optional(),
-  "offset": zod.coerce.number().min(listAuditLogQueryOffsetMin).optional(),
-  "entity": zod.coerce.string().optional(),
-  "userId": zod.coerce.string().optional()
-})
+  limit: zod.coerce.number().min(1).max(listAuditLogQueryLimitMax).optional(),
+  offset: zod.coerce.number().min(listAuditLogQueryOffsetMin).optional(),
+  entity: zod.coerce.string().optional(),
+  userId: zod.coerce.string().optional(),
+});
 
 export const ListAuditLogResponse = zod.object({
-  "items": zod.array(zod.object({
-  "id": zod.string(),
-  "userId": zod.string().nullable(),
-  "userEmail": zod.string(),
-  "userName": zod.string().nullable(),
-  "method": zod.string(),
-  "entity": zod.string(),
-  "entityId": zod.string().nullable(),
-  "path": zod.string(),
-  "statusCode": zod.number(),
-  "meta": zod.unknown().nullish(),
-  "createdAt": zod.coerce.date()
-})),
-  "total": zod.number()
-})
-
+  items: zod.array(
+    zod.object({
+      id: zod.string(),
+      userId: zod.string().nullable(),
+      userEmail: zod.string(),
+      userName: zod.string().nullable(),
+      method: zod.string(),
+      entity: zod.string(),
+      entityId: zod.string().nullable(),
+      path: zod.string(),
+      statusCode: zod.number(),
+      meta: zod.unknown().nullish(),
+      createdAt: zod.coerce.date(),
+    }),
+  ),
+  total: zod.number(),
+});
 
 /**
  * @summary Get automatic delivery upload cleanup health (admin only)
  */
-export const GetDeliveryUploadCleanupHealthResponse = zod.object({
-  "lastRunAt": zod.coerce.date().nullable(),
-  "lastSuccessfulRunAt": zod.coerce.date().nullable(),
-  "status": zod.enum(['never', 'success', 'failed']),
-  "summary": zod.union([zod.object({
-  "scanned": zod.number(),
-  "candidates": zod.number(),
-  "deleted": zod.number(),
-  "resumedPhotoDeletions": zod.number(),
-  "resumedDeliveryDeletions": zod.number(),
-  "failed": zod.number()
-}),zod.null()]),
-  "staleAfterHours": zod.number(),
-  "isStale": zod.boolean()
-})
+export const getDeliveryUploadCleanupHealthResponseConsecutiveFailuresMin = 0;
 
+export const GetDeliveryUploadCleanupHealthResponse = zod.object({
+  lastRunAt: zod.coerce.date().nullable(),
+  lastSuccessfulRunAt: zod.coerce.date().nullable(),
+  status: zod.enum(["never", "success", "failed"]),
+  failureKind: zod.enum(["none", "list_timeout", "other"]),
+  consecutiveFailures: zod
+    .number()
+    .min(getDeliveryUploadCleanupHealthResponseConsecutiveFailuresMin),
+  hasRepeatedFailures: zod.boolean(),
+  summary: zod.union([
+    zod.object({
+      scanned: zod.number(),
+      candidates: zod.number(),
+      deleted: zod.number(),
+      resumedPhotoDeletions: zod.number(),
+      resumedDeliveryDeletions: zod.number(),
+      failed: zod.number(),
+    }),
+    zod.null(),
+  ]),
+  staleAfterHours: zod.number(),
+  isStale: zod.boolean(),
+});
 
 /**
  * @summary Deliveries visible to the current user (bound driver or assigned sites)
  */
-export const listMyDeliveriesQueryFromRegExp = new RegExp('^\\d{4}-\\d{2}-\\d{2}$');
-export const listMyDeliveriesQueryToRegExp = new RegExp('^\\d{4}-\\d{2}-\\d{2}$');
-
+export const listMyDeliveriesQueryFromRegExp = new RegExp(
+  "^\\d{4}-\\d{2}-\\d{2}$",
+);
+export const listMyDeliveriesQueryToRegExp = new RegExp(
+  "^\\d{4}-\\d{2}-\\d{2}$",
+);
 
 export const ListMyDeliveriesQueryParams = zod.object({
-  "from": zod.coerce.string().regex(listMyDeliveriesQueryFromRegExp).optional().describe('Date YYYY-MM-DD'),
-  "to": zod.coerce.string().regex(listMyDeliveriesQueryToRegExp).optional().describe('Date YYYY-MM-DD'),
-  "siteId": zod.coerce.string().optional(),
-  "search": zod.coerce.string().optional().describe('Case-insensitive substring of site name or address')
-})
+  from: zod.coerce
+    .string()
+    .regex(listMyDeliveriesQueryFromRegExp)
+    .optional()
+    .describe("Date YYYY-MM-DD"),
+  to: zod.coerce
+    .string()
+    .regex(listMyDeliveriesQueryToRegExp)
+    .optional()
+    .describe("Date YYYY-MM-DD"),
+  siteId: zod.coerce.string().optional(),
+  search: zod.coerce
+    .string()
+    .optional()
+    .describe("Case-insensitive substring of site name or address"),
+});
 
-export const listMyDeliveriesResponseScheduleMonthRegExp = new RegExp('^\\d{4}-(0[1-9]|1[0-2])$');
+export const listMyDeliveriesResponseScheduleMonthOneMin = 7;
+export const listMyDeliveriesResponseScheduleMonthOneMax = 7;
 
+export const listMyDeliveriesResponseScheduleMonthOneRegExp = new RegExp(
+  "^[1-9]\\d{3}-(0[1-9]|1[0-2])$",
+);
+export const listMyDeliveriesResponseAdditionalOrderItemsItemQuantityExclusiveMin = 0;
 
 export const ListMyDeliveriesResponseItem = zod.object({
-  "id": zod.string(),
-  "siteId": zod.string(),
-  "siteName": zod.string(),
-  "siteAddress": zod.string(),
-  "driverUserId": zod.string().uuid().nullable(),
-  "driver": zod.string(),
-  "plannedDate": zod.coerce.date().nullable().describe('Плановая дата доставки (null, если дата ещё не назначена)'),
-  "scheduleMonth": zod.string().regex(listMyDeliveriesResponseScheduleMonthRegExp).nullable().describe('Месяц владения строкой графика; null возможен только у legacy rows'),
-  "actualDate": zod.coerce.date().nullable().describe('Фактическая дата доставки (редактируемая)'),
-  "actApprovedAt": zod.coerce.date().nullable(),
-  "actApprovedBy": zod.string().uuid().nullable(),
-  "workflowStatus": zod.enum(['planned', 'done', 'closed']).describe('planned — not completed; done — actual date set but act unapproved; closed — act approved'),
-  "note": zod.string().nullable(),
-  "status": zod.enum(['pending', 'on_time', 'late', 'overdue']).describe('pending — план в будущем, факта нет; on_time — доставлено в срок или раньше;\nlate — доставлено позже плана; overdue — план уже прошёл, факта нет\n'),
-  "lagDays": zod.number().nullable().describe('Отклонение факта от плана в днях (положительное — отставание)'),
-  "rescheduledFromDate": zod.coerce.date().nullable().describe('Исходная плановая дата до переноса (null — переносов не было)'),
-  "rescheduledBy": zod.string().nullable(),
-  "rescheduledAt": zod.coerce.date().nullable(),
-  "photosCount": zod.number().describe('Количество приложенных фото-актов'),
-  "createdAt": zod.coerce.date()
-})
-export const ListMyDeliveriesResponse = zod.array(ListMyDeliveriesResponseItem)
-
+  id: zod.string(),
+  siteId: zod.string(),
+  siteName: zod.string(),
+  siteAddress: zod.string(),
+  tradeNetworkName: zod
+    .string()
+    .nullish()
+    .describe("Торговая сеть из торгового названия объекта, не клиент-юрлицо"),
+  clientId: zod
+    .string()
+    .uuid()
+    .nullish()
+    .describe("Current client resolved from the delivery site"),
+  clientName: zod
+    .string()
+    .nullish()
+    .describe("Current client name resolved from the delivery site"),
+  managerContact: zod
+    .string()
+    .nullish()
+    .describe("Телефон менеджера объекта для связи с водителем"),
+  driverUserId: zod.string().uuid().nullable(),
+  driver: zod.string(),
+  parentDeliveryId: zod
+    .string()
+    .uuid()
+    .nullish()
+    .describe("Parent delivery for an additional order"),
+  orderId: zod
+    .string()
+    .uuid()
+    .nullish()
+    .describe("Client order linked to an additional delivery"),
+  plannedDate: zod.coerce
+    .date()
+    .nullable()
+    .describe("Плановая дата доставки (null, если дата ещё не назначена)"),
+  correctedPlannedDate: zod.coerce
+    .date()
+    .nullish()
+    .describe(
+      "Уточнённая плановая дата только для отчётности; не изменяет исходный план, график или показатели",
+    ),
+  deliveryType: zod
+    .string()
+    .nullish()
+    .describe(
+      "Тип поставки для этой доставки; null означает использовать значение объекта",
+    ),
+  scheduleMonth: zod
+    .union([
+      zod
+        .string()
+        .min(listMyDeliveriesResponseScheduleMonthOneMin)
+        .max(listMyDeliveriesResponseScheduleMonthOneMax)
+        .regex(listMyDeliveriesResponseScheduleMonthOneRegExp)
+        .describe("Календарный месяц YYYY-MM, год 1000–9999, месяц 01–12"),
+      zod.null(),
+    ])
+    .describe(
+      "Месяц владения строкой графика; null возможен только у legacy rows",
+    ),
+  actualDate: zod.coerce
+    .date()
+    .nullable()
+    .describe("Фактическая дата доставки (редактируемая)"),
+  actApprovedAt: zod.coerce.date().nullable(),
+  actApprovedBy: zod.string().uuid().nullable(),
+  workflowStatus: zod
+    .enum(["planned", "done", "closed"])
+    .describe(
+      "planned — not completed; done — actual date set but act unapproved; closed — act approved",
+    ),
+  note: zod
+    .string()
+    .nullable()
+    .describe("Комментарий водителя; логист видит его только для чтения"),
+  logisticianNote: zod
+    .string()
+    .nullable()
+    .describe(
+      "Примечание логиста для водителя; водитель видит его только для чтения",
+    ),
+  status: zod
+    .enum(["pending", "on_time", "late", "overdue"])
+    .describe(
+      "pending — план в будущем, факта нет; on_time — доставлено в срок или раньше;\nlate — доставлено позже плана; overdue — план уже прошёл, факта нет\n",
+    ),
+  lagDays: zod
+    .number()
+    .nullable()
+    .describe("Отклонение факта от плана в днях (положительное — отставание)"),
+  rescheduledFromDate: zod.coerce
+    .date()
+    .nullable()
+    .describe("Исходная плановая дата до переноса (null — переносов не было)"),
+  rescheduledBy: zod.string().nullable(),
+  rescheduledAt: zod.coerce.date().nullable(),
+  photosCount: zod.number().describe("Количество приложенных фото-актов"),
+  createdAt: zod.coerce.date(),
+  archivedAt: zod.coerce.date().nullable(),
+  archivedByName: zod.string().nullable(),
+  additionalOrderItems: zod
+    .array(
+      zod.object({
+        productId: zod.string().uuid(),
+        productName: zod.string(),
+        quantity: zod
+          .number()
+          .gt(
+            listMyDeliveriesResponseAdditionalOrderItemsItemQuantityExclusiveMin,
+          ),
+        unit: zod.string(),
+      }),
+    )
+    .nullish()
+    .describe("Additional-order contents without prices"),
+  hasAdditionalOrders: zod.boolean().optional(),
+});
+export const ListMyDeliveriesResponse = zod.array(ListMyDeliveriesResponseItem);
 
 /**
  * @summary Mark own delivery as done today (driver-bound users only)
  */
 export const MarkMyDeliveryDoneParams = zod.object({
-  "id": zod.coerce.string()
-})
+  id: zod.coerce.string(),
+});
 
-export const markMyDeliveryDoneResponseScheduleMonthRegExp = new RegExp('^\\d{4}-(0[1-9]|1[0-2])$');
+export const markMyDeliveryDoneResponseScheduleMonthOneMin = 7;
+export const markMyDeliveryDoneResponseScheduleMonthOneMax = 7;
 
+export const markMyDeliveryDoneResponseScheduleMonthOneRegExp = new RegExp(
+  "^[1-9]\\d{3}-(0[1-9]|1[0-2])$",
+);
+export const markMyDeliveryDoneResponseAdditionalOrderItemsItemQuantityExclusiveMin = 0;
 
 export const MarkMyDeliveryDoneResponse = zod.object({
-  "id": zod.string(),
-  "siteId": zod.string(),
-  "siteName": zod.string(),
-  "siteAddress": zod.string(),
-  "driverUserId": zod.string().uuid().nullable(),
-  "driver": zod.string(),
-  "plannedDate": zod.coerce.date().nullable().describe('Плановая дата доставки (null, если дата ещё не назначена)'),
-  "scheduleMonth": zod.string().regex(markMyDeliveryDoneResponseScheduleMonthRegExp).nullable().describe('Месяц владения строкой графика; null возможен только у legacy rows'),
-  "actualDate": zod.coerce.date().nullable().describe('Фактическая дата доставки (редактируемая)'),
-  "actApprovedAt": zod.coerce.date().nullable(),
-  "actApprovedBy": zod.string().uuid().nullable(),
-  "workflowStatus": zod.enum(['planned', 'done', 'closed']).describe('planned — not completed; done — actual date set but act unapproved; closed — act approved'),
-  "note": zod.string().nullable(),
-  "status": zod.enum(['pending', 'on_time', 'late', 'overdue']).describe('pending — план в будущем, факта нет; on_time — доставлено в срок или раньше;\nlate — доставлено позже плана; overdue — план уже прошёл, факта нет\n'),
-  "lagDays": zod.number().nullable().describe('Отклонение факта от плана в днях (положительное — отставание)'),
-  "rescheduledFromDate": zod.coerce.date().nullable().describe('Исходная плановая дата до переноса (null — переносов не было)'),
-  "rescheduledBy": zod.string().nullable(),
-  "rescheduledAt": zod.coerce.date().nullable(),
-  "photosCount": zod.number().describe('Количество приложенных фото-актов'),
-  "createdAt": zod.coerce.date()
-})
-
+  id: zod.string(),
+  siteId: zod.string(),
+  siteName: zod.string(),
+  siteAddress: zod.string(),
+  tradeNetworkName: zod
+    .string()
+    .nullish()
+    .describe("Торговая сеть из торгового названия объекта, не клиент-юрлицо"),
+  clientId: zod
+    .string()
+    .uuid()
+    .nullish()
+    .describe("Current client resolved from the delivery site"),
+  clientName: zod
+    .string()
+    .nullish()
+    .describe("Current client name resolved from the delivery site"),
+  managerContact: zod
+    .string()
+    .nullish()
+    .describe("Телефон менеджера объекта для связи с водителем"),
+  driverUserId: zod.string().uuid().nullable(),
+  driver: zod.string(),
+  parentDeliveryId: zod
+    .string()
+    .uuid()
+    .nullish()
+    .describe("Parent delivery for an additional order"),
+  orderId: zod
+    .string()
+    .uuid()
+    .nullish()
+    .describe("Client order linked to an additional delivery"),
+  plannedDate: zod.coerce
+    .date()
+    .nullable()
+    .describe("Плановая дата доставки (null, если дата ещё не назначена)"),
+  correctedPlannedDate: zod.coerce
+    .date()
+    .nullish()
+    .describe(
+      "Уточнённая плановая дата только для отчётности; не изменяет исходный план, график или показатели",
+    ),
+  deliveryType: zod
+    .string()
+    .nullish()
+    .describe(
+      "Тип поставки для этой доставки; null означает использовать значение объекта",
+    ),
+  scheduleMonth: zod
+    .union([
+      zod
+        .string()
+        .min(markMyDeliveryDoneResponseScheduleMonthOneMin)
+        .max(markMyDeliveryDoneResponseScheduleMonthOneMax)
+        .regex(markMyDeliveryDoneResponseScheduleMonthOneRegExp)
+        .describe("Календарный месяц YYYY-MM, год 1000–9999, месяц 01–12"),
+      zod.null(),
+    ])
+    .describe(
+      "Месяц владения строкой графика; null возможен только у legacy rows",
+    ),
+  actualDate: zod.coerce
+    .date()
+    .nullable()
+    .describe("Фактическая дата доставки (редактируемая)"),
+  actApprovedAt: zod.coerce.date().nullable(),
+  actApprovedBy: zod.string().uuid().nullable(),
+  workflowStatus: zod
+    .enum(["planned", "done", "closed"])
+    .describe(
+      "planned — not completed; done — actual date set but act unapproved; closed — act approved",
+    ),
+  note: zod
+    .string()
+    .nullable()
+    .describe("Комментарий водителя; логист видит его только для чтения"),
+  logisticianNote: zod
+    .string()
+    .nullable()
+    .describe(
+      "Примечание логиста для водителя; водитель видит его только для чтения",
+    ),
+  status: zod
+    .enum(["pending", "on_time", "late", "overdue"])
+    .describe(
+      "pending — план в будущем, факта нет; on_time — доставлено в срок или раньше;\nlate — доставлено позже плана; overdue — план уже прошёл, факта нет\n",
+    ),
+  lagDays: zod
+    .number()
+    .nullable()
+    .describe("Отклонение факта от плана в днях (положительное — отставание)"),
+  rescheduledFromDate: zod.coerce
+    .date()
+    .nullable()
+    .describe("Исходная плановая дата до переноса (null — переносов не было)"),
+  rescheduledBy: zod.string().nullable(),
+  rescheduledAt: zod.coerce.date().nullable(),
+  photosCount: zod.number().describe("Количество приложенных фото-актов"),
+  createdAt: zod.coerce.date(),
+  archivedAt: zod.coerce.date().nullable(),
+  archivedByName: zod.string().nullable(),
+  additionalOrderItems: zod
+    .array(
+      zod.object({
+        productId: zod.string().uuid(),
+        productName: zod.string(),
+        quantity: zod
+          .number()
+          .gt(
+            markMyDeliveryDoneResponseAdditionalOrderItemsItemQuantityExclusiveMin,
+          ),
+        unit: zod.string(),
+      }),
+    )
+    .nullish()
+    .describe("Additional-order contents without prices"),
+  hasAdditionalOrders: zod.boolean().optional(),
+});
 
 /**
  * @summary Update the shared delivery note as the currently assigned active driver
  */
 export const UpdateMyDeliveryCommentParams = zod.object({
-  "id": zod.coerce.string()
-})
+  id: zod.coerce.string(),
+});
 
 export const UpdateMyDeliveryCommentBody = zod.object({
-  "note": zod.string().nullable()
-})
+  note: zod.string().nullable(),
+});
 
-export const updateMyDeliveryCommentResponseScheduleMonthRegExp = new RegExp('^\\d{4}-(0[1-9]|1[0-2])$');
+export const updateMyDeliveryCommentResponseScheduleMonthOneMin = 7;
+export const updateMyDeliveryCommentResponseScheduleMonthOneMax = 7;
 
+export const updateMyDeliveryCommentResponseScheduleMonthOneRegExp = new RegExp(
+  "^[1-9]\\d{3}-(0[1-9]|1[0-2])$",
+);
+export const updateMyDeliveryCommentResponseAdditionalOrderItemsItemQuantityExclusiveMin = 0;
 
 export const UpdateMyDeliveryCommentResponse = zod.object({
-  "id": zod.string(),
-  "siteId": zod.string(),
-  "siteName": zod.string(),
-  "siteAddress": zod.string(),
-  "driverUserId": zod.string().uuid().nullable(),
-  "driver": zod.string(),
-  "plannedDate": zod.coerce.date().nullable().describe('Плановая дата доставки (null, если дата ещё не назначена)'),
-  "scheduleMonth": zod.string().regex(updateMyDeliveryCommentResponseScheduleMonthRegExp).nullable().describe('Месяц владения строкой графика; null возможен только у legacy rows'),
-  "actualDate": zod.coerce.date().nullable().describe('Фактическая дата доставки (редактируемая)'),
-  "actApprovedAt": zod.coerce.date().nullable(),
-  "actApprovedBy": zod.string().uuid().nullable(),
-  "workflowStatus": zod.enum(['planned', 'done', 'closed']).describe('planned — not completed; done — actual date set but act unapproved; closed — act approved'),
-  "note": zod.string().nullable(),
-  "status": zod.enum(['pending', 'on_time', 'late', 'overdue']).describe('pending — план в будущем, факта нет; on_time — доставлено в срок или раньше;\nlate — доставлено позже плана; overdue — план уже прошёл, факта нет\n'),
-  "lagDays": zod.number().nullable().describe('Отклонение факта от плана в днях (положительное — отставание)'),
-  "rescheduledFromDate": zod.coerce.date().nullable().describe('Исходная плановая дата до переноса (null — переносов не было)'),
-  "rescheduledBy": zod.string().nullable(),
-  "rescheduledAt": zod.coerce.date().nullable(),
-  "photosCount": zod.number().describe('Количество приложенных фото-актов'),
-  "createdAt": zod.coerce.date()
-})
-
+  id: zod.string(),
+  siteId: zod.string(),
+  siteName: zod.string(),
+  siteAddress: zod.string(),
+  tradeNetworkName: zod
+    .string()
+    .nullish()
+    .describe("Торговая сеть из торгового названия объекта, не клиент-юрлицо"),
+  clientId: zod
+    .string()
+    .uuid()
+    .nullish()
+    .describe("Current client resolved from the delivery site"),
+  clientName: zod
+    .string()
+    .nullish()
+    .describe("Current client name resolved from the delivery site"),
+  managerContact: zod
+    .string()
+    .nullish()
+    .describe("Телефон менеджера объекта для связи с водителем"),
+  driverUserId: zod.string().uuid().nullable(),
+  driver: zod.string(),
+  parentDeliveryId: zod
+    .string()
+    .uuid()
+    .nullish()
+    .describe("Parent delivery for an additional order"),
+  orderId: zod
+    .string()
+    .uuid()
+    .nullish()
+    .describe("Client order linked to an additional delivery"),
+  plannedDate: zod.coerce
+    .date()
+    .nullable()
+    .describe("Плановая дата доставки (null, если дата ещё не назначена)"),
+  correctedPlannedDate: zod.coerce
+    .date()
+    .nullish()
+    .describe(
+      "Уточнённая плановая дата только для отчётности; не изменяет исходный план, график или показатели",
+    ),
+  deliveryType: zod
+    .string()
+    .nullish()
+    .describe(
+      "Тип поставки для этой доставки; null означает использовать значение объекта",
+    ),
+  scheduleMonth: zod
+    .union([
+      zod
+        .string()
+        .min(updateMyDeliveryCommentResponseScheduleMonthOneMin)
+        .max(updateMyDeliveryCommentResponseScheduleMonthOneMax)
+        .regex(updateMyDeliveryCommentResponseScheduleMonthOneRegExp)
+        .describe("Календарный месяц YYYY-MM, год 1000–9999, месяц 01–12"),
+      zod.null(),
+    ])
+    .describe(
+      "Месяц владения строкой графика; null возможен только у legacy rows",
+    ),
+  actualDate: zod.coerce
+    .date()
+    .nullable()
+    .describe("Фактическая дата доставки (редактируемая)"),
+  actApprovedAt: zod.coerce.date().nullable(),
+  actApprovedBy: zod.string().uuid().nullable(),
+  workflowStatus: zod
+    .enum(["planned", "done", "closed"])
+    .describe(
+      "planned — not completed; done — actual date set but act unapproved; closed — act approved",
+    ),
+  note: zod
+    .string()
+    .nullable()
+    .describe("Комментарий водителя; логист видит его только для чтения"),
+  logisticianNote: zod
+    .string()
+    .nullable()
+    .describe(
+      "Примечание логиста для водителя; водитель видит его только для чтения",
+    ),
+  status: zod
+    .enum(["pending", "on_time", "late", "overdue"])
+    .describe(
+      "pending — план в будущем, факта нет; on_time — доставлено в срок или раньше;\nlate — доставлено позже плана; overdue — план уже прошёл, факта нет\n",
+    ),
+  lagDays: zod
+    .number()
+    .nullable()
+    .describe("Отклонение факта от плана в днях (положительное — отставание)"),
+  rescheduledFromDate: zod.coerce
+    .date()
+    .nullable()
+    .describe("Исходная плановая дата до переноса (null — переносов не было)"),
+  rescheduledBy: zod.string().nullable(),
+  rescheduledAt: zod.coerce.date().nullable(),
+  photosCount: zod.number().describe("Количество приложенных фото-актов"),
+  createdAt: zod.coerce.date(),
+  archivedAt: zod.coerce.date().nullable(),
+  archivedByName: zod.string().nullable(),
+  additionalOrderItems: zod
+    .array(
+      zod.object({
+        productId: zod.string().uuid(),
+        productName: zod.string(),
+        quantity: zod
+          .number()
+          .gt(
+            updateMyDeliveryCommentResponseAdditionalOrderItemsItemQuantityExclusiveMin,
+          ),
+        unit: zod.string(),
+      }),
+    )
+    .nullish()
+    .describe("Additional-order contents without prices"),
+  hasAdditionalOrders: zod.boolean().optional(),
+});
 
 /**
  * @summary Plan/fact summary per assigned site for the current user
  */
-export const getMySitesSummaryQueryFromRegExp = new RegExp('^\\d{4}-\\d{2}-\\d{2}$');
-export const getMySitesSummaryQueryToRegExp = new RegExp('^\\d{4}-\\d{2}-\\d{2}$');
-
+export const getMySitesSummaryQueryFromRegExp = new RegExp(
+  "^\\d{4}-\\d{2}-\\d{2}$",
+);
+export const getMySitesSummaryQueryToRegExp = new RegExp(
+  "^\\d{4}-\\d{2}-\\d{2}$",
+);
 
 export const GetMySitesSummaryQueryParams = zod.object({
-  "from": zod.coerce.string().regex(getMySitesSummaryQueryFromRegExp).optional().describe('Date YYYY-MM-DD'),
-  "to": zod.coerce.string().regex(getMySitesSummaryQueryToRegExp).optional().describe('Date YYYY-MM-DD')
-})
+  from: zod.coerce
+    .string()
+    .regex(getMySitesSummaryQueryFromRegExp)
+    .optional()
+    .describe("Date YYYY-MM-DD"),
+  to: zod.coerce
+    .string()
+    .regex(getMySitesSummaryQueryToRegExp)
+    .optional()
+    .describe("Date YYYY-MM-DD"),
+});
 
 export const GetMySitesSummaryResponseItem = zod.object({
-  "siteId": zod.string(),
-  "siteName": zod.string(),
-  "address": zod.string(),
-  "driverUserId": zod.string().uuid().nullable(),
-  "driver": zod.string(),
-  "planned": zod.number().describe('Всего плановых доставок за период'),
-  "done": zod.number().describe('Выполнено (есть actualDate)'),
-  "overdue": zod.number().describe('Просрочено (дата прошла, факта нет)')
-})
-export const GetMySitesSummaryResponse = zod.array(GetMySitesSummaryResponseItem)
-
+  siteId: zod.string(),
+  siteName: zod.string(),
+  address: zod.string(),
+  driverUserId: zod.string().uuid().nullable(),
+  driver: zod.string(),
+  planned: zod.number().describe("Всего плановых доставок за период"),
+  done: zod.number().describe("Выполнено (есть actualDate)"),
+  overdue: zod.number().describe("Просрочено (дата прошла, факта нет)"),
+});
+export const GetMySitesSummaryResponse = zod.array(
+  GetMySitesSummaryResponseItem,
+);
 
 /**
  * @summary List trade names directory
  */
 export const ListTradeNamesResponseItem = zod.object({
-  "id": zod.string(),
-  "name": zod.string(),
-  "createdAt": zod.coerce.date()
-})
-export const ListTradeNamesResponse = zod.array(ListTradeNamesResponseItem)
-
+  id: zod.string(),
+  name: zod.string(),
+  createdAt: zod.coerce.date(),
+});
+export const ListTradeNamesResponse = zod.array(ListTradeNamesResponseItem);
 
 /**
  * @summary Add a trade name to the directory (sites edit permission)
  */
 
-
 export const CreateTradeNameBody = zod.object({
-  "name": zod.string().min(1)
-})
+  name: zod.string().min(1),
+});
 
 export const CreateTradeNameResponse = zod.object({
-  "id": zod.string(),
-  "name": zod.string(),
-  "createdAt": zod.coerce.date()
-})
-
+  id: zod.string(),
+  name: zod.string(),
+  createdAt: zod.coerce.date(),
+});
 
 /**
  * @summary Remove a trade name from the directory (sites edit permission)
  */
 export const DeleteTradeNameParams = zod.object({
-  "id": zod.coerce.string()
-})
+  id: zod.coerce.string(),
+});
 
-export const DeleteTradeNameResponse = zod.void()
-
+export const DeleteTradeNameResponse = zod.void();
 
 /**
  * @summary List delivery types directory
  */
 export const ListDeliveryTypesResponseItem = zod.object({
-  "id": zod.string(),
-  "name": zod.string(),
-  "createdAt": zod.coerce.date()
-})
-export const ListDeliveryTypesResponse = zod.array(ListDeliveryTypesResponseItem)
-
+  id: zod.string(),
+  name: zod.string(),
+  createdAt: zod.coerce.date(),
+});
+export const ListDeliveryTypesResponse = zod.array(
+  ListDeliveryTypesResponseItem,
+);
 
 /**
  * @summary Add a delivery type to the directory (sites edit permission)
  */
 
-
 export const CreateDeliveryTypeBody = zod.object({
-  "name": zod.string().min(1)
-})
+  name: zod.string().min(1),
+});
 
 export const CreateDeliveryTypeResponse = zod.object({
-  "id": zod.string(),
-  "name": zod.string(),
-  "createdAt": zod.coerce.date()
-})
-
+  id: zod.string(),
+  name: zod.string(),
+  createdAt: zod.coerce.date(),
+});
 
 /**
  * @summary Remove a delivery type from the directory (sites edit permission)
  */
 export const DeleteDeliveryTypeParams = zod.object({
-  "id": zod.coerce.string()
-})
+  id: zod.coerce.string(),
+});
 
-export const DeleteDeliveryTypeResponse = zod.void()
-
+export const DeleteDeliveryTypeResponse = zod.void();
 
 /**
  * @summary List all clients
  */
 export const ListClientsQueryParams = zod.object({
-  "search": zod.coerce.string().optional()
-})
+  search: zod.coerce.string().optional(),
+});
+
+export const listClientsResponseSiteCountMin = 0;
 
 export const ListClientsResponseItem = zod.object({
-  "id": zod.string(),
-  "name": zod.string(),
-  "contact": zod.string().nullable(),
-  "createdAt": zod.coerce.date()
-})
-export const ListClientsResponse = zod.array(ListClientsResponseItem)
-
+  id: zod.string(),
+  name: zod.string(),
+  contact: zod.string().nullable(),
+  siteCount: zod.number().min(listClientsResponseSiteCountMin),
+  createdAt: zod.coerce.date(),
+});
+export const ListClientsResponse = zod.array(ListClientsResponseItem);
 
 /**
  * @summary Create a client
  */
 export const CreateClientBody = zod.object({
-  "name": zod.string(),
-  "contact": zod.string().nullish()
-})
+  name: zod.string(),
+  contact: zod.string().nullish(),
+});
+
+export const createClientResponseSiteCountMin = 0;
 
 export const CreateClientResponse = zod.object({
-  "id": zod.string(),
-  "name": zod.string(),
-  "contact": zod.string().nullable(),
-  "createdAt": zod.coerce.date()
-})
-
+  id: zod.string(),
+  name: zod.string(),
+  contact: zod.string().nullable(),
+  siteCount: zod.number().min(createClientResponseSiteCountMin),
+  createdAt: zod.coerce.date(),
+});
 
 /**
  * @summary Update a client
  */
 export const UpdateClientParams = zod.object({
-  "id": zod.coerce.string()
-})
+  id: zod.coerce.string(),
+});
 
 export const UpdateClientBody = zod.object({
-  "name": zod.string().optional(),
-  "contact": zod.string().nullish()
-})
+  name: zod.string().optional(),
+  contact: zod.string().nullish(),
+});
+
+export const updateClientResponseSiteCountMin = 0;
 
 export const UpdateClientResponse = zod.object({
-  "id": zod.string(),
-  "name": zod.string(),
-  "contact": zod.string().nullable(),
-  "createdAt": zod.coerce.date()
-})
-
+  id: zod.string(),
+  name: zod.string(),
+  contact: zod.string().nullable(),
+  siteCount: zod.number().min(updateClientResponseSiteCountMin),
+  createdAt: zod.coerce.date(),
+});
 
 /**
  * @summary Delete a client
  */
 export const DeleteClientParams = zod.object({
-  "id": zod.coerce.string()
-})
+  id: zod.coerce.string(),
+});
 
-export const DeleteClientResponse = zod.void()
+export const DeleteClientResponse = zod.void();
 
+export const previewOrderSummaryBodyPeriodFromRegExp = new RegExp(
+  "^[0-9]{4}-(?:0[1-9]|1[0-2])$",
+);
+export const previewOrderSummaryBodyPeriodToRegExp = new RegExp(
+  "^[0-9]{4}-(?:0[1-9]|1[0-2])$",
+);
+
+export const PreviewOrderSummaryBody = zod.object({
+  clientId: zod.string().uuid(),
+  periodFrom: zod.string().regex(previewOrderSummaryBodyPeriodFromRegExp),
+  periodTo: zod.string().regex(previewOrderSummaryBodyPeriodToRegExp),
+});
+
+export const PreviewOrderSummaryResponse = zod.object({
+  orders: zod.array(
+    zod.object({
+      id: zod.string(),
+      number: zod.string(),
+    }),
+  ),
+  blockers: zod.array(
+    zod.object({
+      id: zod.string(),
+      number: zod.string(),
+      status: zod.enum([
+        "draft",
+        "shipped",
+        "delivered",
+        "awaiting_payment",
+        "paid",
+      ]),
+      reason: zod.string(),
+    }),
+  ),
+  items: zod.array(
+    zod.object({
+      productId: zod.string(),
+      productName: zod.string(),
+      unit: zod.string(),
+      quantity: zod.number(),
+      price: zod.number(),
+      total: zod.number(),
+    }),
+  ),
+  totalAmount: zod.number(),
+});
+
+export const ListOrderSummariesQueryParams = zod.object({
+  clientId: zod.coerce.string().uuid().optional(),
+  status: zod.enum(["awaiting_payment", "paid"]).optional(),
+});
+
+export const ListOrderSummariesResponseItem = zod.object({
+  id: zod.string(),
+  number: zod.string(),
+  clientId: zod.string(),
+  clientName: zod.string(),
+  periodFrom: zod.string(),
+  periodTo: zod.string(),
+  status: zod.enum(["awaiting_payment", "paid"]),
+  totalAmount: zod.number(),
+  createdAt: zod.coerce.date(),
+  paidAt: zod.coerce.date().nullable(),
+  orders: zod.array(
+    zod.object({
+      id: zod.string(),
+      number: zod.string(),
+    }),
+  ),
+  items: zod.array(
+    zod.object({
+      productId: zod.string(),
+      productName: zod.string(),
+      unit: zod.string(),
+      quantity: zod.number(),
+      price: zod.number(),
+      total: zod.number(),
+    }),
+  ),
+});
+export const ListOrderSummariesResponse = zod.array(
+  ListOrderSummariesResponseItem,
+);
+
+export const createOrderSummaryBodyOnePeriodFromRegExp = new RegExp(
+  "^[0-9]{4}-(?:0[1-9]|1[0-2])$",
+);
+export const createOrderSummaryBodyOnePeriodToRegExp = new RegExp(
+  "^[0-9]{4}-(?:0[1-9]|1[0-2])$",
+);
+
+export const CreateOrderSummaryBody = zod
+  .object({
+    clientId: zod.string().uuid(),
+    periodFrom: zod.string().regex(createOrderSummaryBodyOnePeriodFromRegExp),
+    periodTo: zod.string().regex(createOrderSummaryBodyOnePeriodToRegExp),
+  })
+  .and(
+    zod.object({
+      requestId: zod.string().uuid(),
+    }),
+  );
+
+export const CreateOrderSummaryResponse = zod.object({
+  id: zod.string(),
+  number: zod.string(),
+  clientId: zod.string(),
+  clientName: zod.string(),
+  periodFrom: zod.string(),
+  periodTo: zod.string(),
+  status: zod.enum(["awaiting_payment", "paid"]),
+  totalAmount: zod.number(),
+  createdAt: zod.coerce.date(),
+  paidAt: zod.coerce.date().nullable(),
+  orders: zod.array(
+    zod.object({
+      id: zod.string(),
+      number: zod.string(),
+    }),
+  ),
+  items: zod.array(
+    zod.object({
+      productId: zod.string(),
+      productName: zod.string(),
+      unit: zod.string(),
+      quantity: zod.number(),
+      price: zod.number(),
+      total: zod.number(),
+    }),
+  ),
+});
+
+export const GetOrderSummaryParams = zod.object({
+  id: zod.coerce.string().uuid(),
+});
+
+export const GetOrderSummaryResponse = zod.object({
+  id: zod.string(),
+  number: zod.string(),
+  clientId: zod.string(),
+  clientName: zod.string(),
+  periodFrom: zod.string(),
+  periodTo: zod.string(),
+  status: zod.enum(["awaiting_payment", "paid"]),
+  totalAmount: zod.number(),
+  createdAt: zod.coerce.date(),
+  paidAt: zod.coerce.date().nullable(),
+  orders: zod.array(
+    zod.object({
+      id: zod.string(),
+      number: zod.string(),
+    }),
+  ),
+  items: zod.array(
+    zod.object({
+      productId: zod.string(),
+      productName: zod.string(),
+      unit: zod.string(),
+      quantity: zod.number(),
+      price: zod.number(),
+      total: zod.number(),
+    }),
+  ),
+});
+
+export const PayOrderSummaryParams = zod.object({
+  id: zod.coerce.string().uuid(),
+});
+
+export const PayOrderSummaryResponse = zod.object({
+  id: zod.string(),
+  number: zod.string(),
+  clientId: zod.string(),
+  clientName: zod.string(),
+  periodFrom: zod.string(),
+  periodTo: zod.string(),
+  status: zod.enum(["awaiting_payment", "paid"]),
+  totalAmount: zod.number(),
+  createdAt: zod.coerce.date(),
+  paidAt: zod.coerce.date().nullable(),
+  orders: zod.array(
+    zod.object({
+      id: zod.string(),
+      number: zod.string(),
+    }),
+  ),
+  items: zod.array(
+    zod.object({
+      productId: zod.string(),
+      productName: zod.string(),
+      unit: zod.string(),
+      quantity: zod.number(),
+      price: zod.number(),
+      total: zod.number(),
+    }),
+  ),
+});
 
 /**
  * @summary List client orders
  */
+export const listOrdersQueryPlannedMonthRegExp = new RegExp(
+  "^(?:[0-9]{4}-(?:0[1-9]|1[0-2])|without)$",
+);
+
 export const ListOrdersQueryParams = zod.object({
-  "clientId": zod.coerce.string().optional(),
-  "isPaid": zod.coerce.boolean().optional()
-})
+  clientId: zod.coerce.string().optional(),
+  isPaid: zod.coerce.boolean().optional(),
+  plannedMonth: zod.coerce
+    .string()
+    .regex(listOrdersQueryPlannedMonthRegExp)
+    .optional()
+    .describe(
+      'Effective planned month (YYYY-MM), or \"without\" for orders without a month. Omit for all.',
+    ),
+});
+
+export const listOrdersResponsePlannedMonthRegExp = new RegExp(
+  "^[0-9]{4}-(?:0[1-9]|1[0-2])$",
+);
 
 export const ListOrdersResponseItem = zod.object({
-  "id": zod.string(),
-  "clientId": zod.string(),
-  "clientName": zod.string(),
-  "isPaid": zod.boolean().describe('Вычисляется автоматически — true, если сумма платежей >= totalAmount'),
-  "paidAmount": zod.number().describe('Сумма всех платежей по заказу'),
-  "overpaidAmount": zod.number().describe('Превышение суммы платежей над totalAmount (переплата)'),
-  "note": zod.string().nullable(),
-  "items": zod.array(zod.object({
-  "id": zod.string(),
-  "productId": zod.string(),
-  "productName": zod.string(),
-  "quantity": zod.number(),
-  "price": zod.number(),
-  "shippedQuantity": zod.number().describe('Сумма количества по этой позиции во всех отгрузках заказа'),
-  "remainingQuantity": zod.number().describe('quantity - shippedQuantity')
-})),
-  "totalAmount": zod.number().describe('Сумма всех позиций (quantity \* price)'),
-  "createdAt": zod.coerce.date()
-})
-export const ListOrdersResponse = zod.array(ListOrdersResponseItem)
-
+  status: zod.enum([
+    "draft",
+    "shipped",
+    "delivered",
+    "awaiting_payment",
+    "paid",
+  ]),
+  orderNumber: zod.string(),
+  summaryId: zod.string().nullable(),
+  fulfillmentDeliveryId: zod.string().nullable(),
+  id: zod.string(),
+  clientId: zod.string(),
+  clientName: zod.string(),
+  siteId: zod.string().nullable(),
+  siteName: zod.string().nullable(),
+  siteAddress: zod.string().nullable(),
+  isPaid: zod
+    .boolean()
+    .describe(
+      "Статус сводного счёта имеет приоритет; без счёта сохраняется историческая оплата или сумма платежей >= totalAmount",
+    ),
+  paidAmount: zod.number().describe("Сумма всех платежей по заказу"),
+  overpaidAmount: zod
+    .number()
+    .describe("Превышение суммы платежей над totalAmount (переплата)"),
+  note: zod.string().nullable(),
+  plannedMonth: zod
+    .string()
+    .regex(listOrdersResponsePlannedMonthRegExp)
+    .nullable()
+    .describe(
+      "Effective month; sourced from original delivery plannedDate or undated scheduleMonth when linked.",
+    ),
+  monthFromDelivery: zod
+    .boolean()
+    .describe(
+      "True when month is derived from the linked delivery and cannot be edited independently.",
+    ),
+  deliveryFromAdditionalOrder: zod
+    .boolean()
+    .describe(
+      "True only for an actual reverse deliveries.orderId link; ordinary explicit fulfillment links remain editable before billing.",
+    ),
+  items: zod.array(
+    zod.object({
+      id: zod.string(),
+      productId: zod.string(),
+      productName: zod.string(),
+      quantity: zod.number(),
+      price: zod.number(),
+      shippedQuantity: zod
+        .number()
+        .describe("Сумма количества по этой позиции во всех отгрузках заказа"),
+      remainingQuantity: zod.number().describe("quantity - shippedQuantity"),
+    }),
+  ),
+  totalAmount: zod.number().describe("Сумма всех позиций (quantity \* price)"),
+  createdAt: zod.coerce.date(),
+});
+export const ListOrdersResponse = zod.array(ListOrdersResponseItem);
 
 /**
  * @summary Create a client order with line items
  */
+export const createOrderBodyPlannedDeliveryDateRegExp = new RegExp(
+  "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+);
+export const createOrderBodyPlannedMonthRegExp = new RegExp(
+  "^[0-9]{4}-(?:0[1-9]|1[0-2])$",
+);
 export const createOrderBodyItemsItemQuantityExclusiveMin = 0;
 
 export const createOrderBodyItemsItemPriceMin = 0;
 
-
 export const CreateOrderBody = zod.object({
-  "clientId": zod.string(),
-  "note": zod.string().nullish(),
-  "items": zod.array(zod.object({
-  "productId": zod.string(),
-  "quantity": zod.number().gt(createOrderBodyItemsItemQuantityExclusiveMin),
-  "price": zod.number().min(createOrderBodyItemsItemPriceMin)
-})).min(1)
-})
+  plannedDeliveryDate: zod
+    .string()
+    .regex(createOrderBodyPlannedDeliveryDateRegExp),
+  fulfillmentDeliveryId: zod.string().uuid().nullish(),
+  clientId: zod.string(),
+  siteId: zod.string().nullable(),
+  note: zod.string().nullish(),
+  plannedMonth: zod.string().regex(createOrderBodyPlannedMonthRegExp),
+  items: zod
+    .array(
+      zod.object({
+        productId: zod.string(),
+        quantity: zod.number().gt(createOrderBodyItemsItemQuantityExclusiveMin),
+        price: zod.number().min(createOrderBodyItemsItemPriceMin),
+      }),
+    )
+    .min(1),
+});
+
+export const createOrderResponsePlannedMonthRegExp = new RegExp(
+  "^[0-9]{4}-(?:0[1-9]|1[0-2])$",
+);
 
 export const CreateOrderResponse = zod.object({
-  "id": zod.string(),
-  "clientId": zod.string(),
-  "clientName": zod.string(),
-  "isPaid": zod.boolean().describe('Вычисляется автоматически — true, если сумма платежей >= totalAmount'),
-  "paidAmount": zod.number().describe('Сумма всех платежей по заказу'),
-  "overpaidAmount": zod.number().describe('Превышение суммы платежей над totalAmount (переплата)'),
-  "note": zod.string().nullable(),
-  "items": zod.array(zod.object({
-  "id": zod.string(),
-  "productId": zod.string(),
-  "productName": zod.string(),
-  "quantity": zod.number(),
-  "price": zod.number(),
-  "shippedQuantity": zod.number().describe('Сумма количества по этой позиции во всех отгрузках заказа'),
-  "remainingQuantity": zod.number().describe('quantity - shippedQuantity')
-})),
-  "totalAmount": zod.number().describe('Сумма всех позиций (quantity \* price)'),
-  "createdAt": zod.coerce.date()
-})
-
+  status: zod.enum([
+    "draft",
+    "shipped",
+    "delivered",
+    "awaiting_payment",
+    "paid",
+  ]),
+  orderNumber: zod.string(),
+  summaryId: zod.string().nullable(),
+  fulfillmentDeliveryId: zod.string().nullable(),
+  id: zod.string(),
+  clientId: zod.string(),
+  clientName: zod.string(),
+  siteId: zod.string().nullable(),
+  siteName: zod.string().nullable(),
+  siteAddress: zod.string().nullable(),
+  isPaid: zod
+    .boolean()
+    .describe(
+      "Статус сводного счёта имеет приоритет; без счёта сохраняется историческая оплата или сумма платежей >= totalAmount",
+    ),
+  paidAmount: zod.number().describe("Сумма всех платежей по заказу"),
+  overpaidAmount: zod
+    .number()
+    .describe("Превышение суммы платежей над totalAmount (переплата)"),
+  note: zod.string().nullable(),
+  plannedMonth: zod
+    .string()
+    .regex(createOrderResponsePlannedMonthRegExp)
+    .nullable()
+    .describe(
+      "Effective month; sourced from original delivery plannedDate or undated scheduleMonth when linked.",
+    ),
+  monthFromDelivery: zod
+    .boolean()
+    .describe(
+      "True when month is derived from the linked delivery and cannot be edited independently.",
+    ),
+  deliveryFromAdditionalOrder: zod
+    .boolean()
+    .describe(
+      "True only for an actual reverse deliveries.orderId link; ordinary explicit fulfillment links remain editable before billing.",
+    ),
+  items: zod.array(
+    zod.object({
+      id: zod.string(),
+      productId: zod.string(),
+      productName: zod.string(),
+      quantity: zod.number(),
+      price: zod.number(),
+      shippedQuantity: zod
+        .number()
+        .describe("Сумма количества по этой позиции во всех отгрузках заказа"),
+      remainingQuantity: zod.number().describe("quantity - shippedQuantity"),
+    }),
+  ),
+  totalAmount: zod.number().describe("Сумма всех позиций (quantity \* price)"),
+  createdAt: zod.coerce.date(),
+});
 
 /**
  * @summary Get an order by id, including shipped progress per line item
  */
 export const GetOrderParams = zod.object({
-  "id": zod.coerce.string()
-})
+  id: zod.coerce.string(),
+});
+
+export const getOrderResponsePlannedMonthRegExp = new RegExp(
+  "^[0-9]{4}-(?:0[1-9]|1[0-2])$",
+);
 
 export const GetOrderResponse = zod.object({
-  "id": zod.string(),
-  "clientId": zod.string(),
-  "clientName": zod.string(),
-  "isPaid": zod.boolean().describe('Вычисляется автоматически — true, если сумма платежей >= totalAmount'),
-  "paidAmount": zod.number().describe('Сумма всех платежей по заказу'),
-  "overpaidAmount": zod.number().describe('Превышение суммы платежей над totalAmount (переплата)'),
-  "note": zod.string().nullable(),
-  "items": zod.array(zod.object({
-  "id": zod.string(),
-  "productId": zod.string(),
-  "productName": zod.string(),
-  "quantity": zod.number(),
-  "price": zod.number(),
-  "shippedQuantity": zod.number().describe('Сумма количества по этой позиции во всех отгрузках заказа'),
-  "remainingQuantity": zod.number().describe('quantity - shippedQuantity')
-})),
-  "totalAmount": zod.number().describe('Сумма всех позиций (quantity \* price)'),
-  "createdAt": zod.coerce.date()
-})
-
+  status: zod.enum([
+    "draft",
+    "shipped",
+    "delivered",
+    "awaiting_payment",
+    "paid",
+  ]),
+  orderNumber: zod.string(),
+  summaryId: zod.string().nullable(),
+  fulfillmentDeliveryId: zod.string().nullable(),
+  id: zod.string(),
+  clientId: zod.string(),
+  clientName: zod.string(),
+  siteId: zod.string().nullable(),
+  siteName: zod.string().nullable(),
+  siteAddress: zod.string().nullable(),
+  isPaid: zod
+    .boolean()
+    .describe(
+      "Статус сводного счёта имеет приоритет; без счёта сохраняется историческая оплата или сумма платежей >= totalAmount",
+    ),
+  paidAmount: zod.number().describe("Сумма всех платежей по заказу"),
+  overpaidAmount: zod
+    .number()
+    .describe("Превышение суммы платежей над totalAmount (переплата)"),
+  note: zod.string().nullable(),
+  plannedMonth: zod
+    .string()
+    .regex(getOrderResponsePlannedMonthRegExp)
+    .nullable()
+    .describe(
+      "Effective month; sourced from original delivery plannedDate or undated scheduleMonth when linked.",
+    ),
+  monthFromDelivery: zod
+    .boolean()
+    .describe(
+      "True when month is derived from the linked delivery and cannot be edited independently.",
+    ),
+  deliveryFromAdditionalOrder: zod
+    .boolean()
+    .describe(
+      "True only for an actual reverse deliveries.orderId link; ordinary explicit fulfillment links remain editable before billing.",
+    ),
+  items: zod.array(
+    zod.object({
+      id: zod.string(),
+      productId: zod.string(),
+      productName: zod.string(),
+      quantity: zod.number(),
+      price: zod.number(),
+      shippedQuantity: zod
+        .number()
+        .describe("Сумма количества по этой позиции во всех отгрузках заказа"),
+      remainingQuantity: zod.number().describe("quantity - shippedQuantity"),
+    }),
+  ),
+  totalAmount: zod.number().describe("Сумма всех позиций (quantity \* price)"),
+  createdAt: zod.coerce.date(),
+});
 
 /**
  * @summary Update an order's payment status or note
  */
 export const UpdateOrderParams = zod.object({
-  "id": zod.coerce.string()
-})
+  id: zod.coerce.string(),
+});
 
+export const updateOrderBodyPlannedMonthRegExp = new RegExp(
+  "^[0-9]{4}-(?:0[1-9]|1[0-2])$",
+);
 export const updateOrderBodyItemsItemQuantityExclusiveMin = 0;
 
 export const updateOrderBodyItemsItemPriceMin = 0;
 
-
 export const UpdateOrderBody = zod.object({
-  "note": zod.string().nullish(),
-  "items": zod.array(zod.object({
-  "productId": zod.string(),
-  "quantity": zod.number().gt(updateOrderBodyItemsItemQuantityExclusiveMin),
-  "price": zod.number().min(updateOrderBodyItemsItemPriceMin)
-})).min(1).optional().describe('Полная замена списка позиций заказа. Нельзя уменьшить количество ниже уже отгруженного по позиции, и нельзя убрать позицию, если по ней уже была отгрузка.')
-})
+  fulfillmentDeliveryId: zod.string().uuid().nullish(),
+  siteId: zod.string().nullish(),
+  note: zod.string().nullish(),
+  plannedMonth: zod
+    .string()
+    .regex(updateOrderBodyPlannedMonthRegExp)
+    .optional(),
+  items: zod
+    .array(
+      zod.object({
+        productId: zod.string(),
+        quantity: zod.number().gt(updateOrderBodyItemsItemQuantityExclusiveMin),
+        price: zod.number().min(updateOrderBodyItemsItemPriceMin),
+      }),
+    )
+    .min(1)
+    .optional()
+    .describe(
+      "Полная замена списка позиций заказа. Нельзя уменьшить количество ниже уже отгруженного по позиции, и нельзя убрать позицию, если по ней уже была отгрузка.",
+    ),
+});
+
+export const updateOrderResponsePlannedMonthRegExp = new RegExp(
+  "^[0-9]{4}-(?:0[1-9]|1[0-2])$",
+);
 
 export const UpdateOrderResponse = zod.object({
-  "id": zod.string(),
-  "clientId": zod.string(),
-  "clientName": zod.string(),
-  "isPaid": zod.boolean().describe('Вычисляется автоматически — true, если сумма платежей >= totalAmount'),
-  "paidAmount": zod.number().describe('Сумма всех платежей по заказу'),
-  "overpaidAmount": zod.number().describe('Превышение суммы платежей над totalAmount (переплата)'),
-  "note": zod.string().nullable(),
-  "items": zod.array(zod.object({
-  "id": zod.string(),
-  "productId": zod.string(),
-  "productName": zod.string(),
-  "quantity": zod.number(),
-  "price": zod.number(),
-  "shippedQuantity": zod.number().describe('Сумма количества по этой позиции во всех отгрузках заказа'),
-  "remainingQuantity": zod.number().describe('quantity - shippedQuantity')
-})),
-  "totalAmount": zod.number().describe('Сумма всех позиций (quantity \* price)'),
-  "createdAt": zod.coerce.date()
-})
-
+  status: zod.enum([
+    "draft",
+    "shipped",
+    "delivered",
+    "awaiting_payment",
+    "paid",
+  ]),
+  orderNumber: zod.string(),
+  summaryId: zod.string().nullable(),
+  fulfillmentDeliveryId: zod.string().nullable(),
+  id: zod.string(),
+  clientId: zod.string(),
+  clientName: zod.string(),
+  siteId: zod.string().nullable(),
+  siteName: zod.string().nullable(),
+  siteAddress: zod.string().nullable(),
+  isPaid: zod
+    .boolean()
+    .describe(
+      "Статус сводного счёта имеет приоритет; без счёта сохраняется историческая оплата или сумма платежей >= totalAmount",
+    ),
+  paidAmount: zod.number().describe("Сумма всех платежей по заказу"),
+  overpaidAmount: zod
+    .number()
+    .describe("Превышение суммы платежей над totalAmount (переплата)"),
+  note: zod.string().nullable(),
+  plannedMonth: zod
+    .string()
+    .regex(updateOrderResponsePlannedMonthRegExp)
+    .nullable()
+    .describe(
+      "Effective month; sourced from original delivery plannedDate or undated scheduleMonth when linked.",
+    ),
+  monthFromDelivery: zod
+    .boolean()
+    .describe(
+      "True when month is derived from the linked delivery and cannot be edited independently.",
+    ),
+  deliveryFromAdditionalOrder: zod
+    .boolean()
+    .describe(
+      "True only for an actual reverse deliveries.orderId link; ordinary explicit fulfillment links remain editable before billing.",
+    ),
+  items: zod.array(
+    zod.object({
+      id: zod.string(),
+      productId: zod.string(),
+      productName: zod.string(),
+      quantity: zod.number(),
+      price: zod.number(),
+      shippedQuantity: zod
+        .number()
+        .describe("Сумма количества по этой позиции во всех отгрузках заказа"),
+      remainingQuantity: zod.number().describe("quantity - shippedQuantity"),
+    }),
+  ),
+  totalAmount: zod.number().describe("Сумма всех позиций (quantity \* price)"),
+  createdAt: zod.coerce.date(),
+});
 
 /**
  * @summary Delete an order (only if nothing has been shipped)
  */
 export const DeleteOrderParams = zod.object({
-  "id": zod.coerce.string()
-})
+  id: zod.coerce.string(),
+});
 
-export const DeleteOrderResponse = zod.void()
-
+export const DeleteOrderResponse = zod.void();
 
 /**
  * @summary List payment history for an order
  */
 export const ListOrderPaymentsParams = zod.object({
-  "id": zod.coerce.string()
-})
+  id: zod.coerce.string(),
+});
 
 export const listOrderPaymentsResponseAmountExclusiveMin = 0;
 
-
 export const ListOrderPaymentsResponseItem = zod.object({
-  "id": zod.string(),
-  "orderId": zod.string(),
-  "amount": zod.number().gt(listOrderPaymentsResponseAmountExclusiveMin),
-  "note": zod.string().nullable(),
-  "createdAt": zod.coerce.date()
-})
-export const ListOrderPaymentsResponse = zod.array(ListOrderPaymentsResponseItem)
-
+  id: zod.string(),
+  orderId: zod.string(),
+  amount: zod.number().gt(listOrderPaymentsResponseAmountExclusiveMin),
+  note: zod.string().nullable(),
+  createdAt: zod.coerce.date(),
+});
+export const ListOrderPaymentsResponse = zod.array(
+  ListOrderPaymentsResponseItem,
+);
 
 /**
  * @summary Record a payment (advance or additional) against an order
  */
 export const CreateOrderPaymentParams = zod.object({
-  "id": zod.coerce.string()
-})
+  id: zod.coerce.string(),
+});
 
 export const createOrderPaymentBodyAmountExclusiveMin = 0;
 
-
 export const CreateOrderPaymentBody = zod.object({
-  "amount": zod.number().gt(createOrderPaymentBodyAmountExclusiveMin),
-  "note": zod.string().nullish()
-})
+  amount: zod.number().gt(createOrderPaymentBodyAmountExclusiveMin),
+  note: zod.string().nullish(),
+});
+
+export const createOrderPaymentResponsePlannedMonthRegExp = new RegExp(
+  "^[0-9]{4}-(?:0[1-9]|1[0-2])$",
+);
 
 export const CreateOrderPaymentResponse = zod.object({
-  "id": zod.string(),
-  "clientId": zod.string(),
-  "clientName": zod.string(),
-  "isPaid": zod.boolean().describe('Вычисляется автоматически — true, если сумма платежей >= totalAmount'),
-  "paidAmount": zod.number().describe('Сумма всех платежей по заказу'),
-  "overpaidAmount": zod.number().describe('Превышение суммы платежей над totalAmount (переплата)'),
-  "note": zod.string().nullable(),
-  "items": zod.array(zod.object({
-  "id": zod.string(),
-  "productId": zod.string(),
-  "productName": zod.string(),
-  "quantity": zod.number(),
-  "price": zod.number(),
-  "shippedQuantity": zod.number().describe('Сумма количества по этой позиции во всех отгрузках заказа'),
-  "remainingQuantity": zod.number().describe('quantity - shippedQuantity')
-})),
-  "totalAmount": zod.number().describe('Сумма всех позиций (quantity \* price)'),
-  "createdAt": zod.coerce.date()
-})
-
+  status: zod.enum([
+    "draft",
+    "shipped",
+    "delivered",
+    "awaiting_payment",
+    "paid",
+  ]),
+  orderNumber: zod.string(),
+  summaryId: zod.string().nullable(),
+  fulfillmentDeliveryId: zod.string().nullable(),
+  id: zod.string(),
+  clientId: zod.string(),
+  clientName: zod.string(),
+  siteId: zod.string().nullable(),
+  siteName: zod.string().nullable(),
+  siteAddress: zod.string().nullable(),
+  isPaid: zod
+    .boolean()
+    .describe(
+      "Статус сводного счёта имеет приоритет; без счёта сохраняется историческая оплата или сумма платежей >= totalAmount",
+    ),
+  paidAmount: zod.number().describe("Сумма всех платежей по заказу"),
+  overpaidAmount: zod
+    .number()
+    .describe("Превышение суммы платежей над totalAmount (переплата)"),
+  note: zod.string().nullable(),
+  plannedMonth: zod
+    .string()
+    .regex(createOrderPaymentResponsePlannedMonthRegExp)
+    .nullable()
+    .describe(
+      "Effective month; sourced from original delivery plannedDate or undated scheduleMonth when linked.",
+    ),
+  monthFromDelivery: zod
+    .boolean()
+    .describe(
+      "True when month is derived from the linked delivery and cannot be edited independently.",
+    ),
+  deliveryFromAdditionalOrder: zod
+    .boolean()
+    .describe(
+      "True only for an actual reverse deliveries.orderId link; ordinary explicit fulfillment links remain editable before billing.",
+    ),
+  items: zod.array(
+    zod.object({
+      id: zod.string(),
+      productId: zod.string(),
+      productName: zod.string(),
+      quantity: zod.number(),
+      price: zod.number(),
+      shippedQuantity: zod
+        .number()
+        .describe("Сумма количества по этой позиции во всех отгрузках заказа"),
+      remainingQuantity: zod.number().describe("quantity - shippedQuantity"),
+    }),
+  ),
+  totalAmount: zod.number().describe("Сумма всех позиций (quantity \* price)"),
+  createdAt: zod.coerce.date(),
+});
 
 /**
  * @summary List shipments
  */
 export const ListShipmentsQueryParams = zod.object({
-  "orderId": zod.coerce.string().optional(),
-  "siteId": zod.coerce.string().optional()
-})
+  orderId: zod.coerce.string().optional(),
+  siteId: zod.coerce.string().optional(),
+});
 
 export const ListShipmentsResponseItem = zod.object({
-  "id": zod.string(),
-  "orderId": zod.string(),
-  "orderNumber": zod.string(),
-  "clientName": zod.string(),
-  "siteId": zod.string(),
-  "siteName": zod.string(),
-  "siteAddress": zod.string(),
-  "driverUserId": zod.string().uuid().nullable(),
-  "driver": zod.string(),
-  "shipmentDate": zod.coerce.date(),
-  "note": zod.string().nullable(),
-  "items": zod.array(zod.object({
-  "id": zod.string(),
-  "productId": zod.string(),
-  "productName": zod.string(),
-  "productUnit": zod.string(),
-  "quantity": zod.number(),
-  "price": zod.number().describe('Цена товара из соответствующей позиции заказа')
-})),
-  "totalAmount": zod.number(),
-  "isDispatched": zod.boolean().describe('True once \"Передать курьеру\" was pressed; locks editing and enables printing.'),
-  "dispatchedAt": zod.coerce.date().nullable(),
-  "isDeleted": zod.boolean().describe('True once an admin marked this shipment for deletion instead of editing it. Stock was reversed via a compensating movement; document is read-only.\n'),
-  "deletedAt": zod.coerce.date().nullable(),
-  "deleteNote": zod.string().nullable(),
-  "createdAt": zod.coerce.date()
-})
-export const ListShipmentsResponse = zod.array(ListShipmentsResponseItem)
-
+  id: zod.string(),
+  orderId: zod.string(),
+  orderNumber: zod.string(),
+  clientName: zod.string(),
+  siteId: zod.string(),
+  siteName: zod.string(),
+  siteAddress: zod.string(),
+  driverUserId: zod.string().uuid().nullable(),
+  driver: zod.string(),
+  shipmentDate: zod.coerce.date(),
+  note: zod.string().nullable(),
+  items: zod.array(
+    zod.object({
+      id: zod.string(),
+      productId: zod.string(),
+      productName: zod.string(),
+      productUnit: zod.string(),
+      quantity: zod.number(),
+      price: zod
+        .number()
+        .describe("Цена товара из соответствующей позиции заказа"),
+    }),
+  ),
+  totalAmount: zod.number(),
+  isDispatched: zod
+    .boolean()
+    .describe(
+      'True once \"Передать курьеру\" was pressed; locks editing and enables printing.',
+    ),
+  dispatchedAt: zod.coerce.date().nullable(),
+  isDeleted: zod
+    .boolean()
+    .describe(
+      "True once an admin marked this shipment for deletion instead of editing it. Stock was reversed via a compensating movement; document is read-only.\n",
+    ),
+  deletedAt: zod.coerce.date().nullable(),
+  deleteNote: zod.string().nullable(),
+  createdAt: zod.coerce.date(),
+});
+export const ListShipmentsResponse = zod.array(ListShipmentsResponseItem);
 
 /**
- * @summary Create a shipment against a paid order; validates against remaining order quantities and creates "out" stock movements
+ * @summary Create a shipment against an unbilled unpaid order; validates remaining quantities and creates "out" stock movements
  */
 export const createShipmentBodyItemsItemQuantityExclusiveMin = 0;
 
-
 export const CreateShipmentBody = zod.object({
-  "orderId": zod.string(),
-  "siteId": zod.string(),
-  "driverUserId": zod.string().uuid().nullish(),
-  "shipmentDate": zod.coerce.date(),
-  "note": zod.string().nullish(),
-  "items": zod.array(zod.object({
-  "productId": zod.string(),
-  "quantity": zod.number().gt(createShipmentBodyItemsItemQuantityExclusiveMin)
-})).min(1)
-})
+  orderId: zod.string(),
+  siteId: zod.string(),
+  driverUserId: zod.string().uuid().nullish(),
+  shipmentDate: zod.coerce.date(),
+  note: zod.string().nullish(),
+  items: zod
+    .array(
+      zod.object({
+        productId: zod.string(),
+        quantity: zod
+          .number()
+          .gt(createShipmentBodyItemsItemQuantityExclusiveMin),
+      }),
+    )
+    .min(1),
+});
 
 export const CreateShipmentResponse = zod.object({
-  "id": zod.string(),
-  "orderId": zod.string(),
-  "orderNumber": zod.string(),
-  "clientName": zod.string(),
-  "siteId": zod.string(),
-  "siteName": zod.string(),
-  "siteAddress": zod.string(),
-  "driverUserId": zod.string().uuid().nullable(),
-  "driver": zod.string(),
-  "shipmentDate": zod.coerce.date(),
-  "note": zod.string().nullable(),
-  "items": zod.array(zod.object({
-  "id": zod.string(),
-  "productId": zod.string(),
-  "productName": zod.string(),
-  "productUnit": zod.string(),
-  "quantity": zod.number(),
-  "price": zod.number().describe('Цена товара из соответствующей позиции заказа')
-})),
-  "totalAmount": zod.number(),
-  "isDispatched": zod.boolean().describe('True once \"Передать курьеру\" was pressed; locks editing and enables printing.'),
-  "dispatchedAt": zod.coerce.date().nullable(),
-  "isDeleted": zod.boolean().describe('True once an admin marked this shipment for deletion instead of editing it. Stock was reversed via a compensating movement; document is read-only.\n'),
-  "deletedAt": zod.coerce.date().nullable(),
-  "deleteNote": zod.string().nullable(),
-  "createdAt": zod.coerce.date()
-})
-
+  id: zod.string(),
+  orderId: zod.string(),
+  orderNumber: zod.string(),
+  clientName: zod.string(),
+  siteId: zod.string(),
+  siteName: zod.string(),
+  siteAddress: zod.string(),
+  driverUserId: zod.string().uuid().nullable(),
+  driver: zod.string(),
+  shipmentDate: zod.coerce.date(),
+  note: zod.string().nullable(),
+  items: zod.array(
+    zod.object({
+      id: zod.string(),
+      productId: zod.string(),
+      productName: zod.string(),
+      productUnit: zod.string(),
+      quantity: zod.number(),
+      price: zod
+        .number()
+        .describe("Цена товара из соответствующей позиции заказа"),
+    }),
+  ),
+  totalAmount: zod.number(),
+  isDispatched: zod
+    .boolean()
+    .describe(
+      'True once \"Передать курьеру\" was pressed; locks editing and enables printing.',
+    ),
+  dispatchedAt: zod.coerce.date().nullable(),
+  isDeleted: zod
+    .boolean()
+    .describe(
+      "True once an admin marked this shipment for deletion instead of editing it. Stock was reversed via a compensating movement; document is read-only.\n",
+    ),
+  deletedAt: zod.coerce.date().nullable(),
+  deleteNote: zod.string().nullable(),
+  createdAt: zod.coerce.date(),
+});
 
 /**
  * @summary Get a shipment by id (used for накладная printing)
  */
 export const GetShipmentParams = zod.object({
-  "id": zod.coerce.string()
-})
+  id: zod.coerce.string(),
+});
 
 export const GetShipmentResponse = zod.object({
-  "id": zod.string(),
-  "orderId": zod.string(),
-  "orderNumber": zod.string(),
-  "clientName": zod.string(),
-  "siteId": zod.string(),
-  "siteName": zod.string(),
-  "siteAddress": zod.string(),
-  "driverUserId": zod.string().uuid().nullable(),
-  "driver": zod.string(),
-  "shipmentDate": zod.coerce.date(),
-  "note": zod.string().nullable(),
-  "items": zod.array(zod.object({
-  "id": zod.string(),
-  "productId": zod.string(),
-  "productName": zod.string(),
-  "productUnit": zod.string(),
-  "quantity": zod.number(),
-  "price": zod.number().describe('Цена товара из соответствующей позиции заказа')
-})),
-  "totalAmount": zod.number(),
-  "isDispatched": zod.boolean().describe('True once \"Передать курьеру\" was pressed; locks editing and enables printing.'),
-  "dispatchedAt": zod.coerce.date().nullable(),
-  "isDeleted": zod.boolean().describe('True once an admin marked this shipment for deletion instead of editing it. Stock was reversed via a compensating movement; document is read-only.\n'),
-  "deletedAt": zod.coerce.date().nullable(),
-  "deleteNote": zod.string().nullable(),
-  "createdAt": zod.coerce.date()
-})
-
+  id: zod.string(),
+  orderId: zod.string(),
+  orderNumber: zod.string(),
+  clientName: zod.string(),
+  siteId: zod.string(),
+  siteName: zod.string(),
+  siteAddress: zod.string(),
+  driverUserId: zod.string().uuid().nullable(),
+  driver: zod.string(),
+  shipmentDate: zod.coerce.date(),
+  note: zod.string().nullable(),
+  items: zod.array(
+    zod.object({
+      id: zod.string(),
+      productId: zod.string(),
+      productName: zod.string(),
+      productUnit: zod.string(),
+      quantity: zod.number(),
+      price: zod
+        .number()
+        .describe("Цена товара из соответствующей позиции заказа"),
+    }),
+  ),
+  totalAmount: zod.number(),
+  isDispatched: zod
+    .boolean()
+    .describe(
+      'True once \"Передать курьеру\" was pressed; locks editing and enables printing.',
+    ),
+  dispatchedAt: zod.coerce.date().nullable(),
+  isDeleted: zod
+    .boolean()
+    .describe(
+      "True once an admin marked this shipment for deletion instead of editing it. Stock was reversed via a compensating movement; document is read-only.\n",
+    ),
+  deletedAt: zod.coerce.date().nullable(),
+  deleteNote: zod.string().nullable(),
+  createdAt: zod.coerce.date(),
+});
 
 /**
  * @summary Update a shipment's metadata (note, driver, site, date). Items/quantities are immutable once shipped.
  */
 export const UpdateShipmentParams = zod.object({
-  "id": zod.coerce.string()
-})
+  id: zod.coerce.string(),
+});
 
 export const updateShipmentBodyItemsItemQuantityExclusiveMin = 0;
 
-
 export const UpdateShipmentBody = zod.object({
-  "siteId": zod.string().optional(),
-  "driverUserId": zod.string().uuid().nullish(),
-  "shipmentDate": zod.coerce.date().optional(),
-  "note": zod.string().nullish(),
-  "items": zod.array(zod.object({
-  "productId": zod.string(),
-  "quantity": zod.number().gt(updateShipmentBodyItemsItemQuantityExclusiveMin)
-})).min(1).optional()
-})
+  siteId: zod.string().optional(),
+  driverUserId: zod.string().uuid().nullish(),
+  shipmentDate: zod.coerce.date().optional(),
+  note: zod.string().nullish(),
+  items: zod
+    .array(
+      zod.object({
+        productId: zod.string(),
+        quantity: zod
+          .number()
+          .gt(updateShipmentBodyItemsItemQuantityExclusiveMin),
+      }),
+    )
+    .min(1)
+    .optional(),
+});
 
 export const UpdateShipmentResponse = zod.object({
-  "id": zod.string(),
-  "orderId": zod.string(),
-  "orderNumber": zod.string(),
-  "clientName": zod.string(),
-  "siteId": zod.string(),
-  "siteName": zod.string(),
-  "siteAddress": zod.string(),
-  "driverUserId": zod.string().uuid().nullable(),
-  "driver": zod.string(),
-  "shipmentDate": zod.coerce.date(),
-  "note": zod.string().nullable(),
-  "items": zod.array(zod.object({
-  "id": zod.string(),
-  "productId": zod.string(),
-  "productName": zod.string(),
-  "productUnit": zod.string(),
-  "quantity": zod.number(),
-  "price": zod.number().describe('Цена товара из соответствующей позиции заказа')
-})),
-  "totalAmount": zod.number(),
-  "isDispatched": zod.boolean().describe('True once \"Передать курьеру\" was pressed; locks editing and enables printing.'),
-  "dispatchedAt": zod.coerce.date().nullable(),
-  "isDeleted": zod.boolean().describe('True once an admin marked this shipment for deletion instead of editing it. Stock was reversed via a compensating movement; document is read-only.\n'),
-  "deletedAt": zod.coerce.date().nullable(),
-  "deleteNote": zod.string().nullable(),
-  "createdAt": zod.coerce.date()
-})
-
+  id: zod.string(),
+  orderId: zod.string(),
+  orderNumber: zod.string(),
+  clientName: zod.string(),
+  siteId: zod.string(),
+  siteName: zod.string(),
+  siteAddress: zod.string(),
+  driverUserId: zod.string().uuid().nullable(),
+  driver: zod.string(),
+  shipmentDate: zod.coerce.date(),
+  note: zod.string().nullable(),
+  items: zod.array(
+    zod.object({
+      id: zod.string(),
+      productId: zod.string(),
+      productName: zod.string(),
+      productUnit: zod.string(),
+      quantity: zod.number(),
+      price: zod
+        .number()
+        .describe("Цена товара из соответствующей позиции заказа"),
+    }),
+  ),
+  totalAmount: zod.number(),
+  isDispatched: zod
+    .boolean()
+    .describe(
+      'True once \"Передать курьеру\" was pressed; locks editing and enables printing.',
+    ),
+  dispatchedAt: zod.coerce.date().nullable(),
+  isDeleted: zod
+    .boolean()
+    .describe(
+      "True once an admin marked this shipment for deletion instead of editing it. Stock was reversed via a compensating movement; document is read-only.\n",
+    ),
+  deletedAt: zod.coerce.date().nullable(),
+  deleteNote: zod.string().nullable(),
+  createdAt: zod.coerce.date(),
+});
 
 /**
  * @summary Передать курьеру: locks the shipment against further edits and makes its накладная printable. Cannot be undone via the API.
 
  */
 export const DispatchShipmentParams = zod.object({
-  "id": zod.coerce.string()
-})
+  id: zod.coerce.string(),
+});
 
 export const DispatchShipmentResponse = zod.object({
-  "id": zod.string(),
-  "orderId": zod.string(),
-  "orderNumber": zod.string(),
-  "clientName": zod.string(),
-  "siteId": zod.string(),
-  "siteName": zod.string(),
-  "siteAddress": zod.string(),
-  "driverUserId": zod.string().uuid().nullable(),
-  "driver": zod.string(),
-  "shipmentDate": zod.coerce.date(),
-  "note": zod.string().nullable(),
-  "items": zod.array(zod.object({
-  "id": zod.string(),
-  "productId": zod.string(),
-  "productName": zod.string(),
-  "productUnit": zod.string(),
-  "quantity": zod.number(),
-  "price": zod.number().describe('Цена товара из соответствующей позиции заказа')
-})),
-  "totalAmount": zod.number(),
-  "isDispatched": zod.boolean().describe('True once \"Передать курьеру\" was pressed; locks editing and enables printing.'),
-  "dispatchedAt": zod.coerce.date().nullable(),
-  "isDeleted": zod.boolean().describe('True once an admin marked this shipment for deletion instead of editing it. Stock was reversed via a compensating movement; document is read-only.\n'),
-  "deletedAt": zod.coerce.date().nullable(),
-  "deleteNote": zod.string().nullable(),
-  "createdAt": zod.coerce.date()
-})
-
+  id: zod.string(),
+  orderId: zod.string(),
+  orderNumber: zod.string(),
+  clientName: zod.string(),
+  siteId: zod.string(),
+  siteName: zod.string(),
+  siteAddress: zod.string(),
+  driverUserId: zod.string().uuid().nullable(),
+  driver: zod.string(),
+  shipmentDate: zod.coerce.date(),
+  note: zod.string().nullable(),
+  items: zod.array(
+    zod.object({
+      id: zod.string(),
+      productId: zod.string(),
+      productName: zod.string(),
+      productUnit: zod.string(),
+      quantity: zod.number(),
+      price: zod
+        .number()
+        .describe("Цена товара из соответствующей позиции заказа"),
+    }),
+  ),
+  totalAmount: zod.number(),
+  isDispatched: zod
+    .boolean()
+    .describe(
+      'True once \"Передать курьеру\" was pressed; locks editing and enables printing.',
+    ),
+  dispatchedAt: zod.coerce.date().nullable(),
+  isDeleted: zod
+    .boolean()
+    .describe(
+      "True once an admin marked this shipment for deletion instead of editing it. Stock was reversed via a compensating movement; document is read-only.\n",
+    ),
+  deletedAt: zod.coerce.date().nullable(),
+  deleteNote: zod.string().nullable(),
+  createdAt: zod.coerce.date(),
+});
 
 /**
  * @summary Admin-only: mark a shipment as deleted (soft delete) with a mandatory note, instead of editing it. Reverses stock via a compensating "in" movement for each item. Cannot be undone via the API; create a new shipment instead.
 
  */
 export const DeleteShipmentParams = zod.object({
-  "id": zod.coerce.string()
-})
-
+  id: zod.coerce.string(),
+});
 
 export const DeleteShipmentBody = zod.object({
-  "note": zod.string().min(1)
-})
+  note: zod.string().min(1),
+});
 
 export const DeleteShipmentResponse = zod.object({
-  "id": zod.string(),
-  "orderId": zod.string(),
-  "orderNumber": zod.string(),
-  "clientName": zod.string(),
-  "siteId": zod.string(),
-  "siteName": zod.string(),
-  "siteAddress": zod.string(),
-  "driverUserId": zod.string().uuid().nullable(),
-  "driver": zod.string(),
-  "shipmentDate": zod.coerce.date(),
-  "note": zod.string().nullable(),
-  "items": zod.array(zod.object({
-  "id": zod.string(),
-  "productId": zod.string(),
-  "productName": zod.string(),
-  "productUnit": zod.string(),
-  "quantity": zod.number(),
-  "price": zod.number().describe('Цена товара из соответствующей позиции заказа')
-})),
-  "totalAmount": zod.number(),
-  "isDispatched": zod.boolean().describe('True once \"Передать курьеру\" was pressed; locks editing and enables printing.'),
-  "dispatchedAt": zod.coerce.date().nullable(),
-  "isDeleted": zod.boolean().describe('True once an admin marked this shipment for deletion instead of editing it. Stock was reversed via a compensating movement; document is read-only.\n'),
-  "deletedAt": zod.coerce.date().nullable(),
-  "deleteNote": zod.string().nullable(),
-  "createdAt": zod.coerce.date()
-})
-
+  id: zod.string(),
+  orderId: zod.string(),
+  orderNumber: zod.string(),
+  clientName: zod.string(),
+  siteId: zod.string(),
+  siteName: zod.string(),
+  siteAddress: zod.string(),
+  driverUserId: zod.string().uuid().nullable(),
+  driver: zod.string(),
+  shipmentDate: zod.coerce.date(),
+  note: zod.string().nullable(),
+  items: zod.array(
+    zod.object({
+      id: zod.string(),
+      productId: zod.string(),
+      productName: zod.string(),
+      productUnit: zod.string(),
+      quantity: zod.number(),
+      price: zod
+        .number()
+        .describe("Цена товара из соответствующей позиции заказа"),
+    }),
+  ),
+  totalAmount: zod.number(),
+  isDispatched: zod
+    .boolean()
+    .describe(
+      'True once \"Передать курьеру\" was pressed; locks editing and enables printing.',
+    ),
+  dispatchedAt: zod.coerce.date().nullable(),
+  isDeleted: zod
+    .boolean()
+    .describe(
+      "True once an admin marked this shipment for deletion instead of editing it. Stock was reversed via a compensating movement; document is read-only.\n",
+    ),
+  deletedAt: zod.coerce.date().nullable(),
+  deleteNote: zod.string().nullable(),
+  createdAt: zod.coerce.date(),
+});
 
 /**
  * @summary Get план-факт delivery statistics for a month
  */
+export const getDeliveryDashboardSummaryQueryMonthMin = 7;
+export const getDeliveryDashboardSummaryQueryMonthMax = 7;
+
+export const getDeliveryDashboardSummaryQueryMonthRegExp = new RegExp(
+  "^[1-9]\\d{3}-(0[1-9]|1[0-2])$",
+);
+
 export const GetDeliveryDashboardSummaryQueryParams = zod.object({
-  "month": zod.coerce.string().optional().describe('Format YYYY-MM, defaults to current month')
-})
+  month: zod.coerce
+    .string()
+    .min(getDeliveryDashboardSummaryQueryMonthMin)
+    .max(getDeliveryDashboardSummaryQueryMonthMax)
+    .regex(getDeliveryDashboardSummaryQueryMonthRegExp)
+    .optional()
+    .describe("Format YYYY-MM, defaults to current month"),
+});
 
-export const getDeliveryDashboardSummaryResponseOverdueDeliveriesItemScheduleMonthRegExp = new RegExp('^\\d{4}-(0[1-9]|1[0-2])$');
-export const getDeliveryDashboardSummaryResponseTodayDeliveriesItemScheduleMonthRegExp = new RegExp('^\\d{4}-(0[1-9]|1[0-2])$');
+export const getDeliveryDashboardSummaryResponseMonthMin = 7;
+export const getDeliveryDashboardSummaryResponseMonthMax = 7;
 
+export const getDeliveryDashboardSummaryResponseMonthRegExp = new RegExp(
+  "^[1-9]\\d{3}-(0[1-9]|1[0-2])$",
+);
+export const getDeliveryDashboardSummaryResponseOverdueDeliveriesItemScheduleMonthOneMin = 7;
+export const getDeliveryDashboardSummaryResponseOverdueDeliveriesItemScheduleMonthOneMax = 7;
+
+export const getDeliveryDashboardSummaryResponseOverdueDeliveriesItemScheduleMonthOneRegExp =
+  new RegExp("^[1-9]\\d{3}-(0[1-9]|1[0-2])$");
+export const getDeliveryDashboardSummaryResponseOverdueDeliveriesItemAdditionalOrderItemsItemQuantityExclusiveMin = 0;
+
+export const getDeliveryDashboardSummaryResponseTodayDeliveriesItemScheduleMonthOneMin = 7;
+export const getDeliveryDashboardSummaryResponseTodayDeliveriesItemScheduleMonthOneMax = 7;
+
+export const getDeliveryDashboardSummaryResponseTodayDeliveriesItemScheduleMonthOneRegExp =
+  new RegExp("^[1-9]\\d{3}-(0[1-9]|1[0-2])$");
+export const getDeliveryDashboardSummaryResponseTodayDeliveriesItemAdditionalOrderItemsItemQuantityExclusiveMin = 0;
 
 export const GetDeliveryDashboardSummaryResponse = zod.object({
-  "month": zod.string(),
-  "totalScheduled": zod.number(),
-  "undatedCount": zod.number().describe('Количество доставок без назначенной даты в выбранном месяце'),
-  "dueCount": zod.number().describe('Доставки, плановая дата которых уже наступила'),
-  "onTimeCount": zod.number(),
-  "lateCount": zod.number(),
-  "overdueCount": zod.number(),
-  "planFactPercent": zod.number(),
-  "avgLagDays": zod.number(),
-  "planFactByDriver": zod.array(zod.object({
-  "driver": zod.string(),
-  "total": zod.number(),
-  "onTime": zod.number(),
-  "planFactPercent": zod.number()
-})),
-  "overdueDeliveries": zod.array(zod.object({
-  "id": zod.string(),
-  "siteId": zod.string(),
-  "siteName": zod.string(),
-  "siteAddress": zod.string(),
-  "driverUserId": zod.string().uuid().nullable(),
-  "driver": zod.string(),
-  "plannedDate": zod.coerce.date().nullable().describe('Плановая дата доставки (null, если дата ещё не назначена)'),
-  "scheduleMonth": zod.string().regex(getDeliveryDashboardSummaryResponseOverdueDeliveriesItemScheduleMonthRegExp).nullable().describe('Месяц владения строкой графика; null возможен только у legacy rows'),
-  "actualDate": zod.coerce.date().nullable().describe('Фактическая дата доставки (редактируемая)'),
-  "actApprovedAt": zod.coerce.date().nullable(),
-  "actApprovedBy": zod.string().uuid().nullable(),
-  "workflowStatus": zod.enum(['planned', 'done', 'closed']).describe('planned — not completed; done — actual date set but act unapproved; closed — act approved'),
-  "note": zod.string().nullable(),
-  "status": zod.enum(['pending', 'on_time', 'late', 'overdue']).describe('pending — план в будущем, факта нет; on_time — доставлено в срок или раньше;\nlate — доставлено позже плана; overdue — план уже прошёл, факта нет\n'),
-  "lagDays": zod.number().nullable().describe('Отклонение факта от плана в днях (положительное — отставание)'),
-  "rescheduledFromDate": zod.coerce.date().nullable().describe('Исходная плановая дата до переноса (null — переносов не было)'),
-  "rescheduledBy": zod.string().nullable(),
-  "rescheduledAt": zod.coerce.date().nullable(),
-  "photosCount": zod.number().describe('Количество приложенных фото-актов'),
-  "createdAt": zod.coerce.date()
-})),
-  "todayTotal": zod.number().describe('Количество доставок, запланированных на сегодня'),
-  "todayByDriver": zod.array(zod.object({
-  "driver": zod.string(),
-  "count": zod.number(),
-  "done": zod.number().describe('Сколько из сегодняшних доставок водителя уже выполнено (есть actualDate)')
-})),
-  "todayDeliveries": zod.array(zod.object({
-  "id": zod.string(),
-  "siteId": zod.string(),
-  "siteName": zod.string(),
-  "siteAddress": zod.string(),
-  "driverUserId": zod.string().uuid().nullable(),
-  "driver": zod.string(),
-  "plannedDate": zod.coerce.date().nullable().describe('Плановая дата доставки (null, если дата ещё не назначена)'),
-  "scheduleMonth": zod.string().regex(getDeliveryDashboardSummaryResponseTodayDeliveriesItemScheduleMonthRegExp).nullable().describe('Месяц владения строкой графика; null возможен только у legacy rows'),
-  "actualDate": zod.coerce.date().nullable().describe('Фактическая дата доставки (редактируемая)'),
-  "actApprovedAt": zod.coerce.date().nullable(),
-  "actApprovedBy": zod.string().uuid().nullable(),
-  "workflowStatus": zod.enum(['planned', 'done', 'closed']).describe('planned — not completed; done — actual date set but act unapproved; closed — act approved'),
-  "note": zod.string().nullable(),
-  "status": zod.enum(['pending', 'on_time', 'late', 'overdue']).describe('pending — план в будущем, факта нет; on_time — доставлено в срок или раньше;\nlate — доставлено позже плана; overdue — план уже прошёл, факта нет\n'),
-  "lagDays": zod.number().nullable().describe('Отклонение факта от плана в днях (положительное — отставание)'),
-  "rescheduledFromDate": zod.coerce.date().nullable().describe('Исходная плановая дата до переноса (null — переносов не было)'),
-  "rescheduledBy": zod.string().nullable(),
-  "rescheduledAt": zod.coerce.date().nullable(),
-  "photosCount": zod.number().describe('Количество приложенных фото-актов'),
-  "createdAt": zod.coerce.date()
-})).describe('Все доставки, запланированные на сегодня')
-})
-
+  month: zod
+    .string()
+    .min(getDeliveryDashboardSummaryResponseMonthMin)
+    .max(getDeliveryDashboardSummaryResponseMonthMax)
+    .regex(getDeliveryDashboardSummaryResponseMonthRegExp)
+    .describe("Календарный месяц YYYY-MM, год 1000–9999, месяц 01–12"),
+  totalScheduled: zod.number(),
+  undatedCount: zod
+    .number()
+    .describe("Количество доставок без назначенной даты в выбранном месяце"),
+  dueCount: zod
+    .number()
+    .describe("Доставки, плановая дата которых уже наступила"),
+  onTimeCount: zod.number(),
+  lateCount: zod.number(),
+  overdueCount: zod.number(),
+  planFactPercent: zod.number(),
+  avgLagDays: zod.number(),
+  planFactByDriver: zod.array(
+    zod.object({
+      driver: zod.string(),
+      total: zod.number(),
+      onTime: zod.number(),
+      planFactPercent: zod.number(),
+    }),
+  ),
+  overdueDeliveries: zod.array(
+    zod.object({
+      id: zod.string(),
+      siteId: zod.string(),
+      siteName: zod.string(),
+      siteAddress: zod.string(),
+      tradeNetworkName: zod
+        .string()
+        .nullish()
+        .describe(
+          "Торговая сеть из торгового названия объекта, не клиент-юрлицо",
+        ),
+      clientId: zod
+        .string()
+        .uuid()
+        .nullish()
+        .describe("Current client resolved from the delivery site"),
+      clientName: zod
+        .string()
+        .nullish()
+        .describe("Current client name resolved from the delivery site"),
+      managerContact: zod
+        .string()
+        .nullish()
+        .describe("Телефон менеджера объекта для связи с водителем"),
+      driverUserId: zod.string().uuid().nullable(),
+      driver: zod.string(),
+      parentDeliveryId: zod
+        .string()
+        .uuid()
+        .nullish()
+        .describe("Parent delivery for an additional order"),
+      orderId: zod
+        .string()
+        .uuid()
+        .nullish()
+        .describe("Client order linked to an additional delivery"),
+      plannedDate: zod.coerce
+        .date()
+        .nullable()
+        .describe("Плановая дата доставки (null, если дата ещё не назначена)"),
+      correctedPlannedDate: zod.coerce
+        .date()
+        .nullish()
+        .describe(
+          "Уточнённая плановая дата только для отчётности; не изменяет исходный план, график или показатели",
+        ),
+      deliveryType: zod
+        .string()
+        .nullish()
+        .describe(
+          "Тип поставки для этой доставки; null означает использовать значение объекта",
+        ),
+      scheduleMonth: zod
+        .union([
+          zod
+            .string()
+            .min(
+              getDeliveryDashboardSummaryResponseOverdueDeliveriesItemScheduleMonthOneMin,
+            )
+            .max(
+              getDeliveryDashboardSummaryResponseOverdueDeliveriesItemScheduleMonthOneMax,
+            )
+            .regex(
+              getDeliveryDashboardSummaryResponseOverdueDeliveriesItemScheduleMonthOneRegExp,
+            )
+            .describe("Календарный месяц YYYY-MM, год 1000–9999, месяц 01–12"),
+          zod.null(),
+        ])
+        .describe(
+          "Месяц владения строкой графика; null возможен только у legacy rows",
+        ),
+      actualDate: zod.coerce
+        .date()
+        .nullable()
+        .describe("Фактическая дата доставки (редактируемая)"),
+      actApprovedAt: zod.coerce.date().nullable(),
+      actApprovedBy: zod.string().uuid().nullable(),
+      workflowStatus: zod
+        .enum(["planned", "done", "closed"])
+        .describe(
+          "planned — not completed; done — actual date set but act unapproved; closed — act approved",
+        ),
+      note: zod
+        .string()
+        .nullable()
+        .describe("Комментарий водителя; логист видит его только для чтения"),
+      logisticianNote: zod
+        .string()
+        .nullable()
+        .describe(
+          "Примечание логиста для водителя; водитель видит его только для чтения",
+        ),
+      status: zod
+        .enum(["pending", "on_time", "late", "overdue"])
+        .describe(
+          "pending — план в будущем, факта нет; on_time — доставлено в срок или раньше;\nlate — доставлено позже плана; overdue — план уже прошёл, факта нет\n",
+        ),
+      lagDays: zod
+        .number()
+        .nullable()
+        .describe(
+          "Отклонение факта от плана в днях (положительное — отставание)",
+        ),
+      rescheduledFromDate: zod.coerce
+        .date()
+        .nullable()
+        .describe(
+          "Исходная плановая дата до переноса (null — переносов не было)",
+        ),
+      rescheduledBy: zod.string().nullable(),
+      rescheduledAt: zod.coerce.date().nullable(),
+      photosCount: zod.number().describe("Количество приложенных фото-актов"),
+      createdAt: zod.coerce.date(),
+      archivedAt: zod.coerce.date().nullable(),
+      archivedByName: zod.string().nullable(),
+      additionalOrderItems: zod
+        .array(
+          zod.object({
+            productId: zod.string().uuid(),
+            productName: zod.string(),
+            quantity: zod
+              .number()
+              .gt(
+                getDeliveryDashboardSummaryResponseOverdueDeliveriesItemAdditionalOrderItemsItemQuantityExclusiveMin,
+              ),
+            unit: zod.string(),
+          }),
+        )
+        .nullish()
+        .describe("Additional-order contents without prices"),
+      hasAdditionalOrders: zod.boolean().optional(),
+    }),
+  ),
+  todayTotal: zod
+    .number()
+    .describe("Количество доставок, запланированных на сегодня"),
+  todayByDriver: zod.array(
+    zod.object({
+      driver: zod.string(),
+      count: zod.number(),
+      done: zod
+        .number()
+        .describe(
+          "Сколько из сегодняшних доставок водителя уже выполнено (есть actualDate)",
+        ),
+    }),
+  ),
+  todayDeliveries: zod
+    .array(
+      zod.object({
+        id: zod.string(),
+        siteId: zod.string(),
+        siteName: zod.string(),
+        siteAddress: zod.string(),
+        tradeNetworkName: zod
+          .string()
+          .nullish()
+          .describe(
+            "Торговая сеть из торгового названия объекта, не клиент-юрлицо",
+          ),
+        clientId: zod
+          .string()
+          .uuid()
+          .nullish()
+          .describe("Current client resolved from the delivery site"),
+        clientName: zod
+          .string()
+          .nullish()
+          .describe("Current client name resolved from the delivery site"),
+        managerContact: zod
+          .string()
+          .nullish()
+          .describe("Телефон менеджера объекта для связи с водителем"),
+        driverUserId: zod.string().uuid().nullable(),
+        driver: zod.string(),
+        parentDeliveryId: zod
+          .string()
+          .uuid()
+          .nullish()
+          .describe("Parent delivery for an additional order"),
+        orderId: zod
+          .string()
+          .uuid()
+          .nullish()
+          .describe("Client order linked to an additional delivery"),
+        plannedDate: zod.coerce
+          .date()
+          .nullable()
+          .describe(
+            "Плановая дата доставки (null, если дата ещё не назначена)",
+          ),
+        correctedPlannedDate: zod.coerce
+          .date()
+          .nullish()
+          .describe(
+            "Уточнённая плановая дата только для отчётности; не изменяет исходный план, график или показатели",
+          ),
+        deliveryType: zod
+          .string()
+          .nullish()
+          .describe(
+            "Тип поставки для этой доставки; null означает использовать значение объекта",
+          ),
+        scheduleMonth: zod
+          .union([
+            zod
+              .string()
+              .min(
+                getDeliveryDashboardSummaryResponseTodayDeliveriesItemScheduleMonthOneMin,
+              )
+              .max(
+                getDeliveryDashboardSummaryResponseTodayDeliveriesItemScheduleMonthOneMax,
+              )
+              .regex(
+                getDeliveryDashboardSummaryResponseTodayDeliveriesItemScheduleMonthOneRegExp,
+              )
+              .describe(
+                "Календарный месяц YYYY-MM, год 1000–9999, месяц 01–12",
+              ),
+            zod.null(),
+          ])
+          .describe(
+            "Месяц владения строкой графика; null возможен только у legacy rows",
+          ),
+        actualDate: zod.coerce
+          .date()
+          .nullable()
+          .describe("Фактическая дата доставки (редактируемая)"),
+        actApprovedAt: zod.coerce.date().nullable(),
+        actApprovedBy: zod.string().uuid().nullable(),
+        workflowStatus: zod
+          .enum(["planned", "done", "closed"])
+          .describe(
+            "planned — not completed; done — actual date set but act unapproved; closed — act approved",
+          ),
+        note: zod
+          .string()
+          .nullable()
+          .describe("Комментарий водителя; логист видит его только для чтения"),
+        logisticianNote: zod
+          .string()
+          .nullable()
+          .describe(
+            "Примечание логиста для водителя; водитель видит его только для чтения",
+          ),
+        status: zod
+          .enum(["pending", "on_time", "late", "overdue"])
+          .describe(
+            "pending — план в будущем, факта нет; on_time — доставлено в срок или раньше;\nlate — доставлено позже плана; overdue — план уже прошёл, факта нет\n",
+          ),
+        lagDays: zod
+          .number()
+          .nullable()
+          .describe(
+            "Отклонение факта от плана в днях (положительное — отставание)",
+          ),
+        rescheduledFromDate: zod.coerce
+          .date()
+          .nullable()
+          .describe(
+            "Исходная плановая дата до переноса (null — переносов не было)",
+          ),
+        rescheduledBy: zod.string().nullable(),
+        rescheduledAt: zod.coerce.date().nullable(),
+        photosCount: zod.number().describe("Количество приложенных фото-актов"),
+        createdAt: zod.coerce.date(),
+        archivedAt: zod.coerce.date().nullable(),
+        archivedByName: zod.string().nullable(),
+        additionalOrderItems: zod
+          .array(
+            zod.object({
+              productId: zod.string().uuid(),
+              productName: zod.string(),
+              quantity: zod
+                .number()
+                .gt(
+                  getDeliveryDashboardSummaryResponseTodayDeliveriesItemAdditionalOrderItemsItemQuantityExclusiveMin,
+                ),
+              unit: zod.string(),
+            }),
+          )
+          .nullish()
+          .describe("Additional-order contents without prices"),
+        hasAdditionalOrders: zod.boolean().optional(),
+      }),
+    )
+    .describe("Все доставки, запланированные на сегодня"),
+});
 
 /**
  * @summary Get warehouse dashboard summary
  */
 export const GetDashboardSummaryResponse = zod.object({
-  "lowStockCount": zod.number().describe('Товары с остатком менее 30% от минимального')
-})
+  lowStockCount: zod
+    .number()
+    .describe("Товары с остатком менее 30% от минимального"),
+});

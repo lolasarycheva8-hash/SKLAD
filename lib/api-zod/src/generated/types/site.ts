@@ -5,6 +5,8 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
+import type { PendingClosureRequest } from "./pendingClosureRequest";
+import type { SiteServiceMode } from "./siteServiceMode";
 
 export interface Site {
   id: string;
@@ -15,8 +17,10 @@ export interface Site {
   branch: string;
   /** Торговое название объекта (необязательно; непустое значение строго из справочника trade_names) */
   customer: string;
-  /** Клиент */
+  /** Отображаемое название клиента, сохранённое вместе с объектом */
   client: string;
+  /** Стабильная обязательная связь с клиентом */
+  clientId: string;
   /** Закреплённый менеджер */
   manager: string;
   /** Контакт менеджера */
@@ -26,14 +30,17 @@ export interface Site {
   /** Закреплённый проект */
   project: string;
   /**
-     * UUID закреплённого пользователя-водителя
-     * @nullable
-     */
+   * UUID закреплённого пользователя-водителя
+   * @nullable
+   */
   driverUserId: string | null;
   /** Отображаемое имя водителя или «Не назначен» */
   driver: string;
   /** Тип поставки (из справочника delivery_types; может быть пустым) */
   deliveryType: string;
+  serviceMode?: SiteServiceMode;
+  /** Особенности работы объекта или подъезда большой машины */
+  features: string;
   /** Дата, с которой объект закрыт (null — объект работает) */
   closedFrom: Date | null;
   /** Планируемая дата открытия (если известна) */
@@ -43,4 +50,6 @@ export interface Site {
   /** Закрыт ли объект на текущую дату (учитывает closedFrom/reopenDate) */
   isClosed: boolean;
   createdAt: Date;
+  /** Ожидающее подтверждения предложение закрытия объекта */
+  pendingClosureRequest: PendingClosureRequest | null;
 }

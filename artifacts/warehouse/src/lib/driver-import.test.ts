@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { resolveImportDriver } from "./driver-import.ts";
+import {
+  getImportDriverOptions,
+  resolveImportDriver,
+} from "./driver-import.ts";
 
 const drivers = [
   { id: "one", name: "Иван Иванов", email: "ivan.one@example.test" },
@@ -19,4 +22,16 @@ test("Excel import отклоняет неоднозначное имя води
     () => resolveImportDriver(drivers, "Иван Иванов", ""),
     /неоднозначно/,
   );
+});
+
+test("одинаковые ФИО получают однозначные варианты выпадающего списка", () => {
+  const options = getImportDriverOptions(drivers);
+  assert.deepEqual(
+    options.map((option) => option.label),
+    [
+      "Иван Иванов — ivan.one@example.test",
+      "Иван Иванов — ivan.two@example.test",
+    ],
+  );
+  assert.equal(resolveImportDriver(drivers, options[1].label)?.id, "two");
 });

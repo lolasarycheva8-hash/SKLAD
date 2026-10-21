@@ -12,6 +12,8 @@ export interface DeliveryPhoto {
   /** Путь объекта в хранилище (использовать как /api/storage{objectPath}) */
   objectPath: string;
   fileName: string;
+  /** @maxLength 200 */
+  caption: string | null;
   mimeType: string;
   uploadedBy: string;
   createdAt: Date;

@@ -5,13 +5,14 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
+import type { SiteServiceMode } from "./siteServiceMode";
 
 export interface UpdateSiteInput {
   name?: string;
   address?: string;
   branch?: string;
   customer?: string;
-  client?: string;
+  clientId: string;
   manager?: string;
   managerContact?: string;
   director?: string;
@@ -19,4 +20,6 @@ export interface UpdateSiteInput {
   /** @nullable */
   driverUserId?: string | null;
   deliveryType?: string;
+  serviceMode?: SiteServiceMode;
+  features?: string;
 }

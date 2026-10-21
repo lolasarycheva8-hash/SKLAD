@@ -15,6 +15,14 @@ async function buildAll() {
   await rm(distDir, { recursive: true, force: true });
 
   await esbuild({
+    entryPoints: [path.resolve(artifactDir, "src/scripts/backup.ts")],
+    platform: "node", bundle: true, format: "cjs",
+    outfile: path.join(distDir, "backup.cjs"),
+    external: ["pg-native", "@google-cloud/storage", "@aws-sdk/*"],
+    sourcemap: "linked",
+  });
+
+  await esbuild({
     entryPoints: [path.resolve(artifactDir, "src/index.ts")],
     platform: "node",
     bundle: true,

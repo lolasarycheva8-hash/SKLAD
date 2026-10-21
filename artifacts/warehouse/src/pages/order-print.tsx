@@ -2,6 +2,7 @@ import { useParams } from "wouter";
 import { useGetOrder } from "@workspace/api-client-react";
 import { Button } from "@/components/ui/button";
 import { Printer } from "lucide-react";
+import { orderStatusLabel } from "@/lib/order-status";
 
 const dateFormatter = new Intl.DateTimeFormat("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric" });
 const currency = new Intl.NumberFormat("ru-RU", {
@@ -32,7 +33,11 @@ export default function OrderPrint() {
 
         <h1 className="text-xl font-bold text-center mb-1">Заказ покупателя</h1>
         <p className="text-center text-sm mb-6">
-          №{order.id.slice(0, 8)} от {dateFormatter.format(new Date(order.createdAt))}
+          №{order.orderNumber} от {dateFormatter.format(new Date(order.createdAt))}
+        </p>
+        <p className="text-center text-sm mb-6">
+          Месяц плана: {order.plannedMonth ?? "Без месяца"}
+          {order.monthFromDelivery && " (по исходному плану доставки)"}
         </p>
 
         <div className="grid grid-cols-2 gap-4 text-sm mb-6">
@@ -41,8 +46,15 @@ export default function OrderPrint() {
             <div>{order.clientName}</div>
           </div>
           <div>
-            <div className="font-semibold">Статус оплаты:</div>
-            <div>{order.isPaid ? "Оплачен" : "Не оплачен"}</div>
+            <div className="font-semibold">Статус:</div>
+            <div>{orderStatusLabel(order.status)}</div>
+          </div>
+          <div>
+            <div className="font-semibold">Магазин:</div>
+            <div>{order.siteName || "Без привязки к магазину"}</div>
+            {order.siteName && (
+              <div className="text-gray-600">{order.siteAddress || "Адрес не указан"}</div>
+            )}
           </div>
         </div>
 

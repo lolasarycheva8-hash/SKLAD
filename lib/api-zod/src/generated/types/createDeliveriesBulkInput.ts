@@ -5,7 +5,7 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
-import type { CreateDeliveryInput } from './createDeliveryInput';
+import type { CreateDeliveryInput } from "./createDeliveryInput";
 
 export interface CreateDeliveriesBulkInput {
   items: CreateDeliveryInput[];

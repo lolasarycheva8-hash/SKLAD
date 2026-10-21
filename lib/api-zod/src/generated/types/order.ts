@@ -5,19 +5,42 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
-import type { OrderItem } from './orderItem';
+import type { OperationalOrderStatus } from "./operationalOrderStatus";
+import type { OrderItem } from "./orderItem";
 
 export interface Order {
+  status: OperationalOrderStatus;
+  orderNumber: string;
+  /** @nullable */
+  summaryId: string | null;
+  /** @nullable */
+  fulfillmentDeliveryId: string | null;
   id: string;
   clientId: string;
   clientName: string;
-  /** Вычисляется автоматически — true, если сумма платежей >= totalAmount */
+  /** @nullable */
+  siteId: string | null;
+  /** @nullable */
+  siteName: string | null;
+  /** @nullable */
+  siteAddress: string | null;
+  /** Статус сводного счёта имеет приоритет; без счёта сохраняется историческая оплата или сумма платежей >= totalAmount */
   isPaid: boolean;
   /** Сумма всех платежей по заказу */
   paidAmount: number;
   /** Превышение суммы платежей над totalAmount (переплата) */
   overpaidAmount: number;
   note: string | null;
+  /**
+   * Effective month; sourced from original delivery plannedDate or undated scheduleMonth when linked.
+   * @nullable
+   * @pattern ^[0-9]{4}-(?:0[1-9]|1[0-2])$
+   */
+  plannedMonth: string | null;
+  /** True when month is derived from the linked delivery and cannot be edited independently. */
+  monthFromDelivery: boolean;
+  /** True only for an actual reverse deliveries.orderId link; ordinary explicit fulfillment links remain editable before billing. */
+  deliveryFromAdditionalOrder: boolean;
   items: OrderItem[];
   /** Сумма всех позиций (quantity * price) */
   totalAmount: number;

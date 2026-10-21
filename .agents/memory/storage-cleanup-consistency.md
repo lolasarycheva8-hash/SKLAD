@@ -39,6 +39,12 @@ Acquire the cross-instance cleanup lock before listing App Storage objects.
 
 **How to apply:** In live cleanup, return immediately when the global try-lock loses; only the winner may call the storage listing API. Keep a test that asserts the losing path performs no list operation.
 
+Bound the App Storage listing call with a timeout while the global lock is held. A timeout must fail the run, release the session lock, and fence the late listing result from reconciliation.
+
+**Why:** A hanging list call otherwise blocks all cleanup instances indefinitely; allowing its late result to continue after unlock would run reconciliation without cross-instance ownership.
+
+**How to apply:** Race the awaited listing against a bounded timer inside the lock callback, persist the attempt as failed, and test that a later run succeeds while resolving the old promise produces no reference reads or deletes.
+
 When cleanup needs independent database commits, hold its global advisory lock at session scope and execute every local transaction through that same database client.
 
 **Why:** A transaction-scoped global lock cannot survive per-object commits, while holding it on one pool connection and opening work on another self-deadlocks when the supported pool size is one.
@@ -62,3 +68,9 @@ Keep the cleanup `deleted` counter as the total of orphan deletion and tombstone
 **Why:** Existing operators and consumers rely on `deleted` as the run total. Reinterpreting it as orphan-only would silently undercount and break historical comparisons.
 
 **How to apply:** Increment `deleted` for every successful finalization, add subtype counters for resumed photo/delivery tombstones, and default new persisted counters to zero for existing status rows.
+
+Never physically delete an upload merely because it is absent from the current environment's database. Orphan reconciliation must remain report-only until ownership across all databases sharing the storage prefix is proven.
+
+**Why:** Separate development and production databases can share the same storage namespace. A production act can therefore look orphaned in development; deleted copies expire and may become unrecoverable. Retaining abandoned uploads is preferable to losing delivery documents.
+
+**How to apply:** Preserve orphan candidates, including in CLI runs. Explicit authorized deletion/tombstone recovery is a separate operation. Before restoring missing acts, stop unsafe reconciliation in development and use exact registered paths, retained generations, and no-overwrite preconditions. Never treat a database backup as a backup of file bytes.

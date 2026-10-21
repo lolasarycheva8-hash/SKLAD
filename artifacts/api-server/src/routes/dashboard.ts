@@ -7,14 +7,25 @@ import {
   GetDeliveryDashboardSummaryResponse,
 } from "@workspace/api-zod";
 import { getCurrentStockMap } from "../lib/stock";
-import { toDeliveryDto, monthRange, currentMonth, todayLocalISO } from "../lib/deliveries";
+import {
+  toDeliveryDto,
+  monthRange,
+  currentMonth,
+  todayLocalISO,
+  deliveryDtoEnrichmentMap,
+} from "../lib/deliveries";
 import { cached } from "../lib/cache";
 import { requireAdmin } from "../middlewares/requirePermission";
+import { INVALID_MONTH_MESSAGE, isValidMonth } from "../lib/calendar-month";
 
 const router: IRouter = Router();
 router.use("/dashboard", requireAdmin);
 
 router.get("/dashboard/delivery-summary", async (req, res): Promise<void> => {
+  if (req.query.month !== undefined && !isValidMonth(req.query.month)) {
+    res.status(400).json({ error: INVALID_MONTH_MESSAGE });
+    return;
+  }
   const query = GetDeliveryDashboardSummaryQueryParams.safeParse(req.query);
   if (!query.success) {
     res.status(400).json({ error: query.error.message });
@@ -29,28 +40,42 @@ router.get("/dashboard/delivery-summary", async (req, res): Promise<void> => {
       delivery: deliveriesTable,
       siteName: sitesTable.name,
       siteAddress: sitesTable.address,
+      clientId: sitesTable.clientId,
+      clientName: sitesTable.client,
       driverName: appUsersTable.name,
       driverEmail: appUsersTable.email,
     })
     .from(deliveriesTable)
     .innerJoin(sitesTable, eq(deliveriesTable.siteId, sitesTable.id))
     .leftJoin(appUsersTable, eq(deliveriesTable.driverUserId, appUsersTable.id))
-    .where(or(
-      eq(deliveriesTable.scheduleMonth, month),
-      and(
-        isNull(deliveriesTable.scheduleMonth),
-        gte(deliveriesTable.plannedDate, start),
-        lt(deliveriesTable.plannedDate, end),
+    .where(and(
+      isNull(deliveriesTable.archivedAt),
+      or(
+        eq(deliveriesTable.scheduleMonth, month),
+        and(
+          isNull(deliveriesTable.scheduleMonth),
+          gte(deliveriesTable.plannedDate, start),
+          lt(deliveriesTable.plannedDate, end),
+        ),
       ),
     ))
     .orderBy(sql`${deliveriesTable.plannedDate} asc nulls last`);
 
+  const enrichment = await deliveryDtoEnrichmentMap(
+    rows.map((row) => row.delivery.id),
+  );
   const dtos = rows.map((row) => toDeliveryDto(
     row.delivery,
     row.siteName,
     row.siteAddress,
     0,
     row.driverName || row.driverEmail || "Не назначен",
+    null,
+    {
+      ...(enrichment.get(row.delivery.id) ?? {}),
+      clientId: row.clientId,
+      clientName: row.clientName,
+    },
   ));
 
   const totalScheduled = dtos.length;
@@ -94,15 +119,25 @@ router.get("/dashboard/delivery-summary", async (req, res): Promise<void> => {
       delivery: deliveriesTable,
       siteName: sitesTable.name,
       siteAddress: sitesTable.address,
+      clientId: sitesTable.clientId,
+      clientName: sitesTable.client,
       driverName: appUsersTable.name,
       driverEmail: appUsersTable.email,
     })
     .from(deliveriesTable)
     .innerJoin(sitesTable, eq(deliveriesTable.siteId, sitesTable.id))
     .leftJoin(appUsersTable, eq(deliveriesTable.driverUserId, appUsersTable.id))
-    .where(eq(deliveriesTable.plannedDate, today));
+    .where(
+      and(
+        eq(deliveriesTable.plannedDate, today),
+        isNull(deliveriesTable.archivedAt),
+      ),
+    );
 
   const todayTotal = todayRows.length;
+  const todayEnrichment = await deliveryDtoEnrichmentMap(
+    todayRows.map((row) => row.delivery.id),
+  );
   const todayDeliveries = todayRows
     .map((row) => toDeliveryDto(
       row.delivery,
@@ -110,6 +145,12 @@ router.get("/dashboard/delivery-summary", async (req, res): Promise<void> => {
       row.siteAddress,
       0,
       row.driverName || row.driverEmail || "Не назначен",
+      null,
+      {
+        ...(todayEnrichment.get(row.delivery.id) ?? {}),
+        clientId: row.clientId,
+        clientName: row.clientName,
+      },
     ))
     .sort((a, b) => a.driver.localeCompare(b.driver) || a.siteName.localeCompare(b.siteName));
   const todayDriverMap = new Map<string, { count: number; done: number }>();

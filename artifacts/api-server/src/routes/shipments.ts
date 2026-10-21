@@ -29,6 +29,9 @@ import { toShipmentDto } from "../lib/shipments";
 import { getShippedQuantityMap } from "../lib/orders";
 import { requirePermission, requireAdmin, requireSectionAccess } from "../middlewares/requirePermission";
 import { findInvalidDriverUserIds } from "../lib/drivers";
+import { isPostgresConstraintError } from "../lib/postgres-errors";
+import { isOrderFrozen, BILLED_ORDER_ERROR } from "../lib/order-billing";
+import { BillingError } from "../lib/order-summaries";
 
 const router: IRouter = Router();
 router.use("/shipments", requireSectionAccess("shipments"));
@@ -69,8 +72,8 @@ router.post("/shipments", canEditShipments, async (req, res): Promise<void> => {
     return;
   }
 
-  if (!order.isPaid) {
-    res.status(400).json({ error: "Нельзя отгружать по неоплаченному заказу" });
+  if (await isOrderFrozen(order.id)) {
+    res.status(409).json({ error: BILLED_ORDER_ERROR });
     return;
   }
 
@@ -90,6 +93,10 @@ router.post("/shipments", canEditShipments, async (req, res): Promise<void> => {
   try {
     shipment = await db.transaction(async (tx) => {
       await tx.execute(sql`select 1 from ${ordersTable} where ${ordersTable.id} = ${order.id} for update`);
+      if (await isOrderFrozen(order.id, tx)) {
+        validationError = BILLED_ORDER_ERROR;
+        tx.rollback();
+      }
 
       const orderItems = await tx
         .select()
@@ -158,7 +165,16 @@ router.post("/shipments", canEditShipments, async (req, res): Promise<void> => {
     });
   } catch (err) {
     if (validationError) {
-      res.status(400).json({ error: validationError });
+      res.status(validationError === BILLED_ORDER_ERROR ? 409 : 400).json({ error: validationError });
+      return;
+    }
+    if (
+      isPostgresConstraintError(err, {
+        code: "23503",
+        constraint: "shipments_driver_user_id_app_users_id_fk",
+      })
+    ) {
+      res.status(400).json({ error: "Выбранный пользователь не является водителем" });
       return;
     }
     throw err;
@@ -247,6 +263,10 @@ router.patch("/shipments/:id", canEditShipments, async (req, res): Promise<void>
       await tx.execute(
         sql`select 1 from ${ordersTable} where ${ordersTable.id} = ${existingShipment.orderId} for update`,
       );
+      if (await isOrderFrozen(existingShipment.orderId, tx)) {
+        validationError = BILLED_ORDER_ERROR;
+        tx.rollback();
+      }
 
       if (parsed.data.items) {
         const orderItems = await tx
@@ -322,7 +342,16 @@ router.patch("/shipments/:id", canEditShipments, async (req, res): Promise<void>
     });
   } catch (err) {
     if (validationError) {
-      res.status(400).json({ error: validationError });
+      res.status(validationError === BILLED_ORDER_ERROR ? 409 : 400).json({ error: validationError });
+      return;
+    }
+    if (
+      isPostgresConstraintError(err, {
+        code: "23503",
+        constraint: "shipments_driver_user_id_app_users_id_fk",
+      })
+    ) {
+      res.status(400).json({ error: "Выбранный пользователь не является водителем" });
       return;
     }
     throw err;
@@ -357,11 +386,20 @@ router.post("/shipments/:id/dispatch", canEditShipments, async (req, res): Promi
     return;
   }
 
-  const [shipment] = await db
-    .update(shipmentsTable)
-    .set({ isDispatched: true, dispatchedAt: new Date() })
-    .where(eq(shipmentsTable.id, params.data.id))
-    .returning();
+  let shipment;
+  try {
+    shipment = await db.transaction(async (tx) => {
+      await tx.select().from(ordersTable).where(eq(ordersTable.id, existingShipment.orderId)).for("update");
+      if (await isOrderFrozen(existingShipment.orderId, tx)) throw new BillingError(409, BILLED_ORDER_ERROR);
+      return (await tx.update(shipmentsTable)
+        .set({ isDispatched: true, dispatchedAt: new Date() })
+        .where(eq(shipmentsTable.id, params.data.id)).returning())[0];
+    });
+  } catch (error) {
+    if (!(error instanceof BillingError)) throw error;
+    res.status(error.status).json({ error: error.message });
+    return;
+  }
 
   res.json(DispatchShipmentResponse.parse(await toShipmentDto(shipment)));
 });
@@ -393,7 +431,11 @@ router.post("/shipments/:id/delete", requireAdmin, async (req, res): Promise<voi
     return;
   }
 
-  const shipment = await db.transaction(async (tx) => {
+  let shipment;
+  try {
+    shipment = await db.transaction(async (tx) => {
+    await tx.select().from(ordersTable).where(eq(ordersTable.id, existingShipment.orderId)).for("update");
+    if (await isOrderFrozen(existingShipment.orderId, tx)) throw new BillingError(409, BILLED_ORDER_ERROR);
     const items = await tx
       .select()
       .from(shipmentItemsTable)
@@ -420,6 +462,11 @@ router.post("/shipments/:id/delete", requireAdmin, async (req, res): Promise<voi
 
     return updatedShipment;
   });
+  } catch (error) {
+    if (!(error instanceof BillingError)) throw error;
+    res.status(error.status).json({ error: error.message });
+    return;
+  }
 
   res.json(DeleteShipmentResponse.parse(await toShipmentDto(shipment)));
 });

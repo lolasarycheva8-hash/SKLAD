@@ -1,18 +1,57 @@
+import {
+  MobileManagerTable,
+  MobileLogisticianCard,
+} from "@/components/mobile-delivery-cards";
+import { ArchivedDeliveriesPanel } from "@/components/archived-deliveries-panel";
+import { DeliveryMonthSelector } from "@/components/delivery-month-selector";
+import { ScheduleExcelUpdate } from "@/components/schedule-excel-update";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
 import {
+  createOverdueDeliveryBuckets,
+  isOverdueBucketId,
+  matchesOverdueBucket,
+  type OverdueBucketId,
+} from "@/lib/overdue-delivery-buckets";
+import { hasCorrectedPlan, summarizeCorrectedPlans } from "@/lib/corrected-plan-summary";
+import { CorrectedPlanDateCell } from "@/components/corrected-plan-date-cell";
+import { DeliveryCreateForm } from "@/components/delivery-create-form";
+import { ManagerContactCell } from "@/components/manager-contact-cell";
+import { DriverSummarySheet } from "@/components/driver-summary-sheet";
+import {
+  DeliveryBulkEditDialog,
+  matchesBulkDeliveryScope,
+  UNASSIGNED_DRIVER_FILTER,
+  type BulkDeliveryRow,
+} from "@/components/delivery-bulk-edit-dialog";
+import { buildDriverSummary } from "@/lib/driver-summary";
+import { exportDriverProgress } from "@/lib/driver-progress-export";
+import {
+  AdditionalOrderDialog,
+} from "@/components/additional-order-dialog";
+import {
+  AdditionalOrderItems,
+  AdditionalOrderLabel,
+  isAdditionalDelivery,
+} from "@/components/additional-order-display";
+
+import {
   useListDeliveries,
+  useCreateDelivery,
   useCreateDeliveriesBulk,
   useReplaceDeliveriesBulk,
   useUpdateDelivery,
   useDeleteDelivery,
+  useRestoreDelivery,
   useListDeliverySiteLookup,
+  getListDeliverySiteLookupQueryKey,
   useListDrivers,
   useRescheduleDelivery,
   useApproveDeliveryAct,
+  updateDeliveriesActualBulk,
   getListDeliveriesQueryKey,
-  getGetDeliveryDashboardSummaryQueryKey,
+  getListOrdersQueryKey,
   type Delivery,
 } from "@workspace/api-client-react";
 import {
@@ -21,11 +60,16 @@ import {
   validateTemplateHeaders,
   downloadTemplate,
   exportRowsToExcel,
-  str,
-  excelSerialToIsoDate,
 } from "@/lib/excel-import";
+import { getImportDriverOptions } from "@/lib/driver-import";
+import {
+  buildDeliveryFactUpdates,
+  deliveryFactExportRows,
+  DELIVERY_FACT_HEADERS,
+} from "@/lib/delivery-fact-import";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -59,29 +103,57 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { DeliveryPhotosDialog } from "@/components/delivery-photos-dialog";
+import { DeliveryImportReviewDialog } from "@/components/delivery-import-review-dialog";
 import { useToast } from "@/hooks/use-toast";
-import { usePermissions } from "@/hooks/use-permissions";
+import { handleAlreadyDeletedDelivery } from "@/lib/delivery-delete-error";
+import { invalidateDeliveryWorkspaceQueries } from "@/lib/delivery-query-invalidation";
+import { downloadFileResponse } from "@/lib/download-file";
+import { isLogisticianRole, usePermissions } from "@/hooks/use-permissions";
+import { currentMoscowMonth, formatMoscowDate, isCanonicalMonth } from "@/lib/moscow-date";
+import { getDeliveryProgress } from "@/lib/delivery-progress";
+import { DeliveryProgressSummary } from "@/components/delivery-progress-summary";
 import { cn } from "@/lib/utils";
+import { useStoredToggle } from "@/hooks/use-stored-toggle";
+import {
+  getPlannedDayTotals,
+  matchesPlannedDeliveryDay,
+} from "@/lib/planned-delivery-summary";
 import {
   canRescheduleDelivery,
+  buildDeliveryImportReview,
   confirmPlannedDate,
+  dispatchDeliveryImportByMode,
+  formatMonthLabel,
   getDeliveryCellTone,
+  isDeliveryAwaitingApproval,
+  getDeliverySiteOptions,
   getInitialRescheduleDate,
   getMonthDateBounds,
   getScheduleCellState,
-  parseImportPlannedDate,
   toDateInputValue,
+  type DeliveryImportItem,
+  type DeliveryImportMode,
+  type DeliveryImportReview,
 } from "@/lib/delivery-workspace";
-import { resolveImportDriver } from "@/lib/driver-import";
+import {
+  buildAdditionalOrderMatrixRows,
+  type AdditionalOrderMatrixRow,
+} from "@/lib/additional-order-matrix";
 import {
   CalendarClock,
   Check,
   AlertTriangle,
   Download,
+  Eye,
   FileDown,
+  Loader2,
+  MessageSquareText,
   MoreHorizontal,
   Plus,
   Search,
+  SlidersHorizontal,
+  ChevronDown,
+  ChevronUp,
   Trash2,
   Truck,
   Upload,
@@ -93,28 +165,12 @@ const dateFormat = new Intl.DateTimeFormat("ru-RU", {
   month: "2-digit",
   year: "numeric",
 });
+const mobileDateFormat = new Intl.DateTimeFormat("ru-RU", {
+  day: "2-digit",
+  month: "2-digit",
+});
 
-function currentMonthValue() {
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Europe/Moscow",
-    year: "numeric",
-    month: "2-digit",
-  })
-    .format(new Date())
-    .slice(0, 7);
-}
-
-function formatMonthLabel(value: string) {
-  const [year, monthNumber] = value.split("-").map(Number);
-  if (!year || !monthNumber) return value;
-  const monthName = new Intl.DateTimeFormat("ru-RU", {
-    month: "long",
-    timeZone: "UTC",
-  }).format(new Date(Date.UTC(year, monthNumber - 1, 1)));
-  return `${monthName} ${String(year).slice(-2)}`;
-}
-
-const TEMPLATE_HEADERS = ["Объект", "Водитель", "Email водителя", "Плановая дата"];
+const TEMPLATE_HEADERS = ["Объект", "Водитель", "Плановая дата"];
 
 const CELL_ORANGE =
   "bg-amber-100/60 dark:bg-amber-900/30 text-amber-900 dark:text-amber-200";
@@ -122,21 +178,21 @@ const CELL_GREEN =
   "bg-emerald-100/60 dark:bg-emerald-900/30 text-emerald-900 dark:text-emerald-200";
 const CELL_BLUE =
   "bg-blue-100/60 dark:bg-blue-900/30 text-blue-900 dark:text-blue-200";
-const TABLE_PAGE_SIZE = 100;
+const TABLE_PAGE_SIZE = 500;
 
-type JoinedDelivery = Delivery & {
+export type JoinedDelivery = Delivery & {
   siteAddress: string;
   siteBranch: string;
   siteManager: string;
+  siteManagerContact: string;
   siteDeliveryType: string;
+  siteFeatures: string;
   siteClient: string;
 };
 
-type ScheduleRow = {
-  siteId: string;
-  siteName: string;
-  driverUserId: string;
-  plannedDate: string;
+type ScheduleDayFilter = {
+  day: number;
+  status: "plan" | "done" | "closed" | "failed";
 };
 
 function TablePager({
@@ -197,19 +253,39 @@ function FactDateCell({
   disabled: boolean;
 }) {
   const { min: minDate, max: maxDate } = getMonthDateBounds(month);
+  const handleDateChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    onChange(event.currentTarget.value);
+    event.currentTarget.blur();
+  };
 
   if (delivery.actualDate) {
     return (
-      <input
-        type="date"
-        min={minDate}
-        max={maxDate}
-        disabled={disabled}
-        value={toDateInputValue(delivery.actualDate)}
-        onChange={(e) => onChange(e.target.value)}
-        className="h-8 w-[130px] px-2 text-sm border rounded bg-background shadow-sm outline-none focus:ring-1 focus:ring-primary disabled:opacity-50"
-        data-testid={`input-actual-date-${delivery.id}`}
-      />
+      <div className="flex items-center gap-1">
+        <input
+          type="date"
+          min={minDate}
+          max={maxDate}
+          disabled={disabled}
+          value={toDateInputValue(delivery.actualDate)}
+          onChange={handleDateChange}
+          className="h-8 w-[108px] rounded border bg-background px-1.5 text-xs shadow-sm outline-none focus:ring-1 focus:ring-primary disabled:opacity-50"
+          data-testid={`input-actual-date-${delivery.id}`}
+        />
+        {!disabled && (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-8 w-8 shrink-0 p-0 text-destructive hover:border-destructive hover:bg-destructive/10 hover:text-destructive"
+            onClick={() => onChange("")}
+            title="Очистить фактическую дату"
+            aria-label={`Очистить фактическую дату доставки для объекта ${delivery.siteName}`}
+            data-testid={`button-clear-actual-date-${delivery.id}`}
+          >
+            <X className="h-4 w-4" />
+          </Button>
+        )}
+      </div>
     );
   }
 
@@ -221,7 +297,7 @@ function FactDateCell({
         max={maxDate}
         disabled={disabled}
         value={delivery.plannedDate ? toDateInputValue(delivery.plannedDate) : ""}
-        onChange={(e) => onChange(e.target.value)}
+        onChange={handleDateChange}
         className="h-8 w-[130px] px-2 text-sm text-muted-foreground border border-dashed rounded bg-background outline-none focus:ring-1 focus:ring-primary disabled:opacity-50"
         title="Выберите фактическую дату"
         data-testid={`input-actual-date-${delivery.id}`}
@@ -291,23 +367,113 @@ function FilterSelect({
   );
 }
 
+function DriverFilterSelect({
+  value,
+  onChange,
+  options,
+  testId,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  options: Array<{ value: string; label: string }>;
+  testId?: string;
+}) {
+  const selected = options.find((option) => option.value === value);
+  return (
+    <Select
+      value={value || "all"}
+      onValueChange={(next) => onChange(next === "all" ? "" : next)}
+    >
+      <SelectTrigger
+        className={cn(
+          "h-8 text-xs w-[180px] bg-background",
+          value && "border-primary",
+        )}
+        data-testid={testId}
+      >
+        <div className="truncate">
+          {selected ? (
+            <span className="font-medium text-primary">
+              Водитель: {selected.label}
+            </span>
+          ) : (
+            <span className="text-muted-foreground">Водитель...</span>
+          )}
+        </div>
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value="all">Все водители</SelectItem>
+        {options.map((option) => (
+          <SelectItem key={option.value} value={option.value}>
+            {option.label}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
+
+function DateFilter({
+  label,
+  value,
+  month,
+  onChange,
+  testId,
+}: {
+  label: string;
+  value: string;
+  month?: string;
+  onChange: (value: string) => void;
+  testId: string;
+}) {
+  const { min, max } = month ? getMonthDateBounds(month) : { min: undefined, max: undefined };
+
+  return (
+    <label
+      className={cn(
+        "flex h-8 items-center gap-2 rounded-md border bg-background px-2 text-xs",
+        value && "border-primary",
+      )}
+    >
+      <span className={cn("whitespace-nowrap text-muted-foreground", value && "text-primary")}>
+        {label}
+      </span>
+      <Input
+        type="date"
+        value={value}
+        min={min}
+        max={max}
+        onChange={(event) => onChange(event.target.value)}
+        className="h-7 w-[125px] border-0 bg-transparent p-0 text-xs shadow-none focus-visible:ring-0"
+        aria-label={label}
+        data-testid={testId}
+      />
+    </label>
+  );
+}
+
 function SortHeader({
   label,
   field,
   sortConfig,
   onSort,
+  className,
 }: {
   label: string;
   field: string;
   sortConfig: { field: string; dir: "asc" | "desc" };
   onSort: (f: string) => void;
+  className?: string;
 }) {
   return (
     <th
-      className="p-2 cursor-pointer hover:bg-muted/50 transition-colors font-medium whitespace-nowrap"
+      className={cn(
+        "p-2 text-center align-middle text-[11px] font-medium leading-tight cursor-pointer hover:bg-muted/50 transition-colors",
+        className,
+      )}
       onClick={() => onSort(field)}
     >
-      <div className="flex items-center gap-1">
+      <div className="flex items-center justify-center gap-1">
         {label}
         {sortConfig.field === field && (
           <span className="text-[10px] text-primary">
@@ -325,26 +491,43 @@ export default function Deliveries() {
     () => new URLSearchParams(window.location.search),
     [],
   );
-  const [activeTab, setActiveTab] = useState<"workspace" | "schedule">(
-    initialParams.get("view") === "undated" ? "schedule" : "workspace"
+  const [activeTab, setActiveTab] = useState<
+    "workspace" | "drivers" | "schedule" | "archived"
+  >("workspace");
+  const [topPanelCollapsed, setTopPanelCollapsed] = useStoredToggle(
+    "lexitd.deliveries-top-collapsed",
   );
   const [month, setMonth] = useState(() => {
     const requestedMonth = initialParams.get("month");
-    return requestedMonth && /^\d{4}-(0[1-9]|1[0-2])$/.test(requestedMonth)
+    return requestedMonth && isCanonicalMonth(requestedMonth)
       ? requestedMonth
-      : currentMonthValue();
+      : currentMoscowMonth();
   });
+  const resumeImportMode: DeliveryImportMode =
+    initialParams.get("importMode") === "add" ? "add" : "replace";
+  const [showResumeImportHint, setShowResumeImportHint] = useState(
+    initialParams.get("resumeImport") === "1",
+  );
   const [search, setSearch] = useState("");
   const [workspaceStatus, setWorkspaceStatus] = useState<
     | "no-deliveries"
+    | "undated"
     | "completed"
+    | "closed"
+    | "awaiting-approval"
     | "incomplete"
-    | "overdue-up-to-3"
-    | "overdue-over-3"
+    | "corrected-plan"
+    | OverdueBucketId
     | null
-  >(null);
+  >(() => {
+    const requestedView = initialParams.get("view");
+    if (requestedView === "undated") return "undated";
+    return isOverdueBucketId(requestedView) ? requestedView : null;
+  });
   const [workspacePage, setWorkspacePage] = useState(1);
   const [schedulePage, setSchedulePage] = useState(1);
+  const [scheduleDayFilter, setScheduleDayFilter] =
+    useState<ScheduleDayFilter | null>(null);
 
   const [filters, setFilters] = useState({
     siteName: "",
@@ -355,6 +538,7 @@ export default function Deliveries() {
     driver: "",
     client: "",
     plannedDate: "",
+    correctedPlannedDate: "",
     actualDate: "",
     lagDays: "",
   });
@@ -365,18 +549,21 @@ export default function Deliveries() {
   }>({ field: "siteName", dir: "asc" });
 
   const [generateOpen, setGenerateOpen] = useState(false);
-  const [importMode, setImportMode] = useState<"replace" | "add">("replace");
+  const [actsExportOpen, setActsExportOpen] = useState(false);
+  const [actsExportFrom, setActsExportFrom] = useState("");
+  const [actsExportTo, setActsExportTo] = useState("");
+  const [actsExportPending, setActsExportPending] = useState(false);
+  const [importMode, setImportMode] = useState<DeliveryImportMode>("replace");
   const [pendingReplacement, setPendingReplacement] = useState<
-    { siteId: string; driverUserId: string | null; plannedDate: string | null; scheduleMonth: string }[] | null
+    DeliveryImportItem[] | null
   >(null);
-  const [scheduleRows, setScheduleRows] = useState<{
-    siteId: string;
-    siteName: string;
-    driverUserId: string | null;
-    plannedDate: string | null;
-  }[]>([]);
+  const [pendingImportReview, setPendingImportReview] =
+    useState<DeliveryImportReview | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Delivery | null>(null);
   const [photosDelivery, setPhotosDelivery] = useState<Delivery | null>(null);
+  const [photosReadOnly, setPhotosReadOnly] = useState(false);
+  const [restoreTargetId, setRestoreTargetId] = useState<string | null>(null);
+  const [restoreError, setRestoreError] = useState<string | null>(null);
   const [rescheduleDeliveryTarget, setRescheduleDeliveryTarget] =
     useState<Delivery | null>(null);
   const [rescheduleDate, setRescheduleDate] = useState<string>("");
@@ -384,17 +571,136 @@ export default function Deliveries() {
     null
   );
   const [replacementDriver, setReplacementDriver] = useState("");
+  const [logisticianNoteTarget, setLogisticianNoteTarget] =
+    useState<Delivery | null>(null);
+  const [logisticianNoteDraft, setLogisticianNoteDraft] = useState("");
+  const [driverCommentTarget, setDriverCommentTarget] =
+    useState<Delivery | null>(null);
+  const [additionalOrderTarget, setAdditionalOrderTarget] =
+    useState<JoinedDelivery | null>(null);
+  const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
+  const [bulkDialogOpen, setBulkDialogOpen] = useState(false);
+  const [bulkRows, setBulkRows] = useState<BulkDeliveryRow[]>([]);
 
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const undatedSectionRef = useRef<HTMLDivElement>(null);
-  const { canEdit, isAdmin, canApproveDeliveryActs } = usePermissions();
+  const factFileInputRef = useRef<HTMLInputElement>(null);
+  const [importingFacts, setImportingFacts] = useState(false);
+  const {
+    user,
+    canEdit,
+    canView,
+    isAdmin,
+    canApproveDeliveryActs,
+  } = usePermissions();
   const canEditDeliveries = canEdit("deliveries");
+  const canViewOrders =
+    typeof canView === "function" && canView("orders");
+  const canViewArchivedDeliveries = canEditDeliveries;
+  const canEditCorrectedPlan =
+    canEditDeliveries && (isAdmin || isLogisticianRole(user?.role));
+  const canEditLogisticianNote =
+    isLogisticianRole(user?.role) && canEditDeliveries;
+  const hasSimplifiedMobileDeliveryView =
+    isLogisticianRole(user?.role);
 
-  const { data: deliveries } = useListDeliveries({ month });
-  const { data: sites } = useListDeliverySiteLookup();
-  const { data: drivers = [] } = useListDrivers();
+  function openActsExportDialog() {
+    const { min, max } = getMonthDateBounds(month);
+    setActsExportFrom(min);
+    setActsExportTo(max);
+    setActsExportOpen(true);
+  }
+
+  async function handleActsExport(event: React.FormEvent) {
+    event.preventDefault();
+    if (!actsExportFrom || !actsExportTo || actsExportPending) return;
+    setActsExportPending(true);
+    try {
+      const query = new URLSearchParams({
+        from: actsExportFrom,
+        to: actsExportTo,
+      });
+      await downloadFileResponse(
+        `/api/deliveries/acts/download?${query}`,
+        `акты-${actsExportFrom}-${actsExportTo}.zip`,
+      );
+      setActsExportOpen(false);
+      toast({ title: "Скачивание архива начато" });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Повторите попытку";
+      toast({
+        title: message.includes("не найдены")
+          ? "За выбранный период актов нет"
+          : "Не удалось выгрузить акты",
+        description: message,
+        variant: message.includes("не найдены") ? "default" : "destructive",
+      });
+    } finally {
+      setActsExportPending(false);
+    }
+  }
+
+  const {
+    data: deliveries,
+    isLoading: deliveriesLoading,
+    isFetching: deliveriesFetching,
+    isError: deliveriesError,
+    refetch: refetchDeliveries,
+  } = useListDeliveries(
+    { month, archived: false },
+    {
+      query: {
+        queryKey: getListDeliveriesQueryKey({ month, archived: false }),
+        retry: false,
+      },
+    },
+  );
+  const {
+    data: archivedDeliveries,
+    isLoading: archivedDeliveriesLoading,
+    isError: archivedDeliveriesError,
+    refetch: refetchArchivedDeliveries,
+  } = useListDeliveries(
+    { month, archived: true },
+    {
+      query: {
+        enabled: canViewArchivedDeliveries && activeTab === "archived",
+        queryKey: getListDeliveriesQueryKey({ month, archived: true }),
+      },
+    },
+  );
+  const {
+    data: sites,
+    isLoading: sitesLoading,
+    isFetching: sitesFetching,
+    isError: sitesError,
+    refetch: refetchSites,
+  } = useListDeliverySiteLookup({
+    query: {
+      queryKey: getListDeliverySiteLookupQueryKey(),
+      retry: false,
+    },
+  });
+  const { data: drivers = [], isLoading: driversLoading, isError: driversError, refetch: refetchDrivers } = useListDrivers();
+  const hasMainData = deliveries !== undefined && sites !== undefined;
+  const mainDataInitialLoading =
+    !hasMainData &&
+    (deliveriesLoading ||
+      deliveriesFetching ||
+      sitesLoading ||
+      sitesFetching);
+  const mainDataUnavailable =
+    !hasMainData && (deliveriesError || sitesError);
+  const mainDataUpdating =
+    hasMainData && (deliveriesFetching || sitesFetching);
+  const mainDataUpdateError =
+    hasMainData && (deliveriesError || sitesError);
+
+  const driverSummaryRows = useMemo(
+    () => buildDriverSummary(deliveries ?? [], drivers, month),
+    [deliveries, drivers, month],
+  );
 
   const joinedData = useMemo<JoinedDelivery[]>(() => {
     if (!deliveries || !sites) return [];
@@ -406,7 +712,9 @@ export default function Deliveries() {
         siteAddress: s?.address || "",
         siteBranch: s?.branch || "",
         siteManager: s?.manager || "",
-        siteDeliveryType: s?.deliveryType || "",
+        siteManagerContact: s?.managerContact || "",
+        siteDeliveryType: d.deliveryType ?? s?.deliveryType ?? "",
+        siteFeatures: s?.features || "",
         siteClient: s?.client || "",
       };
     });
@@ -415,16 +723,15 @@ export default function Deliveries() {
   const filteredData = useMemo(() => {
     return joinedData.filter((d) => {
       if (workspaceStatus === "no-deliveries") return false;
+      if (workspaceStatus === "undated" && d.plannedDate) return false;
       if (workspaceStatus === "completed" && !d.actualDate) return false;
+      if (workspaceStatus === "closed" && d.workflowStatus !== "closed") return false;
+      if (workspaceStatus === "awaiting-approval" && !isDeliveryAwaitingApproval(d)) return false;
       if (workspaceStatus === "incomplete" && d.actualDate) return false;
+      if (workspaceStatus === "corrected-plan" && !hasCorrectedPlan(d)) return false;
       if (
-        workspaceStatus === "overdue-up-to-3" &&
-        !(d.lagDays !== null && d.lagDays > 0 && d.lagDays <= 3)
-      )
-        return false;
-      if (
-        workspaceStatus === "overdue-over-3" &&
-        !(d.lagDays !== null && d.lagDays > 3)
+        isOverdueBucketId(workspaceStatus) &&
+        !matchesOverdueBucket(d.lagDays, workspaceStatus)
       )
         return false;
       const searchValue = search.trim().toLocaleLowerCase("ru");
@@ -435,12 +742,17 @@ export default function Deliveries() {
           d.siteAddress,
           d.siteBranch,
           d.siteManager,
+          d.siteManagerContact,
           d.siteDeliveryType,
+          d.siteFeatures,
           d.driver,
           d.siteClient,
           d.plannedDate,
+          d.correctedPlannedDate,
           d.actualDate,
           d.lagDays,
+          d.logisticianNote,
+          d.note,
         ].some((value) =>
           String(value ?? "").toLocaleLowerCase("ru").includes(searchValue),
         )
@@ -448,18 +760,46 @@ export default function Deliveries() {
         return false;
       if (filters.siteName && d.siteName !== filters.siteName) return false;
       if (filters.address && d.siteAddress !== filters.address) return false;
-      if (filters.branch && d.siteBranch !== filters.branch) return false;
+      if (
+        !matchesBulkDeliveryScope(
+          d,
+          filters.branch,
+          filters.driver,
+        )
+      )
+        return false;
       if (filters.manager && d.siteManager !== filters.manager) return false;
       if (filters.deliveryType && d.siteDeliveryType !== filters.deliveryType)
         return false;
-      if (filters.driver && d.driver !== filters.driver) return false;
       if (filters.client && d.siteClient !== filters.client) return false;
-      if (filters.plannedDate && d.plannedDate !== filters.plannedDate) return false;
-      if (filters.actualDate && d.actualDate !== filters.actualDate) return false;
+      if (
+        filters.plannedDate &&
+        toDateInputValue(d.plannedDate) !== filters.plannedDate
+      )
+        return false;
+      if (
+        filters.correctedPlannedDate &&
+        toDateInputValue(d.correctedPlannedDate ?? null) !== filters.correctedPlannedDate
+      )
+        return false;
+      if (
+        filters.actualDate &&
+        toDateInputValue(d.actualDate) !== filters.actualDate
+      )
+        return false;
       if (filters.lagDays && String(d.lagDays) !== filters.lagDays) return false;
       return true;
     });
   }, [joinedData, filters, search, workspaceStatus]);
+
+  const scheduleFilteredData = useMemo(() => {
+    if (!scheduleDayFilter) return filteredData;
+
+    const dayStr = `${month}-${String(scheduleDayFilter.day).padStart(2, "0")}`;
+    return filteredData.filter((delivery) =>
+      matchesPlannedDeliveryDay(delivery, dayStr, scheduleDayFilter.status),
+    );
+  }, [filteredData, month, scheduleDayFilter]);
 
   const sitesWithoutDeliveries = useMemo(() => {
     if (workspaceStatus !== "no-deliveries") return [];
@@ -468,7 +808,7 @@ export default function Deliveries() {
 
     return (sites ?? [])
       .filter((site) => {
-        if (site.isClosed || deliverySiteIds.has(site.id)) return false;
+        if (site.isClosed || site.serviceMode === "additional_only" || deliverySiteIds.has(site.id)) return false;
         if (
           searchValue &&
           ![
@@ -476,6 +816,7 @@ export default function Deliveries() {
             site.address,
             site.branch,
             site.manager,
+            site.managerContact,
             site.deliveryType,
             site.driver,
             site.client,
@@ -486,34 +827,38 @@ export default function Deliveries() {
           return false;
         if (filters.siteName && site.name !== filters.siteName) return false;
         if (filters.address && site.address !== filters.address) return false;
-        if (filters.branch && site.branch !== filters.branch) return false;
+        if (
+          !matchesBulkDeliveryScope(
+            { siteBranch: site.branch, driverUserId: site.driverUserId },
+            filters.branch,
+            filters.driver,
+          )
+        )
+          return false;
         if (filters.manager && site.manager !== filters.manager) return false;
         if (
           filters.deliveryType &&
           site.deliveryType !== filters.deliveryType
         )
           return false;
-        if (filters.driver && site.driver !== filters.driver) return false;
         if (filters.client && site.client !== filters.client) return false;
-        if (filters.plannedDate || filters.actualDate || filters.lagDays)
+        if (filters.plannedDate || filters.correctedPlannedDate || filters.actualDate || filters.lagDays)
           return false;
         return true;
       })
       .sort((a, b) => a.name.localeCompare(b.name, "ru"));
   }, [filters, joinedData, search, sites, workspaceStatus]);
 
-  const overdueCounts = useMemo(
-    () => ({
-      upTo3: joinedData.filter(
-        (delivery) =>
-          delivery.lagDays !== null &&
-          delivery.lagDays > 0 &&
-          delivery.lagDays <= 3,
-      ).length,
-      over3: joinedData.filter(
-        (delivery) => delivery.lagDays !== null && delivery.lagDays > 3,
-      ).length,
-    }),
+  const overdueBuckets = useMemo(
+    () =>
+      createOverdueDeliveryBuckets(
+        joinedData,
+        joinedData.filter((delivery) => delivery.plannedDate).length,
+      ),
+    [joinedData],
+  );
+  const correctedPlanSummary = useMemo(
+    () => summarizeCorrectedPlans(joinedData),
     [joinedData],
   );
 
@@ -524,9 +869,18 @@ export default function Deliveries() {
     arr.sort((a, b) => {
       const valA = (a as any)[field] || "";
       const valB = (b as any)[field] || "";
-      if (typeof valA === "number" && typeof valB === "number")
-        return (valA - valB) * mult;
-      return String(valA).localeCompare(String(valB)) * mult;
+      const result =
+        typeof valA === "number" && typeof valB === "number"
+          ? (valA - valB) * mult
+          : String(valA).localeCompare(String(valB)) * mult;
+      if (result !== 0) return result;
+
+      // Keep a child immediately after its parent whenever the selected
+      // sort field leaves the two rows tied. Date/status filters still apply
+      // to each row independently.
+      if (a.parentDeliveryId === b.id) return 1;
+      if (b.parentDeliveryId === a.id) return -1;
+      return 0;
     });
     return arr;
   }, [filteredData, sortConfig]);
@@ -548,9 +902,6 @@ export default function Deliveries() {
       deliveryType: Array.from(
         new Set(joinedData.map((d) => d.siteDeliveryType).filter(Boolean))
       ).sort(),
-      driver: Array.from(
-        new Set(joinedData.map((d) => d.driver).filter(Boolean))
-      ).sort(),
       client: Array.from(
         new Set(joinedData.map((d) => d.siteClient).filter(Boolean))
       ).sort(),
@@ -571,12 +922,75 @@ export default function Deliveries() {
     };
   }, [joinedData]);
 
-  const invalidate = () => {
-    queryClient.invalidateQueries({ queryKey: getListDeliveriesQueryKey() });
-    queryClient.invalidateQueries({
-      queryKey: getGetDeliveryDashboardSummaryQueryKey(),
+  const selectedDriverLabel =
+    filters.driver === UNASSIGNED_DRIVER_FILTER
+      ? "Не назначен"
+      : drivers.find((driver) => driver.id === filters.driver)?.name ||
+        drivers.find((driver) => driver.id === filters.driver)?.email ||
+        joinedData.find((delivery) => delivery.driverUserId === filters.driver)
+          ?.driver ||
+        sites?.find((site) => site.driverUserId === filters.driver)?.driver ||
+        "";
+  const driverFilterOptions = useMemo(() => {
+    const labelsById = new Map<string, string>();
+    drivers.forEach((driver) =>
+      labelsById.set(driver.id, driver.name || driver.email),
+    );
+    joinedData.forEach((delivery) => {
+      if (delivery.driverUserId && !labelsById.has(delivery.driverUserId)) {
+        labelsById.set(
+          delivery.driverUserId,
+          delivery.driver || "Водитель без имени",
+        );
+      }
     });
+    (sites ?? []).forEach((site) => {
+      if (site.driverUserId && !labelsById.has(site.driverUserId)) {
+        labelsById.set(site.driverUserId, site.driver || "Водитель без имени");
+      }
+    });
+    return [
+      { value: UNASSIGNED_DRIVER_FILTER, label: "Не назначен" },
+      ...Array.from(labelsById, ([value, label]) => ({ value, label })).sort(
+        (left, right) => left.label.localeCompare(right.label, "ru"),
+      ),
+    ];
+  }, [drivers, joinedData, sites]);
+  const bulkFilterSelected = Boolean(filters.branch || filters.driver);
+  const bulkSourceRows =
+    activeTab === "schedule" ? scheduleFilteredData : filteredData;
+
+  function openBulkDialog() {
+    if (!bulkFilterSelected) return;
+    setBulkRows([...bulkSourceRows]);
+    setBulkDialogOpen(true);
+  }
+
+  const invalidate = () => {
+    invalidateDeliveryWorkspaceQueries(queryClient);
   };
+
+  const invalidateAfterAdditionalOrder = () => {
+    invalidate();
+    queryClient.invalidateQueries({ queryKey: getListOrdersQueryKey() });
+  };
+
+  const createDelivery = useCreateDelivery({
+    mutation: {
+      onSuccess: () => {
+        invalidate();
+        setGenerateOpen(false);
+        toast({ title: "Доставка добавлена" });
+      },
+      onError: (error) => {
+        toast({
+          title: "Не удалось добавить доставку",
+          description: error.message,
+          variant: "destructive",
+        });
+      },
+    },
+  });
 
   const createBulk = useCreateDeliveriesBulk({
     mutation: {
@@ -623,6 +1037,18 @@ export default function Deliveries() {
         invalidate();
       },
       onError: (error) => {
+        if (
+          handleAlreadyDeletedDelivery(error, {
+            invalidate,
+            closeStaleDialog: () => {
+              closeRescheduleDialog();
+              closeLogisticianNoteDialog();
+            },
+            notify: toast,
+          })
+        )
+          return;
+
         toast({
           title: "Ошибка",
           description: error.message,
@@ -640,6 +1066,15 @@ export default function Deliveries() {
         toast({ title: "Доставка перенесена" });
       },
       onError: (error) => {
+        if (
+          handleAlreadyDeletedDelivery(error, {
+            invalidate,
+            closeStaleDialog: closeRescheduleDialog,
+            notify: toast,
+          })
+        )
+          return;
+
         toast({
           title: "Ошибка",
           description: error.message,
@@ -654,12 +1089,51 @@ export default function Deliveries() {
       onSuccess: () => {
         invalidate();
         setDeleteTarget(null);
-        toast({ title: "Запись удалена" });
+        toast({
+          title: "Доставка перемещена в удалённые",
+          description: "Её можно вернуть во вкладке «Удалённые доставки».",
+        });
       },
       onError: (error) => {
+        if (
+          handleAlreadyDeletedDelivery(error, {
+            invalidate,
+            closeStaleDialog: () => setDeleteTarget(null),
+            notify: toast,
+          })
+        )
+          return;
+
         toast({
           title: "Ошибка",
           description: error.message,
+          variant: "destructive",
+        });
+      },
+    },
+  });
+
+  const restoreDelivery = useRestoreDelivery({
+    mutation: {
+      onSuccess: () => {
+        invalidate();
+        setRestoreTargetId(null);
+        setRestoreError(null);
+        toast({ title: "Доставка возвращена в график доставок" });
+      },
+      onError: (error: any) => {
+        invalidate();
+        setRestoreTargetId(null);
+        const isConflict = error?.status === 409;
+        const message = isConflict
+          ? "Доставка уже находится в архиве. Обновите список и повторите попытку, если это необходимо."
+          : error?.message || "Не удалось вернуть доставку в график.";
+        setRestoreError(message);
+        toast({
+          title: isConflict
+            ? "Доставка уже удалена"
+            : "Не удалось вернуть доставку",
+          description: message,
           variant: "destructive",
         });
       },
@@ -682,10 +1156,21 @@ export default function Deliveries() {
     },
   });
 
+  function submitImportedItems(
+    items: DeliveryImportItem[],
+    mode: DeliveryImportMode = importMode,
+  ) {
+    dispatchDeliveryImportByMode(items, mode, {
+      replace: setPendingReplacement,
+      add: (validItems) => createBulk.mutate({ data: { items: validItems } }),
+    });
+  }
+
   async function handleImportFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     e.target.value = "";
     if (!file) return;
+    setShowResumeImportHint(false);
 
     try {
       const headers = await readSheetHeaders(file);
@@ -700,83 +1185,26 @@ export default function Deliveries() {
       }
 
       const rows = await parseExcelFile(file);
-      const siteByName = new Map(
-        (sites ?? []).map((site) => [site.name.trim().toLowerCase(), site])
+      const { items, skippedRows } = buildDeliveryImportReview(
+        rows,
+        month,
+        sites ?? [],
+        drivers,
       );
 
-      const items: { siteId: string; driverUserId: string | null; plannedDate: string | null; scheduleMonth: string }[] =
-        [];
-      const missingSites: string[] = [];
-      const invalidDateRows: number[] = [];
-
-      for (const [index, row] of rows.entries()) {
-        const siteName = str(row["Объект"]);
-        const site = siteByName.get(siteName.toLowerCase());
-        if (!site) {
-          if (siteName) missingSites.push(siteName);
-          continue;
-        }
-
-        const dateResult = parseImportPlannedDate(row["Плановая дата"], month);
-        if (!dateResult.valid) {
-          invalidDateRows.push(index + 2);
-          continue;
-        }
-        const plannedDate = dateResult.date;
-
-        const matchedDriver = resolveImportDriver(
-          drivers,
-          str(row["Водитель"]),
-          str(row["Email водителя"]),
-        );
-        const driverUserId = matchedDriver?.id ?? site.driverUserId;
-        if (!driverUserId) {
-          throw new Error(
-            `Для объекта «${site.name}» не указан водитель из справочника пользователей-водителей`,
-          );
-        }
-        items.push({
-          siteId: site.id,
-          driverUserId,
-          plannedDate,
-          scheduleMonth: month,
-        });
-      }
-
-      if (items.length === 0) {
+      if (items.length === 0 && skippedRows.length === 0) {
         toast({
-          title:
-            invalidDateRows.length > 0
-              ? "В файле нет строк с корректной датой"
-              : "Файл пуст или объекты не найдены",
-          description:
-            invalidDateRows.length > 0
-              ? `Проверьте колонку «Плановая дата» в строках: ${invalidDateRows.slice(0, 20).join(", ")}${invalidDateRows.length > 20 ? ` и ещё ${invalidDateRows.length - 20}` : ""}`
-              : undefined,
+          title: "Файл пуст",
+          description: "В файле нет строк для загрузки.",
           variant: "destructive",
         });
         return;
       }
 
-      if (missingSites.length > 0) {
-        toast({
-          title: "Сначала добавьте новые объекты",
-          description: `Не найдены: ${missingSites.slice(0, 15).join(", ")}${missingSites.length > 15 ? ` и ещё ${missingSites.length - 15}` : ""}. Добавьте их вручную и повторите загрузку.`,
-          variant: "destructive",
-        });
-        return;
-      }
-      if (invalidDateRows.length > 0) {
-        toast({
-          title: `Пропущены строки с некорректной датой: ${invalidDateRows.length}`,
-          description: `Строки: ${invalidDateRows.slice(0, 20).join(", ")}${invalidDateRows.length > 20 ? ` и ещё ${invalidDateRows.length - 20}` : ""}. Остальные строки будут загружены.`,
-        });
-      }
-
-      if (importMode === "replace") {
-        setPendingReplacement(items);
+      if (skippedRows.length > 0) {
+        setPendingImportReview({ items, skippedRows });
       } else {
-        createBulk.mutate({ data: { items } });
+        submitImportedItems(items);
       }
     } catch (error) {
       toast({
@@ -787,17 +1215,87 @@ export default function Deliveries() {
     }
   }
 
+  function handleExportFacts() {
+    const rows = deliveryFactExportRows(deliveries ?? []);
+    exportRowsToExcel(
+      rows,
+      DELIVERY_FACT_HEADERS,
+      `факт-доставок-${month}.xlsx`,
+    );
+  }
+
+  async function handleImportFacts(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+
+    try {
+      const headers = await readSheetHeaders(file);
+      const missing = validateTemplateHeaders(headers, DELIVERY_FACT_HEADERS);
+      if (missing.length > 0) {
+        toast({
+          title: "Неверный формат файла",
+          description: `Не хватает колонок: ${missing.join(", ")}. Выгрузите шаблон факта и заполните колонку «Дата факта».`,
+          variant: "destructive",
+        });
+        return;
+      }
+
+      const fileRows = await parseExcelFile(file);
+      const { updates, unmatched } = buildDeliveryFactUpdates(
+        fileRows,
+        deliveries ?? [],
+      );
+      if (updates.length === 0) {
+        toast({
+          title: "Нет изменений",
+          description:
+            unmatched.length > 0
+              ? `Совпадений не найдено для: ${unmatched.slice(0, 5).join(", ")}${unmatched.length > 5 ? "…" : ""}`
+              : "В файле нет новых отметок «Дата факта».",
+        });
+        return;
+      }
+
+      setImportingFacts(true);
+      const result = await updateDeliveriesActualBulk({ items: updates });
+      invalidate();
+      const parts = [`Обновлено доставок: ${result.updated}`];
+      if (unmatched.length > 0) parts.push(`не найдено: ${unmatched.length}`);
+      toast({
+        title: "Факт за период загружен",
+        description: parts.join(", "),
+      });
+    } catch (error) {
+      toast({
+        title: "Не удалось загрузить факт",
+        description: error instanceof Error ? error.message : String(error),
+        variant: "destructive",
+      });
+    } finally {
+      setImportingFacts(false);
+    }
+  }
+
   function handleExport() {
+    if (activeTab === "drivers") {
+      exportDriverProgress(deliveries ?? [], drivers, month, formatMoscowDate());
+      return;
+    }
     const rows = sortedData.map((d) => ({
       Объект: d.siteName,
       Адрес: d.siteAddress,
       Куст: d.siteBranch,
-      Менеджер: d.siteManager,
+      Менеджер: [d.siteManager, d.siteManagerContact].filter(Boolean).join("\n"),
       Водитель: d.driver,
+      "Тип поставки": d.siteDeliveryType,
       "Email водителя": drivers.find((driver) => driver.id === d.driverUserId)?.email ?? "",
       "Плановая дата": d.plannedDate ? d.plannedDate.slice(0, 10) : "",
+      "ДатаПланКорр": d.correctedPlannedDate?.slice(0, 10) ?? "",
       "Фактическая дата": d.actualDate ? d.actualDate.slice(0, 10) : "",
       Отклонение: d.lagDays !== null ? d.lagDays : "",
+      "Примечание логиста": d.logisticianNote ?? "",
+      "Комментарий водителя": d.note ?? "",
     }));
     exportRowsToExcel(
       rows,
@@ -807,10 +1305,14 @@ export default function Deliveries() {
         "Куст",
         "Менеджер",
         "Водитель",
+        "Тип поставки",
         "Email водителя",
         "Плановая дата",
+        "ДатаПланКорр",
         "Фактическая дата",
         "Отклонение",
+        "Примечание логиста",
+        "Комментарий водителя",
       ],
       "рабочее-место-логиста.xlsx"
     );
@@ -819,35 +1321,7 @@ export default function Deliveries() {
   function openGenerateDialog() {
     const site = sites?.find((item) => !item.isClosed);
     if (!site) return;
-    setScheduleRows([
-      {
-        siteId: site.id,
-        siteName: site.name,
-        driverUserId: site.driverUserId ?? "",
-        plannedDate: null,
-      },
-    ]);
     setGenerateOpen(true);
-  }
-
-  function updateScheduleRow(siteId: string, patch: Partial<typeof scheduleRows[0]>) {
-    setScheduleRows((rows) =>
-      rows.map((row) => (row.siteId === siteId ? { ...row, ...patch } : row))
-    );
-  }
-
-  function handleGenerateSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    createBulk.mutate({
-      data: {
-        items: scheduleRows.map((row) => ({
-          siteId: row.siteId,
-          driverUserId: row.driverUserId || null,
-          plannedDate: row.plannedDate || null,
-          scheduleMonth: month,
-        })),
-      },
-    });
   }
 
   function handleActualDateChange(delivery: Delivery, value: string) {
@@ -857,11 +1331,55 @@ export default function Deliveries() {
     });
   }
 
+  function openDeliveryPhotos(delivery: Delivery, readOnly = false) {
+    setPhotosReadOnly(readOnly);
+    setPhotosDelivery(delivery);
+  }
+
+  function openArchivedDeliveryPhotos(delivery: Delivery) {
+    openDeliveryPhotos(delivery, true);
+  }
+
+  function requestRestore(delivery: Delivery) {
+    if (restoreDelivery.isPending) return;
+    setRestoreError(null);
+    setRestoreTargetId(delivery.id);
+    restoreDelivery.mutate({ id: delivery.id });
+  }
+
   function handleDriverChange(delivery: Delivery, driverUserId: string | null) {
     updateDelivery.mutate({
       id: delivery.id,
       data: { driverUserId },
     });
+  }
+
+  function openLogisticianNoteDialog(delivery: Delivery) {
+    if (!canEditLogisticianNote) return;
+    setLogisticianNoteTarget(delivery);
+    setLogisticianNoteDraft(delivery.logisticianNote ?? "");
+  }
+
+  function closeLogisticianNoteDialog() {
+    setLogisticianNoteTarget(null);
+    setLogisticianNoteDraft("");
+  }
+
+  function handleLogisticianNoteSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!logisticianNoteTarget) return;
+    updateDelivery.mutate(
+      {
+        id: logisticianNoteTarget.id,
+        data: { logisticianNote: logisticianNoteDraft.trim() || null },
+      },
+      {
+        onSuccess: () => {
+          closeLogisticianNoteDialog();
+          toast({ title: "Примечание сохранено" });
+        },
+      },
+    );
   }
 
   function openDriverChangeDialog(delivery: Delivery) {
@@ -925,62 +1443,34 @@ export default function Deliveries() {
   ).getDate();
   const days = Array.from({ length: daysInMonth }, (_, i) => i + 1);
 
-  const matrixRows = useMemo(() => {
-    const map = new Map<
-      string,
-      {
-        key: string;
-        siteId: string;
-        siteName: string;
-        driver: string;
-        client: string;
-        deliveries: JoinedDelivery[];
-      }
-    >();
-    for (const d of filteredData) {
-      if (!d.plannedDate) continue;
-      const key = `${d.siteId}-${d.driver}`;
-      if (!map.has(key)) {
-        map.set(key, {
-          key,
-          siteId: d.siteId,
-          siteName: d.siteName,
-          driver: d.driver,
-          client: d.siteClient,
-          deliveries: [],
-        });
-      }
-      map.get(key)!.deliveries.push(d);
-    }
-    return Array.from(map.values()).sort((a, b) =>
-      a.siteName.localeCompare(b.siteName)
-    );
-  }, [filteredData]);
+  const matrixRows = useMemo<AdditionalOrderMatrixRow<JoinedDelivery>[]>(() => {
+    return buildAdditionalOrderMatrixRows(scheduleFilteredData);
+  }, [scheduleFilteredData]);
 
-  const undatedDeliveries = useMemo(() => {
-    return filteredData.filter((d) => !d.plannedDate);
-  }, [filteredData]);
   const undatedCount = useMemo(
     () => joinedData.filter((d) => !d.plannedDate).length,
     [joinedData],
   );
 
-  function showUndatedDeliveries() {
-    setActiveTab("schedule");
-    window.setTimeout(() => {
-      undatedSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-    }, 0);
-  }
-
+  const [summaryToday, setSummaryToday] = useState(formatMoscowDate);
   useEffect(() => {
-    if (
-      initialParams.get("view") === "undated" &&
-      deliveries &&
-      undatedCount > 0
-    ) {
-      showUndatedDeliveries();
-    }
-  }, [deliveries, initialParams, undatedCount]);
+    const refreshDay = () => setSummaryToday(formatMoscowDate());
+    const timer = window.setInterval(refreshDay, 60_000);
+    window.addEventListener("focus", refreshDay);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", refreshDay);
+    };
+  }, []);
+  const deliverySummary = useMemo(
+    () => getDeliveryProgress(joinedData, month, summaryToday),
+    [joinedData, month, summaryToday],
+  );
+
+  function showUndatedDeliveries() {
+    setActiveTab("workspace");
+    setWorkspaceStatus((status) => (status === "undated" ? null : "undated"));
+  }
 
   const workspaceTotal = sortedData.length + sitesWithoutDeliveries.length;
   const workspaceStart = (workspacePage - 1) * TABLE_PAGE_SIZE;
@@ -1015,47 +1505,150 @@ export default function Deliveries() {
     filters.driver,
     filters.client,
     filters.plannedDate,
+    filters.correctedPlannedDate,
     filters.actualDate,
+    scheduleDayFilter,
   ]);
+
+  useEffect(() => {
+    if (!canViewArchivedDeliveries && activeTab === "archived") {
+      setActiveTab("workspace");
+    }
+  }, [activeTab, canViewArchivedDeliveries]);
+
+  useEffect(() => {
+    setScheduleDayFilter(null);
+    // Row actions belong to the month in which they were opened. Do not leave
+    // an old-month command available while the next month's query is pending.
+    setDeleteTarget(null);
+    setPhotosDelivery(null);
+    setRescheduleDeliveryTarget(null);
+    setDriverChangeTarget(null);
+    setLogisticianNoteTarget(null);
+    setDriverCommentTarget(null);
+    setAdditionalOrderTarget(null);
+    setBulkDialogOpen(false);
+    setBulkRows([]);
+  }, [month]);
+
+  useEffect(() => {
+    const workspacePages = Math.max(
+      1,
+      Math.ceil(workspaceTotal / TABLE_PAGE_SIZE),
+    );
+    const schedulePages = Math.max(
+      1,
+      Math.ceil(matrixRows.length / TABLE_PAGE_SIZE),
+    );
+    setWorkspacePage((page) => Math.min(page, workspacePages));
+    setSchedulePage((page) => Math.min(page, schedulePages));
+  }, [
+    matrixRows.length,
+    schedulePage,
+    workspacePage,
+    workspaceTotal,
+  ]);
+
+  function toggleScheduleDayFilter(
+    day: number,
+    status: ScheduleDayFilter["status"],
+  ) {
+    setScheduleDayFilter((current) =>
+      current?.day === day && current.status === status
+        ? null
+        : { day, status },
+    );
+  }
 
   const dayTotals = useMemo(() => {
     return Array.from({ length: daysInMonth }, (_, i) => {
       const dayStr = `${month}-${String(i + 1).padStart(2, "0")}`;
-      let plan = 0,
-        done = 0,
-        closed = 0,
-        failed = 0;
-      filteredData.forEach((d) => {
-        if (toDateInputValue(d.plannedDate) === dayStr) {
-          plan++;
-          if (!d.actualDate) failed++;
-        }
-        if (d.actualDate && toDateInputValue(d.actualDate) === dayStr) {
-          if (d.photosCount === 0) done++;
-          else closed++;
-        }
-      });
-      return { plan, done, closed, failed };
+      return getPlannedDayTotals(filteredData, dayStr);
     });
   }, [filteredData, month, daysInMonth]);
 
+  const activeFilterCount =
+    Object.values(filters).filter(Boolean).length + (workspaceStatus ? 1 : 0);
+  const isListTab = activeTab === "workspace" || activeTab === "schedule";
+  const compactTop = topPanelCollapsed && isListTab;
+  const activeTabLabel =
+    activeTab === "schedule" ? "График доставок" : "Логистика";
+
   return (
-    <div className="flex flex-col h-[calc(100vh-4rem)] space-y-4">
+    <div className="flex flex-col h-[calc(100vh-4rem)] gap-2">
+      {isAdmin && showResumeImportHint && (
+        <div
+          className="flex shrink-0 flex-wrap items-center justify-between gap-3 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950"
+          data-testid="delivery-import-resume-hint"
+        >
+          <div>
+            <div className="font-semibold">Повторите импорт доставок</div>
+            <div>
+              После добавления объектов повторно выберите исходный Excel-файл.
+              Старый файл не загружается частично.
+            </div>
+          </div>
+          <Button
+            type="button"
+            size="sm"
+            onClick={() => {
+              setImportMode(resumeImportMode);
+              fileInputRef.current?.click();
+            }}
+            data-testid="button-resume-delivery-import"
+          >
+            <Upload className="mr-2 h-4 w-4" />
+            Выбрать Excel-файл
+          </Button>
+        </div>
+      )}
+      {compactTop && (
+        <div
+          className="flex shrink-0 flex-wrap items-center gap-2 rounded-md border bg-muted/30 px-2 py-1 text-xs"
+          data-testid="deliveries-compact-top"
+        >
+          <span className="font-bold text-foreground">Доставки</span>
+          <span className="text-muted-foreground">
+            {formatMonthLabel(month)} · {activeTabLabel}
+          </span>
+          {activeTab === "workspace" && activeFilterCount > 0 && (
+            <Badge variant="secondary" data-testid="badge-compact-active-filters">
+              Фильтры: {activeFilterCount}
+            </Badge>
+          )}
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="ml-auto h-7 px-2 text-xs"
+            onClick={() => setTopPanelCollapsed(false)}
+            aria-expanded={false}
+            data-testid="button-expand-deliveries-top"
+          >
+            <ChevronDown className="mr-1 h-4 w-4" />
+            Показать панель
+          </Button>
+        </div>
+      )}
       {/* Header */}
-      <div className="flex items-center justify-between shrink-0">
+      <div className={cn("flex shrink-0 flex-wrap items-center gap-1.5 [&_button]:h-8 [&_select]:h-8 [&_input]:h-8 [&>button]:px-2 [&>button]:text-xs [&>button>svg]:mr-1", compactTop && "hidden")}>
         <h1
-          className="text-2xl font-bold text-foreground"
+          className="mr-2 shrink-0 text-xl font-bold text-foreground"
           data-testid="text-page-title"
         >
           Доставки
         </h1>
-        <div className="flex items-center gap-2 flex-wrap justify-end">
-          {undatedCount > 0 && (
+          {activeTab !== "archived" && undatedCount > 0 && (
             <Button
               type="button"
               variant="outline"
               onClick={showUndatedDeliveries}
-              className="border-amber-500 bg-amber-50 text-amber-800 hover:bg-amber-100 hover:text-amber-900"
+              className={cn(
+                "border-amber-500 bg-amber-50 text-amber-800 hover:bg-amber-100 hover:text-amber-900",
+                activeTab === "workspace" &&
+                  workspaceStatus === "undated" &&
+                  "bg-amber-500 text-white hover:bg-amber-600 hover:text-white",
+              )}
               data-testid="button-undated-deliveries"
             >
               <CalendarClock className="h-4 w-4 mr-2" />
@@ -1065,21 +1658,9 @@ export default function Deliveries() {
               </Badge>
             </Button>
           )}
-          <label className="relative flex h-9 min-w-[150px] cursor-pointer items-center rounded-md border bg-card px-3 text-sm font-medium shadow-sm focus-within:ring-1 focus-within:ring-primary">
-            <span>{formatMonthLabel(month)}</span>
-            <input
-              type="month"
-              value={month}
-              onChange={(e) => {
-                if (e.target.value) setMonth(e.target.value);
-              }}
-              className="absolute inset-0 cursor-pointer opacity-0"
-              aria-label="Выбрать месяц"
-              data-testid="input-month-selector"
-            />
-          </label>
+          <DeliveryMonthSelector value={month} onChange={setMonth} />
 
-          {canEditDeliveries && (
+          {isAdmin && (
             <input
               ref={fileInputRef}
               type="file"
@@ -1089,30 +1670,55 @@ export default function Deliveries() {
               data-testid="input-import-deliveries"
             />
           )}
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-9"
-            onClick={() =>
-              downloadTemplate(
-                TEMPLATE_HEADERS,
-                "шаблон-график-доставок.xlsx",
-                [{
-                  name: "Справочник водителей",
-                  headers: ["Водитель", "Email"],
-                  rows: drivers.map((driver) => ({
-                    Водитель: driver.name || driver.email,
-                    Email: driver.email,
-                  })),
-                }],
-              )
-            }
-            data-testid="button-download-template"
-          >
-            <FileDown className="h-4 w-4 mr-2" />
-            Шаблон
-          </Button>
-          {canEditDeliveries && (
+          {isAdmin && (
+            <input
+              ref={factFileInputRef}
+              type="file"
+              accept=".xlsx,.xls,.csv"
+              className="hidden"
+              onChange={handleImportFacts}
+              data-testid="input-import-delivery-facts"
+            />
+          )}
+          {isAdmin && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-9"
+              disabled={!sites || sitesLoading || sitesFetching || sitesError || driversLoading || driversError || drivers.length === 0 || sites.length === 0}
+              onClick={() => {
+                if (!sites || sitesLoading || sitesFetching || sitesError || driversLoading || driversError || !drivers.length || !sites.length) return;
+                try {
+                  downloadTemplate(TEMPLATE_HEADERS, "шаблон-график-доставок.xlsx", [
+                    {
+                      name: "Справочник объектов",
+                      headers: ["Объект"],
+                      rows: getDeliverySiteOptions(sites).map((site) => ({ Объект: site.label })),
+                      dropdownForHeader: "Объект",
+                      dropdownError: "Выберите объект из выпадающего списка.",
+                      allowBlank: false,
+                      hidden: true,
+                    },
+                    {
+                      name: "Справочник водителей",
+                      headers: ["Водитель"],
+                      rows: getImportDriverOptions(drivers).map((driver) => ({ Водитель: driver.label })),
+                      dropdownForHeader: "Водитель",
+                      dropdownError: "Выберите водителя из выпадающего списка.",
+                      hidden: true,
+                    },
+                  ]);
+                } catch (error) {
+                  toast({ title: "Не удалось скачать шаблон", description: error instanceof Error ? error.message : String(error), variant: "destructive" });
+                }
+              }}
+              data-testid="button-download-template"
+            >
+              <FileDown className="h-4 w-4 mr-2" />
+              Шаблон
+            </Button>
+          )}
+          {isAdmin && (
             <Button
               variant="outline"
               size="sm"
@@ -1136,7 +1742,7 @@ export default function Deliveries() {
               Загрузить заново
             </Button>
           )}
-          {canEditDeliveries && (
+          {isAdmin && (
             <Button
               variant="outline"
               size="sm"
@@ -1152,16 +1758,57 @@ export default function Deliveries() {
               Добавить из файла
             </Button>
           )}
+          {isAdmin && <ScheduleExcelUpdate month={month} />}
           <Button
             variant="outline"
             size="sm"
             className="h-9"
             onClick={handleExport}
+            disabled={activeTab === "drivers" && (deliveriesLoading || deliveriesFetching || driversLoading || deliveriesError || driversError || deliveries === undefined)}
             data-testid="button-export-deliveries"
           >
             <Download className="h-4 w-4 mr-2" />
-            Выгрузить
+            {activeTab === "drivers" ? "Сводка водителей в Excel" : "Выгрузить"}
           </Button>
+          {canApproveDeliveryActs && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-9"
+              onClick={openActsExportDialog}
+              data-testid="button-export-delivery-acts"
+            >
+              <FileDown className="mr-2 h-4 w-4" />
+              Выгрузить акты за период
+            </Button>
+          )}
+          {isAdmin && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-9"
+              onClick={handleExportFacts}
+              disabled={!deliveries?.some((delivery) => delivery.plannedDate)}
+              title="Выгрузить все датированные доставки выбранного месяца для заполнения факта"
+              data-testid="button-export-delivery-facts"
+            >
+              <FileDown className="h-4 w-4 mr-2" />
+              Шаблон факта
+            </Button>
+          )}
+          {isAdmin && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-9"
+              onClick={() => factFileInputRef.current?.click()}
+              disabled={importingFacts}
+              data-testid="button-import-delivery-facts"
+            >
+              <Upload className="h-4 w-4 mr-2" />
+              {importingFacts ? "Загрузка..." : "Загрузить факт"}
+            </Button>
+          )}
           {canEditDeliveries && (
             <Button
               variant="outline"
@@ -1173,7 +1820,7 @@ export default function Deliveries() {
               Развоз за день
             </Button>
           )}
-          {canEditDeliveries && (
+          {isAdmin && (
             <Button
               variant="outline"
               size="sm"
@@ -1196,11 +1843,10 @@ export default function Deliveries() {
               Добавить доставку
             </Button>
           )}
-        </div>
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-4 border-b shrink-0">
+      <div className={cn("flex flex-wrap gap-1 border-b shrink-0 md:gap-2 [&>button]:px-3 [&>button]:py-1.5", compactTop && "hidden")}>
         <button
           className={cn(
             "px-4 py-2 border-b-2 font-medium transition-colors outline-none",
@@ -1211,7 +1857,19 @@ export default function Deliveries() {
           onClick={() => setActiveTab("workspace")}
           data-testid="tab-workspace"
         >
-          Рабочее место логиста
+          ЛОГИСТИКА
+        </button>
+        <button
+          className={cn(
+            "px-4 py-2 border-b-2 font-medium transition-colors outline-none",
+            activeTab === "drivers"
+              ? "border-primary text-primary"
+              : "border-transparent text-muted-foreground hover:text-foreground hover:border-border"
+          )}
+          onClick={() => setActiveTab("drivers")}
+          data-testid="tab-driver-summary"
+        >
+          Сводка по водителям
         </button>
         <button
           className={cn(
@@ -1225,12 +1883,171 @@ export default function Deliveries() {
         >
           График доставок
         </button>
+        {canViewArchivedDeliveries && (
+          <button
+            className={cn(
+              "px-4 py-2 border-b-2 font-medium transition-colors outline-none",
+              activeTab === "archived"
+                ? "border-primary text-primary"
+                : "border-transparent text-muted-foreground hover:text-foreground hover:border-border",
+            )}
+            onClick={() => setActiveTab("archived")}
+            data-testid="tab-archived-deliveries"
+          >
+            Удалённые доставки
+          </button>
+        )}
+        {isListTab && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="ml-auto h-8 self-center px-2 text-xs text-muted-foreground"
+            onClick={() => setTopPanelCollapsed(true)}
+            aria-expanded={true}
+            data-testid="button-collapse-deliveries-top"
+          >
+            <ChevronUp className="mr-1 h-4 w-4" />
+            Свернуть панель
+          </Button>
+        )}
       </div>
 
+      {activeTab !== "drivers" &&
+        activeTab !== "archived" &&
+        hasMainData &&
+        !compactTop && (
+        <DeliveryProgressSummary summary={deliverySummary} />
+      )}
+
+      {(activeTab === "workspace" || activeTab === "schedule") &&
+        mainDataInitialLoading &&
+        !mainDataUnavailable && (
+          <div
+            role="status"
+            className="flex flex-1 items-center justify-center rounded-md border bg-background p-6 text-sm text-muted-foreground"
+            data-testid="deliveries-main-loading"
+          >
+            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            Загружаем доставки…
+          </div>
+        )}
+
+      {(activeTab === "workspace" || activeTab === "schedule") &&
+        mainDataUnavailable && (
+          <div
+            role="alert"
+            className="rounded-md border border-destructive/30 bg-destructive/5 p-6 text-center"
+            data-testid="deliveries-main-error"
+          >
+            <p className="font-medium">Не удалось загрузить доставки</p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Проверьте соединение и повторите попытку.
+            </p>
+            <Button
+              type="button"
+              variant="outline"
+              className="mt-4"
+              onClick={() => {
+                void refetchDeliveries();
+                void refetchSites();
+              }}
+              data-testid="button-retry-deliveries-main"
+            >
+              Повторить
+            </Button>
+          </div>
+        )}
+
+      {(activeTab === "workspace" || activeTab === "schedule") &&
+        mainDataUpdating && (
+          <div
+            role="status"
+            aria-live="polite"
+            className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground"
+            data-testid="deliveries-main-updating"
+          >
+            <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+            Обновляем данные…
+          </div>
+        )}
+
+      {(activeTab === "workspace" || activeTab === "schedule") &&
+        mainDataUpdateError &&
+        !mainDataUpdating && (
+          <div
+            role="alert"
+            className="shrink-0 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-950"
+            data-testid="deliveries-main-stale-warning"
+          >
+            Не удалось обновить данные. Показана последняя загруженная версия.
+          </div>
+        )}
+
+      {activeTab === "drivers" && (
+        <DriverSummarySheet
+          rows={driverSummaryRows}
+          month={month}
+          isLoading={deliveriesLoading || driversLoading}
+          isError={deliveriesError || driversError}
+          onRetry={() => {
+            void refetchDeliveries();
+            void refetchDrivers();
+          }}
+        />
+      )}
+
+      {activeTab === "archived" && canViewArchivedDeliveries && (
+        <ArchivedDeliveriesPanel
+          data={archivedDeliveries ?? []}
+          search={search}
+          onSearchChange={setSearch}
+          isLoading={archivedDeliveriesLoading}
+          isError={archivedDeliveriesError}
+          onRetry={() => {
+            void refetchArchivedDeliveries();
+          }}
+          onOpenPhotos={openArchivedDeliveryPhotos}
+          onRestore={requestRestore}
+          restorePendingId={restoreTargetId}
+          restoreError={restoreError}
+          onDismissRestoreError={() => setRestoreError(null)}
+        />
+      )}
+
       {/* Workspace Tab */}
-      {activeTab === "workspace" && (
-        <div className="flex-1 flex flex-col min-h-0">
-          <div className="flex flex-wrap items-center gap-2 mb-3 bg-muted/30 p-2 rounded-md border shrink-0">
+      {activeTab === "workspace" &&
+        hasMainData && (
+        <div className="flex-1 flex w-full min-w-0 flex-col min-h-0">
+          {hasSimplifiedMobileDeliveryView && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className={cn("mb-2 h-9 w-full justify-between md:hidden", compactTop && "!hidden")}
+              onClick={() => setMobileFiltersOpen((open) => !open)}
+              aria-expanded={mobileFiltersOpen}
+              data-testid="button-toggle-mobile-delivery-filters"
+            >
+              <span className="flex items-center gap-2">
+                <SlidersHorizontal className="h-4 w-4" />
+                Фильтры
+              </span>
+              <Badge variant="secondary">
+                {Object.values(filters).filter(Boolean).length +
+                  (workspaceStatus ? 1 : 0)}
+              </Badge>
+            </Button>
+          )}
+          <div
+            className={cn(
+              "flex flex-wrap items-center gap-2 mb-3 bg-muted/30 p-2 rounded-md border shrink-0",
+              hasSimplifiedMobileDeliveryView &&
+                !mobileFiltersOpen &&
+                "hidden md:flex",
+              compactTop && "!hidden",
+            )}
+          >
             <Button
               type="button"
               variant="outline"
@@ -1272,6 +2089,48 @@ export default function Deliveries() {
               variant="outline"
               size="sm"
               className={cn(
+                "h-8 border-emerald-400 bg-emerald-100 text-emerald-900 hover:bg-emerald-200",
+                workspaceStatus === "closed" &&
+                  "bg-emerald-600 text-white hover:bg-emerald-700",
+              )}
+              onClick={() =>
+                setWorkspaceStatus((status) =>
+                  status === "closed" ? null : "closed",
+                )
+              }
+              aria-pressed={workspaceStatus === "closed"}
+              data-testid="button-filter-closed"
+            >
+              Закрыто
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className={cn(
+                "h-8 border-blue-600 bg-blue-600 text-white hover:bg-blue-700 hover:text-white",
+                workspaceStatus === "awaiting-approval" &&
+                  "border-blue-800 bg-blue-800 text-white hover:bg-blue-900",
+              )}
+              onClick={() => {
+                if (workspaceStatus !== "awaiting-approval") {
+                  setSortConfig({ field: "actualDate", dir: "asc" });
+                }
+                setWorkspaceStatus((status) =>
+                  status === "awaiting-approval" ? null : "awaiting-approval",
+                );
+              }}
+              aria-pressed={workspaceStatus === "awaiting-approval"}
+              title="Доставки с загруженными, но ещё не подтверждёнными актами"
+              data-testid="button-filter-awaiting-approval"
+            >
+              Проверить акты
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className={cn(
                 "h-8 border-rose-400 bg-rose-100 text-rose-900 hover:bg-rose-200",
                 workspaceStatus === "incomplete" &&
                   "bg-rose-600 text-white hover:bg-rose-700",
@@ -1285,48 +2144,59 @@ export default function Deliveries() {
             >
               Не выполнено
             </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className={cn(
+                "h-8",
+                workspaceStatus === "corrected-plan" &&
+                  "border-primary bg-primary/10 text-primary",
+              )}
+              aria-pressed={workspaceStatus === "corrected-plan"}
+              title="Строки с корректировкой и их доля от всех строк с плановой датой за выбранный месяц"
+              onClick={() =>
+                setWorkspaceStatus((status) =>
+                  status === "corrected-plan" ? null : "corrected-plan",
+                )
+              }
+              data-testid="button-filter-corrected-plan"
+            >
+              План корректировка: {correctedPlanSummary.count} ({correctedPlanSummary.percent.toLocaleString("ru-RU", { maximumFractionDigits: 1 })}%)
+            </Button>
             <div className="flex items-center gap-2 border-l-2 border-red-300 pl-3">
               <span className="text-[11px] font-bold uppercase tracking-wide text-red-700">
                 Проблемы
               </span>
-              <Button
-                type="button"
-                size="sm"
-                className={cn(
-                  "h-8 border border-orange-700 bg-orange-600 font-bold text-white shadow-md hover:bg-orange-700",
-                  workspaceStatus === "overdue-up-to-3" &&
-                    "ring-2 ring-orange-800 ring-offset-2",
-                )}
-                onClick={() =>
-                  setWorkspaceStatus((status) =>
-                    status === "overdue-up-to-3" ? null : "overdue-up-to-3",
-                  )
-                }
-                data-testid="button-filter-overdue-up-to-3"
-              >
-                <AlertTriangle className="mr-1.5 h-4 w-4" />
-                Просрочено до 3 дней: {overdueCounts.upTo3}
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                className={cn(
-                  "h-8 border border-red-900 bg-red-700 font-bold text-white shadow-md hover:bg-red-800",
-                  workspaceStatus === "overdue-over-3" &&
-                    "ring-2 ring-red-950 ring-offset-2",
-                )}
-                onClick={() =>
-                  setWorkspaceStatus((status) =>
-                    status === "overdue-over-3" ? null : "overdue-over-3",
-                  )
-                }
-                data-testid="button-filter-overdue-over-3"
-              >
-                <AlertTriangle className="mr-1.5 h-4 w-4" />
-                Просрочено более 3 дней: {overdueCounts.over3}
-              </Button>
+              {overdueBuckets.map((bucket, index) => (
+                <Button
+                  key={bucket.id}
+                  type="button"
+                  size="sm"
+                  className={cn(
+                    "h-8 border font-bold text-white shadow-md",
+                    index === 0 &&
+                      "border-orange-700 bg-orange-600 hover:bg-orange-700",
+                    index === 1 &&
+                      "border-red-800 bg-red-700 hover:bg-red-800",
+                    index === 2 &&
+                      "border-red-950 bg-red-900 hover:bg-red-950",
+                    workspaceStatus === bucket.id &&
+                      "ring-2 ring-red-950 ring-offset-2",
+                  )}
+                  onClick={() =>
+                    setWorkspaceStatus((status) =>
+                      status === bucket.id ? null : bucket.id,
+                    )
+                  }
+                  data-testid={`button-filter-${bucket.id}`}
+                >
+                  <AlertTriangle className="mr-1.5 h-4 w-4" />
+                  {bucket.label}: {bucket.count}
+                </Button>
+              ))}
             </div>
-            <div className="flex w-full flex-nowrap items-center gap-2 overflow-x-auto pb-1">
+            <div className="flex w-full flex-wrap items-center gap-2 pb-1">
             <FilterSelect
               label="Объект"
               value={filters.siteName}
@@ -1362,25 +2232,30 @@ export default function Deliveries() {
               options={filterOptions.deliveryType}
               testId="filter-deliveryType"
             />
-            <FilterSelect
-              label="Водитель"
+            <DriverFilterSelect
               value={filters.driver}
               onChange={(v) => setFilters((f) => ({ ...f, driver: v }))}
-              options={filterOptions.driver}
+              options={driverFilterOptions}
               testId="filter-driver"
             />
-            <FilterSelect
-              label="ПланДата"
+            <DateFilter
+              label="План дата"
               value={filters.plannedDate}
+              month={month}
               onChange={(v) => setFilters((f) => ({ ...f, plannedDate: v }))}
-              options={filterOptions.plannedDate}
               testId="filter-plannedDate"
             />
-            <FilterSelect
-              label="ФактДата"
+            <DateFilter
+              label="План дата коррект"
+              value={filters.correctedPlannedDate}
+              onChange={(v) => setFilters((f) => ({ ...f, correctedPlannedDate: v }))}
+              testId="filter-correctedPlannedDate"
+            />
+            <DateFilter
+              label="Факт дата"
               value={filters.actualDate}
+              month={month}
               onChange={(v) => setFilters((f) => ({ ...f, actualDate: v }))}
-              options={filterOptions.actualDate}
               testId="filter-actualDate"
             />
             <FilterSelect
@@ -1390,6 +2265,26 @@ export default function Deliveries() {
               options={filterOptions.lagDays}
               testId="filter-lagDays"
             />
+            {canEditDeliveries && (
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-8"
+                  disabled={!bulkFilterSelected}
+                  onClick={openBulkDialog}
+                  data-testid="button-bulk-edit-deliveries"
+                >
+                  Массово изменить
+                </Button>
+                {!bulkFilterSelected && (
+                  <span className="max-w-[260px] text-xs text-muted-foreground">
+                    Для массового изменения выберите куст или водителя.
+                  </span>
+                )}
+              </div>
+            )}
             {Object.values(filters).some(Boolean) && (
               <Button
                 variant="ghost"
@@ -1405,6 +2300,7 @@ export default function Deliveries() {
                     driver: "",
                     client: "",
                     plannedDate: "",
+                    correctedPlannedDate: "",
                     actualDate: "",
                     lagDays: "",
                   })
@@ -1433,25 +2329,106 @@ export default function Deliveries() {
             </Badge>
           </div>
 
-          <div className="flex-1 overflow-auto border rounded-md relative bg-background">
-            <table className="w-[1250px] table-fixed text-sm text-left border-collapse">
+          {hasSimplifiedMobileDeliveryView && (
+            <div className="md:hidden flex flex-col flex-1 min-h-0">
+              {isLogisticianRole(user?.role) && canEditDeliveries ? (
+                <div className="flex-1 overflow-y-auto px-1 py-1 min-h-0">
+                  {visibleSortedData.length === 0 && visibleSitesWithoutDeliveries.length === 0 && (
+                    <p className="p-6 text-center text-muted-foreground">Нет данных для отображения</p>
+                  )}
+                  {visibleSortedData.map((delivery) => (
+                    <MobileLogisticianCard
+                      key={delivery.id}
+                      delivery={delivery}
+                      month={month}
+                      onUpdateActualDate={async (id, date) => {
+                        await updateDelivery.mutateAsync({ id, data: { actualDate: date || null }});
+                        toast({ title: date ? "Факт доставки сохранён" : "Фактическая дата очищена" });
+                      }}
+                      onOpenPhotos={(d) => openDeliveryPhotos(d)}
+                      onOpenDriverComment={(d) => setDriverCommentTarget(d)}
+                      onDelete={
+                        canEditDeliveries
+                          ? (d) => setDeleteTarget(d)
+                          : undefined
+                      }
+                      onAddAdditionalOrder={
+                        canEditDeliveries && !isAdditionalDelivery(delivery)
+                          ? (d) => setAdditionalOrderTarget(d)
+                          : undefined
+                      }
+                      canViewOrders={canViewOrders}
+                    />
+                  ))}
+                  {visibleSitesWithoutDeliveries.length > 0 && (
+                    <div className="mt-4 pt-2 border-t">
+                      <h4 className="text-sm font-medium text-muted-foreground mb-2 px-1">Объекты без доставок</h4>
+                      <MobileManagerTable
+                        data={[]}
+                        sitesWithoutDeliveries={visibleSitesWithoutDeliveries}
+                        canEditCorrectedPlan={canEditCorrectedPlan}
+                        setDriverCommentTarget={setDriverCommentTarget}
+                        mobileDateFormat={mobileDateFormat}
+                        CorrectedPlanDateCell={CorrectedPlanDateCell}
+                      />
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <MobileManagerTable
+                  data={visibleSortedData}
+                  sitesWithoutDeliveries={visibleSitesWithoutDeliveries}
+                  canEditCorrectedPlan={canEditCorrectedPlan}
+                  setDriverCommentTarget={setDriverCommentTarget}
+                  mobileDateFormat={mobileDateFormat}
+                  CorrectedPlanDateCell={CorrectedPlanDateCell}
+                />
+              )}
+            </div>
+          )}
+
+          <div
+            className={cn(
+              "relative flex-1 w-full min-w-0 overflow-auto rounded-md border bg-background",
+              hasSimplifiedMobileDeliveryView && "hidden md:block",
+            )}
+          >
+            <table className="w-full min-w-[2100px] table-fixed border-collapse text-left text-sm">
               <colgroup>
-                <col className="w-[110px]" />
-                <col className="w-[165px]" />
+                <col className="w-[155px]" />
+                <col className="w-[175px]" />
                 <col className="w-[120px]" />
-                <col className="w-[100px]" />
-                <col className="w-[240px]" />
-                <col className="w-[80px]" />
-                <col className="w-[135px]" />
-                <col className="w-[100px]" />
-                <col className="w-[145px]" />
-                <col className="w-[55px]" />
+                <col className="w-[310px]" />
+                <col className="w-[120px]" />
+                <col className="w-[150px]" />
+                <col className="w-[235px]" />
+                <col className="w-[130px]" />
+                <col className="w-[210px]" />
+                <col className="w-[170px]" />
+                <col className="w-[170px]" />
+                <col className="w-[170px]" />
+                <col className="w-[95px]" />
+                <col className="w-[60px]" />
               </colgroup>
-              <thead className="sticky top-0 z-30 shadow-[0_1px_0_0_var(--color-border)] bg-muted">
+              <thead className="sticky top-0 z-30 border-b-2 border-slate-400 bg-slate-200 text-slate-900 shadow-sm dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100">
                 <tr>
                   <SortHeader
                     label="Объект"
                     field="siteName"
+                    sortConfig={sortConfig}
+                    onSort={handleSort}
+                    className="sticky left-0 z-40 bg-slate-200 font-bold shadow-[1px_0_0_0_var(--color-border)] hover:bg-slate-300 dark:bg-slate-800 dark:hover:bg-slate-700"
+                  />
+                  <SortHeader
+                    label="Водитель"
+                    field="driver"
+                    sortConfig={sortConfig}
+                    onSort={handleSort}
+                    className="font-bold"
+                  />
+                  <SortHeader
+                    label="Куст"
+                    field="siteBranch"
                     sortConfig={sortConfig}
                     onSort={handleSort}
                   />
@@ -1462,19 +2439,41 @@ export default function Deliveries() {
                     onSort={handleSort}
                   />
                   <SortHeader
-                    label="Куст"
-                    field="siteBranch"
-                    sortConfig={sortConfig}
-                    onSort={handleSort}
-                  />
-                  <SortHeader
                     label="План дата"
                     field="plannedDate"
                     sortConfig={sortConfig}
                     onSort={handleSort}
+                    className="border-x-2 border-sky-400 bg-sky-100 font-bold hover:bg-sky-200 dark:border-sky-600 dark:bg-sky-950 dark:hover:bg-sky-900"
                   />
-                  <th className="p-2 font-medium whitespace-nowrap">
+                  <SortHeader
+                    label="ДатаПланКорр"
+                    field="correctedPlannedDate"
+                    sortConfig={sortConfig}
+                    onSort={handleSort}
+                  />
+                  <th className="border-x-2 border-sky-400 bg-sky-100 p-2 text-center align-middle text-[11px] font-medium leading-tight dark:border-sky-600 dark:bg-sky-950">
                     Факт дата
+                  </th>
+                  <SortHeader
+                    label="Тип поставки"
+                    field="siteDeliveryType"
+                    sortConfig={sortConfig}
+                    onSort={handleSort}
+                  />
+                  <th className="p-2 text-center align-middle text-[11px] font-medium leading-tight">
+                    Особенности
+                  </th>
+                  <SortHeader
+                    label="Менеджер"
+                    field="siteManager"
+                    sortConfig={sortConfig}
+                    onSort={handleSort}
+                  />
+                  <th className="p-2 text-center align-middle text-[11px] font-medium leading-tight">
+                    Примечание логиста
+                  </th>
+                  <th className="p-2 text-center align-middle text-[11px] font-medium leading-tight">
+                    Комментарий водителя
                   </th>
                   <SortHeader
                     label="Отклонение"
@@ -1482,25 +2481,7 @@ export default function Deliveries() {
                     sortConfig={sortConfig}
                     onSort={handleSort}
                   />
-                  <SortHeader
-                    label="Водитель"
-                    field="driver"
-                    sortConfig={sortConfig}
-                    onSort={handleSort}
-                  />
-                  <SortHeader
-                    label="Тип поставки"
-                    field="siteDeliveryType"
-                    sortConfig={sortConfig}
-                    onSort={handleSort}
-                  />
-                  <SortHeader
-                    label="Менеджер"
-                    field="siteManager"
-                    sortConfig={sortConfig}
-                    onSort={handleSort}
-                  />
-                  <th className="p-2 font-medium whitespace-nowrap">
+                  <th className="p-2 text-center align-middle text-[11px] font-medium leading-tight">
                     Действия
                   </th>
                 </tr>
@@ -1525,33 +2506,96 @@ export default function Deliveries() {
                       data-testid={`row-delivery-${d.id}`}
                     >
                       <td
-                        className="p-2 truncate"
+                        className="sticky left-0 z-20 bg-background p-2 font-bold shadow-[1px_0_0_0_var(--color-border)]"
                         title={d.siteName}
                       >
                         <Link
                           href={`/sites/${d.siteId}`}
-                          className="text-primary hover:underline font-medium"
+                          className="font-bold text-primary hover:underline"
                         >
                           {d.siteName}
                         </Link>
+                        {isAdditionalDelivery(d) && (
+                          <div className="mt-1 flex flex-col items-start gap-1">
+                            <AdditionalOrderLabel
+                              delivery={d}
+                              canViewOrders={canViewOrders}
+                            />
+                            <AdditionalOrderItems
+                              items={d.additionalOrderItems}
+                              compact
+                            />
+                          </div>
+                        )}
                       </td>
-                      <td
-                        className="p-2 max-w-[200px] truncate"
-                        title={d.siteAddress}
-                      >
-                        {d.siteAddress}
+                      <td className="p-2 font-bold" title={d.driver}>
+                        {canEditDeliveries && !d.actualDate ? (
+                          <Select
+                            value={d.driverUserId ?? "__none__"}
+                            onValueChange={(val) =>
+                              handleDriverChange(d, val === "__none__" ? null : val)
+                            }
+                          >
+                            <SelectTrigger className="h-7 w-[145px] border-transparent bg-transparent text-xs font-bold group-hover:border-input hover:bg-background">
+                              <div className="truncate">
+                                {d.driver || (
+                                  <span className="text-muted-foreground">
+                                    Нет
+                                  </span>
+                                )}
+                              </div>
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="__none__">Не назначен</SelectItem>
+                              {drivers.map((driver) => (
+                                <SelectItem key={driver.id} value={driver.id}>
+                                  {driver.name || driver.email}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        ) : (
+                          <span className="flex items-center gap-1 font-bold">
+                            <Truck className="h-3.5 w-3.5" /> {d.driver}
+                          </span>
+                        )}
                       </td>
                       <td className="p-2 truncate" title={d.siteBranch}>
                         {d.siteBranch}
                       </td>
-                      <td className="p-2">
+                      <td
+                        className="p-2 whitespace-normal break-words leading-snug"
+                        title={d.siteAddress}
+                      >
+                        {d.siteAddress}
+                      </td>
+                      <td className="border-x-2 border-sky-200 bg-sky-50/40 p-2 dark:border-sky-900 dark:bg-sky-950/20">
                         <div className="flex flex-col">
                           {d.plannedDate ? (
-                            <span>
+                            <span className="font-bold">
                               {dateFormat.format(new Date(d.plannedDate))}
                             </span>
                           ) : (
-                            <span className="text-muted-foreground font-medium text-amber-800">Нет плана</span>
+                            <>
+                              <span className="font-medium text-amber-800">
+                                Нет плана
+                              </span>
+                              {canEditDeliveries && (
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  className="mt-1 h-7 w-fit gap-1 border-amber-400 bg-amber-50 px-1.5 text-xs text-amber-900 hover:bg-amber-100"
+                                  onClick={() => openRescheduleDialog(d)}
+                                  data-testid={`button-assign-planned-date-${d.id}`}
+                                  aria-label="Назначить дату"
+                                  title="Назначить дату"
+                                >
+                                  <CalendarClock className="h-3.5 w-3.5" />
+                                  Назначить
+                                </Button>
+                              )}
+                            </>
                           )}
                           {d.rescheduledFromDate && (
                             <span className="text-[10px] text-muted-foreground flex items-center gap-1 mt-0.5">
@@ -1563,9 +2607,17 @@ export default function Deliveries() {
                           )}
                         </div>
                       </td>
+                      <td className="p-2 whitespace-nowrap">
+                        <CorrectedPlanDateCell
+                          deliveryId={d.id}
+                          siteName={d.siteName}
+                          value={d.correctedPlannedDate}
+                          canEdit={canEditCorrectedPlan && Boolean(d.plannedDate || d.correctedPlannedDate)}
+                        />
+                      </td>
                       <td
                         className={cn(
-                          "p-2 whitespace-nowrap transition-colors",
+                          "border-x-2 border-sky-200 bg-sky-50/40 p-2 whitespace-nowrap transition-colors dark:border-sky-900 dark:bg-sky-950/20",
                           cellClass
                         )}
                       >
@@ -1576,7 +2628,7 @@ export default function Deliveries() {
                             onChange={(val) => handleActualDateChange(d, val)}
                             disabled={!canEditDeliveries}
                           />
-                          {d.actualDate && (
+                          {(d.actualDate || d.photosCount > 0) && (
                             <Button
                               variant="outline"
                               size="sm"
@@ -1585,15 +2637,61 @@ export default function Deliveries() {
                                 d.photosCount > 0 &&
                                   "border-emerald-500 text-emerald-700 hover:bg-emerald-50"
                               )}
-                              onClick={() => setPhotosDelivery(d)}
+                              onClick={() => openDeliveryPhotos(d)}
+                              title={d.photosCount > 0 ? `Просмотр актов (${d.photosCount})` : "Загрузить акт"}
+                              aria-label={d.photosCount > 0 ? `Просмотр актов (${d.photosCount})` : "Загрузить акт"}
                               data-testid={`btn-acts-${d.id}`}
                             >
                               {d.photosCount > 0
-                                ? `Акты (${d.photosCount})`
+                                ? <Eye className="h-4 w-4" aria-hidden="true" />
                                 : "Загрузить"}
                             </Button>
                           )}
                         </div>
+                      </td>
+                      <td className="p-2 whitespace-nowrap">
+                        {d.siteDeliveryType}
+                      </td>
+                      <td
+                        className="max-w-[240px] whitespace-normal break-words p-2 leading-snug"
+                        title={d.siteFeatures}
+                        data-testid={`text-site-features-${d.id}`}
+                      >
+                        {d.siteFeatures || "—"}
+                      </td>
+                      <td className="p-2 whitespace-normal break-words leading-snug">
+                        <ManagerContactCell name={d.siteManager} contact={d.siteManagerContact} />
+                      </td>
+                      <td className="p-2">
+                        <div className="flex items-center gap-1">
+                          <span
+                            className="min-w-0 flex-1 truncate text-xs text-muted-foreground"
+                            title={d.logisticianNote ?? undefined}
+                            data-testid={`text-logistician-note-${d.id}`}
+                          >
+                            {d.logisticianNote || "—"}
+                          </span>
+                          {canEditLogisticianNote && (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              className="h-7 w-7 shrink-0"
+                              onClick={() => openLogisticianNoteDialog(d)}
+                              aria-label={`${d.logisticianNote ? "Изменить" : "Добавить"} примечание к доставке ${d.siteName}`}
+                              data-testid={`button-edit-logistician-note-${d.id}`}
+                            >
+                              <MessageSquareText className="h-3.5 w-3.5" />
+                            </Button>
+                          )}
+                        </div>
+                      </td>
+                      <td
+                        className="p-2 truncate text-xs text-muted-foreground"
+                        title={d.note ?? undefined}
+                        data-testid={`text-driver-comment-${d.id}`}
+                      >
+                        {d.note || "—"}
                       </td>
                       <td className="p-2 text-center">
                         {d.lagDays !== null ? (
@@ -1613,44 +2711,6 @@ export default function Deliveries() {
                           "-"
                         )}
                       </td>
-                      <td className="p-2 truncate" title={d.siteManager}>
-                        {canEditDeliveries && !d.actualDate ? (
-                          <Select
-                            value={d.driverUserId ?? "__none__"}
-                            onValueChange={(val) =>
-                              handleDriverChange(d, val === "__none__" ? null : val)
-                            }
-                          >
-                            <SelectTrigger className="h-7 w-[120px] text-xs border-transparent group-hover:border-input bg-transparent hover:bg-background">
-                              <div className="truncate">
-                                {d.driver || (
-                                  <span className="text-muted-foreground">
-                                    Нет
-                                  </span>
-                                )}
-                              </div>
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="__none__">Не назначен</SelectItem>
-                              {drivers.map((driver) => (
-                                <SelectItem key={driver.id} value={driver.id}>
-                                  {driver.name || driver.email}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        ) : (
-                          <span className="flex items-center gap-1 text-muted-foreground">
-                            <Truck className="h-3.5 w-3.5" /> {d.driver}
-                          </span>
-                        )}
-                      </td>
-                      <td className="p-2 whitespace-nowrap">
-                        {d.siteDeliveryType}
-                      </td>
-                      <td className="p-2 whitespace-nowrap">
-                        {d.siteManager}
-                      </td>
                       <td className="p-2">
                         {(canEditDeliveries || isAdmin) && (
                           <DropdownMenu>
@@ -1665,6 +2725,18 @@ export default function Deliveries() {
                               </Button>
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="end">
+                              {canEditDeliveries && !isAdditionalDelivery(d) && (
+                                <>
+                                  <DropdownMenuItem
+                                    onClick={() => setAdditionalOrderTarget(d)}
+                                    data-testid={`button-additional-order-${d.id}`}
+                                  >
+                                    <Plus className="h-4 w-4 mr-2" />
+                                    Добавить доп.заказ
+                                  </DropdownMenuItem>
+                                  <DropdownMenuSeparator />
+                                </>
+                              )}
                               {canEditDeliveries &&
                                 canRescheduleDelivery(d.actualDate) && (
                                 <>
@@ -1672,7 +2744,9 @@ export default function Deliveries() {
                                     onClick={() => openRescheduleDialog(d)}
                                   >
                                     <CalendarClock className="h-4 w-4 mr-2" />{" "}
-                                    Перенести
+                                    {d.plannedDate
+                                      ? "Перенести"
+                                      : "Назначить дату"}
                                   </DropdownMenuItem>
                                   <DropdownMenuSeparator />
                                 </>
@@ -1685,7 +2759,7 @@ export default function Deliveries() {
                                   водителя
                                 </DropdownMenuItem>
                               )}
-                              {isAdmin && (
+                              {canEditDeliveries && (
                                 <>
                                   <DropdownMenuSeparator />
                                   <DropdownMenuItem
@@ -1709,28 +2783,36 @@ export default function Deliveries() {
                     className="border-b last:border-0 bg-amber-50/60 hover:bg-amber-100/60 transition-colors"
                     data-testid={`row-site-without-delivery-${site.id}`}
                   >
-                    <td className="p-2 truncate" title={site.name}>
+                    <td className="sticky left-0 z-20 bg-amber-50 p-2 font-bold shadow-[1px_0_0_0_var(--color-border)]" title={site.name}>
                       <Link
                         href={`/sites/${site.id}`}
-                        className="text-primary hover:underline font-medium"
+                        className="font-bold text-primary hover:underline"
                       >
                         {site.name}
                       </Link>
                     </td>
-                    <td className="p-2 max-w-[200px] truncate" title={site.address}>
+                    <td className="p-2 font-bold">{site.driver}</td>
+                    <td className="p-2 truncate" title={site.branch}>{site.branch}</td>
+                    <td className="p-2 whitespace-normal break-words leading-snug" title={site.address}>
                       {site.address}
                     </td>
-                    <td className="p-2 truncate" title={site.branch}>{site.branch}</td>
-                    <td className="p-2 whitespace-nowrap font-medium text-amber-800">
+                    <td className="border-x-2 border-sky-200 bg-sky-50/40 p-2 whitespace-nowrap font-bold text-amber-800 dark:border-sky-900 dark:bg-sky-950/20">
                       Нет плана
                     </td>
                     <td className="p-2 text-center text-muted-foreground">—</td>
-                    <td className="p-2 text-center text-muted-foreground">—</td>
-                    <td className="p-2 whitespace-nowrap">{site.driver}</td>
+                    <td className="border-x-2 border-sky-200 bg-sky-50/40 p-2 text-center text-muted-foreground dark:border-sky-900 dark:bg-sky-950/20">—</td>
                     <td className="p-2 truncate" title={site.deliveryType}>
                       {site.deliveryType}
                     </td>
-                    <td className="p-2 truncate" title={site.manager}>{site.manager}</td>
+                    <td className="max-w-[240px] whitespace-normal break-words p-2 leading-snug" title={site.features}>
+                      {site.features || "—"}
+                    </td>
+                    <td className="p-2 whitespace-normal break-words leading-snug">
+                      <ManagerContactCell name={site.manager} contact={site.managerContact} />
+                    </td>
+                    <td className="p-2 text-center text-muted-foreground">—</td>
+                    <td className="p-2 text-center text-muted-foreground">—</td>
+                    <td className="p-2 text-center text-muted-foreground">—</td>
                     <td className="p-2" />
                   </tr>
                 ))}
@@ -1738,7 +2820,7 @@ export default function Deliveries() {
                   sitesWithoutDeliveries.length === 0 && (
                   <tr>
                     <td
-                      colSpan={10}
+                      colSpan={14}
                       className="p-8 text-center text-muted-foreground"
                     >
                       Нет данных для отображения
@@ -1757,8 +2839,9 @@ export default function Deliveries() {
       )}
 
       {/* Schedule Tab */}
-      {activeTab === "schedule" && (
-        <div className="flex-1 flex flex-col min-h-0">
+      {activeTab === "schedule" &&
+        hasMainData && (
+        <div className="flex-1 flex flex-col min-h-0 min-w-0">
           <div className="flex flex-wrap items-center gap-2 mb-3 bg-muted/30 p-2 rounded-md border shrink-0">
             <div className="relative w-[220px]">
               <Search className="absolute left-2.5 top-2 h-4 w-4 text-muted-foreground" />
@@ -1780,10 +2863,15 @@ export default function Deliveries() {
               options={filterOptions.siteName}
             />
             <FilterSelect
-              label="Водитель"
+              label="Куст"
+              value={filters.branch}
+              onChange={(v) => setFilters((f) => ({ ...f, branch: v }))}
+              options={filterOptions.branch}
+            />
+            <DriverFilterSelect
               value={filters.driver}
               onChange={(v) => setFilters((f) => ({ ...f, driver: v }))}
-              options={filterOptions.driver}
+              options={driverFilterOptions}
             />
             <FilterSelect
               label="Клиент"
@@ -1791,63 +2879,93 @@ export default function Deliveries() {
               onChange={(v) => setFilters((f) => ({ ...f, client: v }))}
               options={filterOptions.client}
             />
-            {(filters.siteName || filters.driver || filters.client) && (
+            {canEditDeliveries && (
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-8"
+                  disabled={!bulkFilterSelected}
+                  onClick={openBulkDialog}
+                  data-testid="button-bulk-edit-deliveries-schedule"
+                >
+                  Массово изменить
+                </Button>
+                {!bulkFilterSelected && (
+                  <span className="max-w-[260px] text-xs text-muted-foreground">
+                    Выберите куст или водителя.
+                  </span>
+                )}
+              </div>
+            )}
+            {(filters.siteName ||
+              filters.branch ||
+              filters.driver ||
+              filters.client ||
+              scheduleDayFilter) && (
               <Button
                 variant="ghost"
                 size="sm"
                 className="h-8 text-xs"
-                onClick={() =>
+                onClick={() => {
                   setFilters({
                     ...filters,
                     siteName: "",
+                    branch: "",
                     driver: "",
                     client: "",
-                  })
-                }
+                  });
+                  setScheduleDayFilter(null);
+                }}
               >
                 Сбросить
               </Button>
             )}
           </div>
 
-          <div className="flex-1 overflow-auto border rounded-md relative bg-background">
+          <div className="flex-1 min-w-0 max-w-full overflow-auto border rounded-md relative bg-background">
             <table
               className="table-fixed text-sm text-left border-collapse"
-              style={{ width: 335 + daysInMonth * 40 }}
+              style={{
+                width: "100%",
+                minWidth: 470 + daysInMonth * 44,
+              }}
             >
               <colgroup>
-                <col className="w-[120px]" />
-                <col className="w-[125px]" />
-                <col className="w-[90px]" />
+                <col className="w-[160px]" />
+                <col className="w-[180px]" />
+                <col className="w-[130px]" />
                 {days.map((day) => (
-                  <col key={day} className="w-[40px]" />
+                  <col key={day} />
                 ))}
               </colgroup>
               <thead className="sticky top-0 z-30 bg-muted shadow-[0_1px_0_0_var(--color-border)]">
                 <tr className="bg-muted">
-                  <th className="sticky left-0 z-40 bg-muted w-[120px] min-w-[120px] p-2 font-medium">
+                  <th className="sticky left-0 z-40 w-[160px] min-w-[160px] bg-muted p-2 font-medium">
                     Объект
                   </th>
-                  <th className="sticky left-[120px] z-40 bg-muted w-[125px] min-w-[125px] p-2 font-medium">
+                  <th className="sticky left-[160px] z-40 w-[180px] min-w-[180px] bg-muted p-2 font-medium">
                     Водитель
                   </th>
-                  <th className="sticky left-[245px] z-40 bg-muted w-[90px] min-w-[90px] p-2 font-medium shadow-[1px_0_0_0_var(--color-border)]">
+                  <th className="sticky left-[340px] z-40 w-[130px] min-w-[130px] bg-muted p-2 font-medium shadow-[1px_0_0_0_var(--color-border)]">
                     Клиент
                   </th>
                   {days.map((d) => (
                     <th
                       key={d}
-                      className="p-1 min-w-[40px] border-l text-center font-medium text-xs"
+                      className="p-1 min-w-[44px] border-l text-center font-medium text-xs"
                     >
                       {d}
                     </th>
                   ))}
                 </tr>
                 <tr className="bg-muted">
-                  <th className="sticky left-0 z-40 bg-muted w-[120px] min-w-[120px] p-1"></th>
-                  <th className="sticky left-[120px] z-40 bg-muted w-[125px] min-w-[125px] p-1"></th>
-                  <th className="sticky left-[245px] z-40 bg-muted w-[90px] min-w-[90px] p-1 shadow-[1px_0_0_0_var(--color-border)] text-right font-normal">
-                    <div className="flex flex-col gap-[1px] text-[10px] leading-none pr-1">
+                  <th className="sticky left-0 z-40 w-[160px] min-w-[160px] bg-muted p-1"></th>
+                  <th className="sticky left-[160px] z-40 w-[180px] min-w-[180px] bg-muted p-1"></th>
+                  <th className="sticky left-[340px] z-40 w-[130px] min-w-[130px] bg-muted p-1 text-right font-normal shadow-[1px_0_0_0_var(--color-border)]">
+                    <div className="flex flex-col gap-0.5 whitespace-nowrap text-xs leading-4 pr-1">
+                      <div className="text-amber-600 dark:text-amber-400" title="Выполнение плана дня: выполненные и закрытые доставки с этой плановой датой">Выполнено, %</div>
                       <div className="text-muted-foreground">План</div>
                       <div className="text-amber-600 dark:text-amber-400">
                         Выполнено
@@ -1862,31 +2980,74 @@ export default function Deliveries() {
                   </th>
                   {days.map((d) => {
                     const t = dayTotals[d - 1];
+                    const dayValues = [
+                      {
+                        status: "plan" as const,
+                        value: t.plan,
+                        label: "План",
+                        className: "text-muted-foreground",
+                      },
+                      {
+                        status: "done" as const,
+                        value: t.done,
+                        label: "Выполнено",
+                        className: "text-amber-600 dark:text-amber-400",
+                      },
+                      {
+                        status: "closed" as const,
+                        value: t.closed,
+                        label: "Закрыто",
+                        className: "text-emerald-600 dark:text-emerald-400",
+                      },
+                      {
+                        status: "failed" as const,
+                        value: t.failed,
+                        label: "Не выполнено",
+                        className: "text-rose-600 dark:text-rose-400",
+                      },
+                    ];
                     return (
                       <th
                         key={d}
-                        className="min-w-[40px] border-l bg-muted p-0.5 align-top font-normal"
+                        className="min-w-[44px] border-l bg-muted px-0.5 py-1 align-top font-normal"
                       >
-                        <div className="flex flex-col gap-[1px] text-[10px] leading-none text-muted-foreground text-center">
-                          <div title="План">{t.plan}</div>
-                          <div
-                            className="text-amber-600 dark:text-amber-400"
-                            title="Выполнено"
+                        <div className="flex flex-col gap-0.5 whitespace-nowrap text-xs leading-4 text-center tabular-nums">
+                          <span
+                            className="text-amber-600 dark:text-amber-400 tabular-nums"
+                            data-testid={`schedule-done-percent-${d}`}
+                            title={`Выполненные и закрытые доставки с плановой датой ${d}-го числа ÷ план этого дня × 100%`}
+                            aria-label={`Выполнено, % за ${d}-е число: ${t.completedPercent !== null ? t.completedPercent.toLocaleString("ru-RU", { maximumFractionDigits: 1 }) + "%" : "нет плана"}`}
                           >
-                            {t.done}
-                          </div>
-                          <div
-                            className="text-emerald-600 dark:text-emerald-400"
-                            title="Закрыто"
-                          >
-                            {t.closed}
-                          </div>
-                          <div
-                            className="text-rose-600 dark:text-rose-400"
-                            title="Не выполнено"
-                          >
-                            {t.failed}
-                          </div>
+                            {t.completedPercent !== null
+                              ? `${t.completedPercent.toLocaleString("ru-RU", { maximumFractionDigits: 1 })}%`
+                              : "—"}
+                          </span>
+                          {dayValues.map((item) => {
+                            const isActive =
+                              scheduleDayFilter?.day === d &&
+                              scheduleDayFilter.status === item.status;
+                            return (
+                              <button
+                                key={item.status}
+                                type="button"
+                                className={cn(
+                                  "mx-auto min-w-5 rounded-sm px-0.5 hover:bg-background hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary",
+                                  item.className,
+                                  isActive &&
+                                    "bg-primary text-primary-foreground hover:bg-primary hover:text-primary-foreground no-underline",
+                                )}
+                                onClick={() =>
+                                  toggleScheduleDayFilter(d, item.status)
+                                }
+                                title={`${item.label}: доставки с плановой датой ${d}-го числа — показать только эти доставки`}
+                                aria-label={`${item.label} за ${d}-е число: ${item.value}`}
+                                aria-pressed={isActive}
+                                data-testid={`button-schedule-${item.status}-${d}`}
+                              >
+                                {item.value}
+                              </button>
+                            );
+                          })}
                         </div>
                       </th>
                     );
@@ -1900,7 +3061,7 @@ export default function Deliveries() {
                     className="group border-b last:border-0 transition-colors hover:bg-muted/30"
                   >
                     <td
-                      className="sticky left-0 z-20 bg-background group-hover:bg-muted/50 w-[120px] min-w-[120px] p-2 truncate font-medium transition-colors"
+                      className="sticky left-0 z-20 w-[160px] min-w-[160px] truncate bg-background p-2 font-medium transition-colors group-hover:bg-muted/50"
                       title={row.siteName}
                     >
                       <Link
@@ -1909,15 +3070,53 @@ export default function Deliveries() {
                       >
                         {row.siteName}
                       </Link>
+                      {row.hasAdditionalOrder && (
+                        <div className="mt-1 flex flex-col items-start gap-1">
+                          {row.additionalOrderDeliveries.length > 0 ? (
+                            row.additionalOrderDeliveries.map((additionalDelivery) => (
+                              <div
+                                key={additionalDelivery.id}
+                                className="flex flex-col items-start gap-0.5"
+                              >
+                                <div className="flex flex-wrap items-center gap-1">
+                                  <AdditionalOrderLabel
+                                    delivery={additionalDelivery}
+                                    canViewOrders={canViewOrders}
+                                  />
+                                  <span className="text-[10px] text-muted-foreground">
+                                    {additionalDelivery.plannedDate
+                                      ? dateFormat.format(
+                                          new Date(additionalDelivery.plannedDate),
+                                        )
+                                      : "Без даты"}{" "}
+                                    ·{" "}
+                                    {additionalDelivery.deliveryType ||
+                                      "Тип не указан"}
+                                  </span>
+                                </div>
+                                <AdditionalOrderItems
+                                  items={additionalDelivery.additionalOrderItems}
+                                  compact
+                                />
+                              </div>
+                            ))
+                          ) : (
+                            <AdditionalOrderLabel
+                              delivery={{ hasAdditionalOrders: true }}
+                              canViewOrders={canViewOrders}
+                            />
+                          )}
+                        </div>
+                      )}
                     </td>
                     <td
-                      className="sticky left-[120px] z-20 bg-background group-hover:bg-muted/50 w-[125px] min-w-[125px] p-2 truncate transition-colors"
+                      className="sticky left-[160px] z-20 w-[180px] min-w-[180px] truncate bg-background p-2 transition-colors group-hover:bg-muted/50"
                       title={row.driver}
                     >
                       {row.driver}
                     </td>
                     <td
-                      className="sticky left-[245px] z-20 bg-background group-hover:bg-muted/50 w-[90px] min-w-[90px] p-2 truncate shadow-[1px_0_0_0_var(--color-border)] transition-colors"
+                      className="sticky left-[340px] z-20 w-[130px] min-w-[130px] truncate bg-background p-2 shadow-[1px_0_0_0_var(--color-border)] transition-colors group-hover:bg-muted/50"
                       title={row.client}
                     >
                       {row.client}
@@ -1931,31 +3130,53 @@ export default function Deliveries() {
                       return (
                         <td
                           key={d}
-                          className="p-0 border-l relative h-12 min-w-[40px]"
+                          className={cn(
+                            "p-0 border-l relative h-12 min-w-[44px] transition-colors",
+                            (state.hasClosed || state.hasDoneWithAct) &&
+                              "bg-emerald-600",
+                            !state.hasClosed &&
+                              !state.hasDoneWithAct &&
+                              state.hasDoneNoAct &&
+                              "bg-orange-500",
+                            !state.hasClosed &&
+                              !state.hasDoneWithAct &&
+                              !state.hasDoneNoAct &&
+                              state.hasPlan &&
+                              "bg-slate-300 dark:bg-slate-600",
+                          )}
                         >
                           <div className="absolute inset-0 flex items-center justify-center gap-[2px] pointer-events-none">
                             {state.hasPlan && (
                               <span
                                 title="План"
-                                className="flex rounded-sm bg-slate-300 p-0.5 shadow-sm dark:bg-slate-600"
+                                className="flex"
                               >
-                                <X className="h-3.5 w-3.5 text-slate-700 dark:text-slate-100 shrink-0" />
+                                <X
+                                  className={cn(
+                                    "h-4 w-4 shrink-0",
+                                    state.hasClosed ||
+                                      state.hasDoneWithAct ||
+                                      state.hasDoneNoAct
+                                      ? "text-white"
+                                      : "text-slate-700 dark:text-slate-100",
+                                  )}
+                                />
                               </span>
                             )}
                             {(state.hasClosed || state.hasDoneWithAct) && (
                               <span
                                 title="Закрыто"
-                                className="flex rounded-sm bg-emerald-600 p-0.5 shadow-sm"
+                                className="flex"
                               >
-                                <X className="h-3.5 w-3.5 text-white shrink-0" />
+                                <X className="h-4 w-4 text-white shrink-0" />
                               </span>
                             )}
                             {!state.hasClosed && !state.hasDoneWithAct && state.hasDoneNoAct && (
                               <span
                                 title="Выполнено"
-                                className="flex rounded-sm bg-orange-500 p-0.5 shadow-sm"
+                                className="flex"
                               >
-                                <X className="h-3.5 w-3.5 text-white shrink-0" />
+                                <X className="h-4 w-4 text-white shrink-0" />
                               </span>
                             )}
                           </div>
@@ -1982,103 +3203,203 @@ export default function Deliveries() {
             total={matrixRows.length}
             onPageChange={setSchedulePage}
           />
-          {undatedDeliveries.length > 0 && (
-            <div
-              ref={undatedSectionRef}
-              id="undated-deliveries"
-              className="mt-8 mb-4 scroll-mt-4 border border-amber-300 rounded-md p-4 bg-amber-50/40 shrink-0"
-              data-testid="section-undated-deliveries"
-            >
-              <h3 className="font-semibold text-base mb-3 flex items-center gap-2">
-                Дата не назначена <Badge variant="secondary">{undatedDeliveries.length}</Badge>
-              </h3>
-              <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-                {undatedDeliveries.map((d) => (
-                  <div key={d.id} className="border bg-card p-3 rounded-md shadow-sm">
-                    <div className="flex justify-between items-start">
-                      <div className="font-medium truncate">{d.siteName}</div>
-                      {(canEditDeliveries || isAdmin) && (
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0 -mr-2 -mt-2">
-                              <MoreHorizontal className="h-4 w-4" />
-                            </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end">
-                            {canEditDeliveries && (
-                              <DropdownMenuItem onClick={() => openRescheduleDialog(d)}>
-                                <CalendarClock className="h-4 w-4 mr-2" /> Назначить дату
-                              </DropdownMenuItem>
-                            )}
-                            {canEditDeliveries && (
-                              <DropdownMenuItem onClick={() => openDriverChangeDialog(d)}>
-                                <Truck className="h-4 w-4 mr-2" /> Заменить водителя
-                              </DropdownMenuItem>
-                            )}
-                            {isAdmin && (
-                              <>
-                                <DropdownMenuSeparator />
-                                <DropdownMenuItem className="text-destructive" onClick={() => setDeleteTarget(d)}>
-                                  <Trash2 className="h-4 w-4 mr-2" /> Удалить
-                                </DropdownMenuItem>
-                              </>
-                            )}
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      )}
-                    </div>
-                    <div className="text-xs text-muted-foreground mt-1 truncate" title={d.siteAddress}>{d.siteAddress}</div>
-                    <div className="flex items-center gap-1 mt-2 text-xs">
-                      <Truck className="h-3.5 w-3.5" />
-                      <span>{d.driver || "Нет водителя"}</span>
-                    </div>
-                    {d.note && (
-                      <div className="mt-2 text-xs italic bg-muted/50 p-1.5 rounded line-clamp-2" title={d.note}>{d.note}</div>
-                    )}
-                    {canEditDeliveries && (
-                      <Button variant="outline" size="sm" className="w-full mt-3 h-7 text-xs bg-background" onClick={() => openRescheduleDialog(d)}>
-                        Назначить дату
-                      </Button>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
         </div>
       )}
 
       {/* Dialogs */}
+      {additionalOrderTarget && (
+        <AdditionalOrderDialog
+          delivery={additionalOrderTarget}
+          open
+          onCancel={() => setAdditionalOrderTarget(null)}
+          onSuccess={(result) => {
+            invalidateAfterAdditionalOrder();
+            setAdditionalOrderTarget(null);
+            toast({
+              title: "Доставка создана",
+              description: `Доставка ${result.deliveryId.slice(0, 8)} добавлена в график.`,
+            });
+          }}
+        />
+      )}
+      <Dialog
+        open={!!logisticianNoteTarget}
+        onOpenChange={(open) => !open && closeLogisticianNoteDialog()}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Примечание для водителя</DialogTitle>
+          </DialogHeader>
+          <form onSubmit={handleLogisticianNoteSubmit} className="space-y-4">
+            <div className="text-sm text-muted-foreground">
+              {logisticianNoteTarget?.siteName}
+            </div>
+            <Textarea
+              value={logisticianNoteDraft}
+              onChange={(event) => setLogisticianNoteDraft(event.target.value)}
+              placeholder="Напишите водителю важную информацию по доставке..."
+              rows={5}
+              data-testid="textarea-logistician-note"
+            />
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={closeLogisticianNoteDialog}
+              >
+                Отмена
+              </Button>
+              <Button type="submit" disabled={updateDelivery.isPending}>
+                Сохранить
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={!!driverCommentTarget}
+        onOpenChange={(open) => !open && setDriverCommentTarget(null)}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Комментарий водителя</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <p className="text-sm font-medium">
+              {driverCommentTarget?.siteName}
+            </p>
+            <p
+              className="whitespace-pre-wrap break-words rounded-md bg-muted p-3 text-sm"
+              data-testid="text-mobile-driver-comment-dialog"
+            >
+              {driverCommentTarget?.note}
+            </p>
+          </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              onClick={() => setDriverCommentTarget(null)}
+            >
+              Закрыть
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <DeliveryPhotosDialog
         delivery={photosDelivery}
         open={!!photosDelivery}
-        onOpenChange={(open) => !open && setPhotosDelivery(null)}
-        canEdit={canEditDeliveries}
-        canApprove={canApproveDeliveryActs}
+        onOpenChange={(open) => {
+          if (!open) {
+            setPhotosDelivery(null);
+            setPhotosReadOnly(false);
+          }
+        }}
+        canEdit={!photosReadOnly && canEditDeliveries}
+        canApprove={!photosReadOnly && canApproveDeliveryActs}
+        canDelete={!photosReadOnly && canEditDeliveries}
+        canDownload={canApproveDeliveryActs}
+      />
+
+      <Dialog open={actsExportOpen} onOpenChange={setActsExportOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Выгрузить акты за период</DialogTitle>
+          </DialogHeader>
+          <form className="space-y-4" onSubmit={handleActsExport}>
+            <div className="grid grid-cols-2 gap-3">
+              <label className="space-y-1 text-sm">
+                <span className="text-muted-foreground">С даты</span>
+                <Input
+                  type="date"
+                  value={actsExportFrom}
+                  onChange={(event) => setActsExportFrom(event.target.value)}
+                  required
+                  data-testid="input-acts-export-from"
+                />
+              </label>
+              <label className="space-y-1 text-sm">
+                <span className="text-muted-foreground">По дату</span>
+                <Input
+                  type="date"
+                  value={actsExportTo}
+                  onChange={(event) => setActsExportTo(event.target.value)}
+                  required
+                  data-testid="input-acts-export-to"
+                />
+              </label>
+            </div>
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setActsExportOpen(false)}
+                disabled={actsExportPending}
+              >
+                Отмена
+              </Button>
+              <Button type="submit" disabled={actsExportPending}>
+                {actsExportPending && (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                )}
+                {actsExportPending ? "Формируем..." : "Скачать ZIP"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      <DeliveryImportReviewDialog
+        review={pendingImportReview}
+        mode={importMode}
+        onCancel={() => setPendingImportReview(null)}
+        onAddMissingSites={() => {
+          setPendingImportReview(null);
+          const params = new URLSearchParams({
+            add: "1",
+            fromDeliveryImport: "1",
+            month,
+            importMode,
+          });
+          setLocation(`/sites?${params.toString()}`);
+        }}
+        onConfirm={(items, confirmedMode) => {
+          setPendingImportReview(null);
+          submitImportedItems(items, confirmedMode);
+        }}
       />
 
       <AlertDialog
         open={!!deleteTarget}
-        onOpenChange={(open) => !open && setDeleteTarget(null)}
+        onOpenChange={(open) =>
+          !open && !deleteDelivery.isPending && setDeleteTarget(null)
+        }
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Удалить доставку?</AlertDialogTitle>
+            <AlertDialogTitle>Переместить доставку в удалённые?</AlertDialogTitle>
             <AlertDialogDescription>
-              Это действие нельзя отменить. Запись о доставке будет удалена из
-              системы.
+              Доставка будет перемещена во вкладку «Удалённые доставки». Это не
+              окончательное удаление: её можно будет вернуть в график.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Отмена</AlertDialogCancel>
+            <AlertDialogCancel disabled={deleteDelivery.isPending}>
+              Отмена
+            </AlertDialogCancel>
             <AlertDialogAction
-              onClick={() =>
-                deleteTarget && deleteDelivery.mutate({ id: deleteTarget.id })
-              }
+              onClick={(event) => {
+                event.preventDefault();
+                if (deleteTarget) {
+                  deleteDelivery.mutate({ id: deleteTarget.id });
+                }
+              }}
+              disabled={deleteDelivery.isPending}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               data-testid="btn-confirm-delete"
             >
-              Удалить
+              {deleteDelivery.isPending ? "Перемещение…" : "Удалить"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -2185,109 +3506,30 @@ export default function Deliveries() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={generateOpen} onOpenChange={setGenerateOpen}>
-        <DialogContent className="max-w-3xl max-h-[80vh] flex flex-col">
+      <Dialog
+        open={generateOpen}
+        onOpenChange={(open) => {
+          if (!createDelivery.isPending) setGenerateOpen(open);
+        }}
+      >
+        <DialogContent className="max-w-3xl max-h-[85vh] flex flex-col overflow-hidden">
           <DialogHeader>
             <DialogTitle>Добавить доставку на {formatMonthLabel(month)}</DialogTitle>
           </DialogHeader>
-          <form
-            onSubmit={handleGenerateSubmit}
-            className="flex-1 flex flex-col min-h-0"
-          >
-            <div className="flex-1 overflow-auto border rounded-md">
-              <table className="w-full text-sm text-left">
-                <thead className="sticky top-0 bg-muted shadow-sm">
-                  <tr>
-                    <th className="p-2 font-medium">Объект</th>
-                    <th className="p-2 font-medium">Водитель</th>
-                    <th className="p-2 font-medium">План дата</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {scheduleRows.map((row) => (
-                    <tr key={row.siteId} className="border-b last:border-0">
-                      <td className="p-2">
-                        <Select
-                          value={row.siteId}
-                          onValueChange={(siteId) => {
-                            const site = sites?.find((item) => item.id === siteId);
-                            if (!site) return;
-                            setScheduleRows([
-                              {
-                                ...row,
-                                siteId: site.id,
-                                siteName: site.name,
-                                driverUserId: site.driverUserId ?? "",
-                              },
-                            ]);
-                          }}
-                        >
-                          <SelectTrigger className="h-8 w-full">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {(sites ?? []).filter((site) => !site.isClosed).map((site) => (
-                              <SelectItem key={site.id} value={site.id}>
-                                {site.name}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </td>
-                      <td className="p-2">
-                        <Select
-                          value={row.driverUserId || "__none__"}
-                          onValueChange={(value) =>
-                            updateScheduleRow(row.siteId, {
-                              driverUserId: value === "__none__" ? "" : value,
-                            })
-                          }
-                        >
-                          <SelectTrigger className="h-8 w-full">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="__none__">Не назначен</SelectItem>
-                            {drivers.map((driver) => (
-                              <SelectItem key={driver.id} value={driver.id}>
-                                {driver.name || driver.email}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </td>
-                      <td className="p-2">
-                        <input
-                          type="date"
-                          min={getMonthDateBounds(month).min}
-                          max={getMonthDateBounds(month).max}
-                          value={row.plannedDate || ""}
-                          onChange={(e) =>
-                            updateScheduleRow(row.siteId, {
-                              plannedDate: e.target.value || null,
-                            })
-                          }
-                          className="h-8 w-32 border rounded px-2 bg-background focus:ring-1 focus:ring-primary outline-none"
-                        />
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <DialogFooter className="mt-4 pt-4 border-t shrink-0">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setGenerateOpen(false)}
-              >
-                Отмена
-              </Button>
-              <Button type="submit" disabled={createBulk.isPending}>
-                Добавить
-              </Button>
-            </DialogFooter>
-          </form>
+          {generateOpen && (
+            <DeliveryCreateForm
+              sites={sites ?? []}
+              drivers={drivers}
+              month={month}
+              isPending={createDelivery.isPending}
+              onCancel={() => setGenerateOpen(false)}
+              onSubmit={(item) => {
+                if (!createDelivery.isPending) {
+                  createDelivery.mutate({ data: item });
+                }
+              }}
+            />
+          )}
         </DialogContent>
       </Dialog>
 
@@ -2326,6 +3568,26 @@ export default function Deliveries() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <DeliveryBulkEditDialog
+        open={bulkDialogOpen}
+        onOpenChange={setBulkDialogOpen}
+        rows={bulkRows}
+        drivers={drivers}
+        monthLabel={formatMonthLabel(month)}
+        monthMin={getMonthDateBounds(month).min}
+        monthMax={getMonthDateBounds(month).max}
+        branchLabel={filters.branch || undefined}
+        driverLabel={selectedDriverLabel || undefined}
+        onSuccess={(updated) => {
+          invalidate();
+          toast({
+            title: `Изменено доставок: ${updated}`,
+            description:
+              "Закрепление водителя за объектами осталось без изменений.",
+          });
+        }}
+      />
     </div>
   );
 }

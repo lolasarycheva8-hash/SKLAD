@@ -1,4 +1,12 @@
-import type { DeliveryUploadCleanupSummary } from "./delivery-upload-cleanup";
+import { sql, type SQL } from "drizzle-orm";
+import { deliveryUploadCleanupStatusTable } from "@workspace/db";
+
+import {
+  DeliveryUploadStorageListTimeoutError,
+  type DeliveryUploadCleanupSummary,
+} from "./delivery-upload-cleanup";
+
+export type AutomaticCleanupFailureKind = "none" | "list_timeout" | "other";
 
 export interface AutomaticCleanupStatusSummary {
   scanned: number;
@@ -13,6 +21,7 @@ export interface AutomaticCleanupStatusWrite {
   lastRunAt: Date;
   lastSuccessfulRunAt?: Date;
   status: "success" | "failed";
+  failureKind: AutomaticCleanupFailureKind;
   summary: AutomaticCleanupStatusSummary;
 }
 
@@ -21,6 +30,8 @@ export interface AutomaticCleanupStatusRow {
   lastRunAt: Date;
   lastSuccessfulRunAt: Date | null;
   status: "success" | "failed";
+  failureKind: AutomaticCleanupFailureKind;
+  consecutiveFailures: number;
   scanned: number;
   candidates: number;
   deleted: number;
@@ -34,9 +45,10 @@ export interface AutomaticCleanupStatusUpsert {
   insert: AutomaticCleanupStatusRow;
   update: Omit<
     AutomaticCleanupStatusRow,
-    "key" | "lastSuccessfulRunAt"
+    "key" | "lastSuccessfulRunAt" | "consecutiveFailures"
   > & {
     lastSuccessfulRunAt?: Date;
+    consecutiveFailures: number | SQL;
   };
 }
 
@@ -64,6 +76,7 @@ export function createAutomaticCleanupStatusWriter(
   return async (status) => {
     const aggregateFields = {
       status: status.status,
+      failureKind: status.failureKind,
       scanned: status.summary.scanned,
       candidates: status.summary.candidates,
       deleted: status.summary.deleted,
@@ -76,6 +89,7 @@ export function createAutomaticCleanupStatusWriter(
         key: "automatic",
         lastRunAt: status.lastRunAt,
         lastSuccessfulRunAt: status.lastSuccessfulRunAt ?? null,
+        consecutiveFailures: status.status === "success" ? 0 : 1,
         ...aggregateFields,
         updatedAt: status.lastRunAt,
       },
@@ -84,6 +98,10 @@ export function createAutomaticCleanupStatusWriter(
         ...(status.lastSuccessfulRunAt
           ? { lastSuccessfulRunAt: status.lastSuccessfulRunAt }
           : {}),
+        consecutiveFailures:
+          status.status === "success"
+            ? 0
+            : sql`${deliveryUploadCleanupStatusTable.consecutiveFailures} + 1`,
         ...aggregateFields,
         updatedAt: status.lastRunAt,
       },
@@ -122,6 +140,7 @@ export function createAutomaticCleanupRunRecorder(
         lastRunAt: runAt,
         ...(succeeded ? { lastSuccessfulRunAt: runAt } : {}),
         status: succeeded ? "success" : "failed",
+        failureKind: succeeded ? "none" : "other",
         summary: statusSummary(summary),
       });
     } catch (cleanupError) {
@@ -129,6 +148,10 @@ export function createAutomaticCleanupRunRecorder(
         await dependencies.writeStatus({
           lastRunAt: runAt,
           status: "failed",
+          failureKind:
+            cleanupError instanceof DeliveryUploadStorageListTimeoutError
+              ? "list_timeout"
+              : "other",
           summary: {
             scanned: 0,
             candidates: 0,

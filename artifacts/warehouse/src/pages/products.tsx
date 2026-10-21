@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   useListProducts,
+  listProducts,
+  useCreateProduct,
   useUpdateProduct,
   useDeleteProduct,
   useListCategories,
@@ -13,6 +15,7 @@ import {
   getListCategoriesQueryKey,
 } from "@workspace/api-client-react";
 import type { Product } from "@workspace/api-client-react";
+import { downloadProductPriceList } from "@/lib/product-price-list";
 import {
   parseExcelFile,
   readSheetHeaders,
@@ -170,7 +173,7 @@ export default function Products() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const { canEdit } = usePermissions();
+  const { canEdit, isAdmin } = usePermissions();
   const canEditProducts = canEdit("products");
 
   useEffect(() => {
@@ -183,7 +186,61 @@ export default function Products() {
     search: search || undefined,
     lowStockOnly: lowStockOnly || undefined,
   });
-  const { data: categories } = useListCategories();
+  const { data: categories, refetch: refetchCategories } = useListCategories();
+  const [templateDownloading, setTemplateDownloading] = useState(false);
+  const [priceListDownloading, setPriceListDownloading] = useState(false);
+
+  async function handlePriceListExport() {
+    if (priceListDownloading) return;
+    setPriceListDownloading(true);
+    try {
+      // A price list includes the complete current catalogue, not table filters.
+      const allProducts = await listProducts();
+      if (!allProducts.length) {
+        toast({ title: "Нет товаров для формирования прайса" });
+        return;
+      }
+      downloadProductPriceList(allProducts);
+    } catch (error) {
+      toast({
+        title: "Не удалось выгрузить прайс",
+        description: error instanceof Error ? error.message : "Повторите попытку.",
+        variant: "destructive",
+      });
+    } finally {
+      setPriceListDownloading(false);
+    }
+  }
+
+  async function handleDownloadTemplate() {
+    if (templateDownloading) return;
+    setTemplateDownloading(true);
+    try {
+      const result = await refetchCategories({ throwOnError: true });
+      if (!result.data) throw new Error("Не удалось загрузить категории.");
+      const names = [...new Set(result.data.map((category) => category.name.trim()).filter(Boolean))]
+        .sort((a, b) => a.localeCompare(b, "ru"));
+      if (!names.length) {
+        throw new Error("Добавьте категории в справочник перед выгрузкой шаблона.");
+      }
+      downloadTemplate(TEMPLATE_HEADERS, "шаблон-товары.xlsx", [{
+        name: "Справочник категорий",
+        headers: ["Категория"],
+        rows: names.map((name) => ({ Категория: name })),
+        dropdownForHeader: "Категория",
+        dropdownError: "Выберите категорию из выпадающего списка.",
+        hidden: true,
+      }]);
+    } catch (error) {
+      toast({
+        title: "Не удалось выгрузить шаблон",
+        description: error instanceof Error ? error.message : "Повторите попытку.",
+        variant: "destructive",
+      });
+    } finally {
+      setTemplateDownloading(false);
+    }
+  }
 
   const filteredProducts = useMemo(() => {
     const filtered = (products ?? []).filter((product) => {
@@ -294,6 +351,24 @@ export default function Products() {
     },
   });
 
+  const createProduct = useCreateProduct({
+    mutation: {
+      onSuccess: () => {
+        invalidate();
+        setDialogOpen(false);
+        setForm(EMPTY_FORM);
+        toast({ title: "Товар добавлен" });
+      },
+      onError: (error) => {
+        toast({
+          title: "Не удалось добавить товар",
+          description: error.message,
+          variant: "destructive",
+        });
+      },
+    },
+  });
+
   const updateProduct = useUpdateProduct({
     mutation: {
       onSuccess: () => {
@@ -334,7 +409,7 @@ export default function Products() {
         invalidate();
         toast({
           title: "Импорт завершён",
-          description: `Обработано товаров: ${data.length}`,
+          description: `Создано: ${data.created}. Обновлено: ${data.updated}.`,
         });
       },
       onError: (error) => {
@@ -441,26 +516,32 @@ export default function Products() {
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
 
-    if (!editingProduct) return;
-
-    updateProduct.mutate({
-      id: editingProduct.id,
-      data: {
-        name: form.name,
-        sku: form.sku,
-        unit: form.unit,
+    if (!canEditProducts || createProduct.isPending || updateProduct.isPending) return;
+    if (!form.name.trim() || !form.sku.trim() || !form.unit.trim()) {
+      toast({ title: "Заполните название, артикул и единицу измерения", variant: "destructive" });
+      return;
+    }
+    const data = {
+        name: form.name.trim(),
+        sku: form.sku.trim(),
+        unit: form.unit.trim(),
         purchasePrice: Number(form.purchasePrice),
         price: Number(form.price),
         categoryId: form.categoryId || null,
         minStock: Number(form.minStock),
         supplier: form.supplier || null,
         supplierContact: form.supplierContact || null,
-      },
-    });
+      };
+    if (editingProduct) {
+      updateProduct.mutate({ id: editingProduct.id, data });
+    } else {
+      createProduct.mutate({ data });
+    }
   }
 
   return (
-    <div className="space-y-6">
+    <div className="flex h-[calc(100dvh-5.5rem)] min-h-0 flex-col gap-6 md:h-[calc(100dvh-4rem)]">
+      <div className="shrink-0 space-y-6">
       <h1
         className="text-2xl font-bold text-blue-900 bg-[#f5ecd9] rounded-md px-4 py-2 block w-full"
         data-testid="text-page-title"
@@ -475,6 +556,19 @@ export default function Products() {
         </div>
         <div className="flex items-center gap-2 flex-wrap justify-end">
           {canEditProducts && (
+            <Button
+              onClick={() => {
+                setEditingProduct(null);
+                setForm({ ...EMPTY_FORM });
+                setDialogOpen(true);
+              }}
+              data-testid="button-add-product"
+            >
+              <Plus className="h-4 w-4 mr-2" />
+              Добавить
+            </Button>
+          )}
+          {canEditProducts && (
             <input
               ref={fileInputRef}
               type="file"
@@ -486,13 +580,12 @@ export default function Products() {
           )}
           <Button
             variant="outline"
-            onClick={() =>
-              downloadTemplate(TEMPLATE_HEADERS, "шаблон-товары.xlsx")
-            }
+            onClick={handleDownloadTemplate}
+            disabled={templateDownloading}
             data-testid="button-download-template-products"
           >
             <FileDown className="h-4 w-4 mr-2" />
-            Выгрузить шаблон
+            {templateDownloading ? "Подготовка шаблона…" : "Выгрузить шаблон"}
           </Button>
           {canEditProducts && (
             <Button
@@ -512,6 +605,16 @@ export default function Products() {
           >
             <Download className="h-4 w-4 mr-2" />
             Выгрузить
+          </Button>
+          <Button
+            variant="outline"
+            onClick={handlePriceListExport}
+            disabled={priceListDownloading}
+            title="Выгрузить прайс всех товаров"
+            data-testid="button-export-price-list"
+          >
+            <FileDown className="h-4 w-4 mr-2" />
+            {priceListDownloading ? "Формирование прайса…" : "Выгрузить ПРАЙС"}
           </Button>
         </div>
       </div>
@@ -607,9 +710,11 @@ export default function Products() {
         </Popover>
       </div>
 
-      <div className="border rounded-md">
-        <Table>
-          <TableHeader>
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-hidden border rounded-md">
+        <Table containerClassName="h-full">
+          <TableHeader className="sticky top-0 z-10 bg-background">
             <TableRow>
               <SortableHeader
                 field="name"
@@ -813,10 +918,12 @@ export default function Products() {
         </Table>
       </div>
 
-      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent>
+      <Dialog open={dialogOpen} onOpenChange={(open) => {
+        if (!createProduct.isPending && !updateProduct.isPending) setDialogOpen(open);
+      }}>
+        <DialogContent className="max-h-[90dvh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Редактировать товар</DialogTitle>
+            <DialogTitle>{editingProduct ? "Редактировать товар" : "Добавить товар"}</DialogTitle>
           </DialogHeader>
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-2">
@@ -875,7 +982,7 @@ export default function Products() {
                     ))}
                   </SelectContent>
                 </Select>
-                {canEditProducts && (
+                {isAdmin && (
                   <Popover>
                     <PopoverTrigger asChild>
                       <Button
@@ -1027,10 +1134,12 @@ export default function Products() {
             <DialogFooter>
               <Button
                 type="submit"
-                disabled={updateProduct.isPending}
+                disabled={updateProduct.isPending || createProduct.isPending}
                 data-testid="button-submit-product"
               >
-                Сохранить
+                {updateProduct.isPending || createProduct.isPending
+                  ? "Сохранение…"
+                  : editingProduct ? "Сохранить" : "Добавить"}
               </Button>
             </DialogFooter>
           </form>

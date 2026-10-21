@@ -5,11 +5,19 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
-import type { OrderItemInput } from './orderItemInput';
+import type { OrderItemInput } from "./orderItemInput";
 
 export interface CreateOrderInput {
+  /** @pattern ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ */
+  plannedDeliveryDate: string;
+  /** @nullable */
+  fulfillmentDeliveryId?: string | null;
   clientId: string;
+  /** @nullable */
+  siteId: string | null;
   note?: string | null;
+  /** @pattern ^[0-9]{4}-(?:0[1-9]|1[0-2])$ */
+  plannedMonth: string;
   /** @minItems 1 */
   items: OrderItemInput[];
 }

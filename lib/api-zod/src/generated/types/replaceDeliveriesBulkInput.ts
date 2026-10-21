@@ -5,10 +5,10 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
-import type { CreateDeliveryInput } from './createDeliveryInput';
+import type { CalendarMonth } from "./calendarMonth";
+import type { CreateDeliveryInput } from "./createDeliveryInput";
 
 export interface ReplaceDeliveriesBulkInput {
-  /** @pattern ^\d{4}-(0[1-9]|1[0-2])$ */
-  month: string;
+  month: CalendarMonth;
   items: CreateDeliveryInput[];
 }

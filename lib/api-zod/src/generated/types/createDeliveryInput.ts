@@ -5,6 +5,7 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
+import type { CalendarMonth } from "./calendarMonth";
 
 export interface CreateDeliveryInput {
   siteId: string;
@@ -13,9 +14,16 @@ export interface CreateDeliveryInput {
   /** @nullable */
   plannedDate?: Date | null;
   /**
-     * @nullable
-     * @pattern ^\d{4}-(0[1-9]|1[0-2])$
-     */
-  scheduleMonth?: string | null;
-  note?: string;
+   * Уточнённая плановая дата только для отчётности
+   * @nullable
+   */
+  correctedPlannedDate?: Date | null;
+  /** @nullable */
+  actualDate?: Date | null;
+  /**
+   * Тип поставки для этой доставки; null означает использовать значение объекта
+   * @nullable
+   */
+  deliveryType?: string | null;
+  scheduleMonth?: CalendarMonth | null;
 }

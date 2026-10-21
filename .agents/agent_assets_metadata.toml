@@ -14,3 +14,31 @@ uri = "file://exports/warehouse_database_backup.zip"
 type = "unspecified"
 title = "Резервная копия базы данных (SQL)"
 logical_id = "92efbb33-6b02-4e5c-96d6-6ec8cff72747"
+
+[[outputs]]
+id = "Vj_JopXZ902FMnCYQE84h"
+uri = "file://exports/products-template-categories.xlsx"
+type = "table"
+title = "Шаблон товаров с выбором категории"
+description = "Категории со скриншота без повторов. Выпадающий список в ячейках F2–F1000."
+logical_id = "bf977e58-36fc-495c-b377-eb88f51aac04"
+content_hash = "sha256:2baa448c00f0e80c3c17cdd6df779f5850798dbe3ee544fa998f9c5133787af7"
+size = 18298
+mtime_ms = 1789481199072
+storage_uri = "gcs://replit-rams-assets-sisko/rams/assets/repl:dc0230b6-749f-4641-bd62-6011f8714ac1/bf977e58-36fc-495c-b377-eb88f51aac04/ae2d0938-df2e-4859-a4af-4cc6dc4dac0c"
+storage_version_token = "1789481240238071"
+content_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+[[outputs]]
+id = "0jch2ngBQHzFGblDvVR1y"
+uri = "file://.local/state/act-recovery/missing-delivery-acts.csv"
+type = "table"
+title = "208 актов без доступной копии"
+description = "Объекты, даты доставок и имена файлов для поиска резервных копий или повторной загрузки."
+logical_id = "f3984d61-0203-435a-8550-e77f334ac612"
+content_hash = "sha256:5d063975c6cd85ec15fe3bbec4c92b6fc899b352b34ec76a34db576cc97873d3"
+size = 35384
+mtime_ms = 1790062659176
+storage_uri = "gcs://replit-rams-assets-sisko/rams/assets/repl:dc0230b6-749f-4641-bd62-6011f8714ac1/f3984d61-0203-435a-8550-e77f334ac612/156fd578-2b52-4f7d-8108-a028fc1f308c"
+storage_version_token = "1790062788796868"
+content_type = "text/csv"

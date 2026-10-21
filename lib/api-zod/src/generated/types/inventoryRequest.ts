@@ -5,8 +5,8 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
-import type { InventoryRequestItem } from './inventoryRequestItem';
-import type { InventoryRequestStatus } from './inventoryRequestStatus';
+import type { InventoryRequestItem } from "./inventoryRequestItem";
+import type { InventoryRequestStatus } from "./inventoryRequestStatus";
 
 export interface InventoryRequest {
   id: string;

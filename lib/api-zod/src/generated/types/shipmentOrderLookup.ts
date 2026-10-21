@@ -5,11 +5,15 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
-import type { ShipmentOrderItemLookup } from './shipmentOrderItemLookup';
+import type { OperationalOrderStatus } from "./operationalOrderStatus";
+import type { ShipmentOrderItemLookup } from "./shipmentOrderItemLookup";
 
 export interface ShipmentOrderLookup {
   id: string;
   clientName: string;
   isPaid: boolean;
+  status: OperationalOrderStatus;
+  /** @nullable */
+  summaryId: string | null;
   items: ShipmentOrderItemLookup[];
 }

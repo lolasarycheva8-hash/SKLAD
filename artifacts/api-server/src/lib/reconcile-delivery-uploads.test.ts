@@ -14,30 +14,19 @@ const young = new Date("2026-03-10T11:00:00.000Z");
 function dependencies(
   uploads: DeliveryUploadObject[],
   referenced: string[] = [],
-  overrides: {
-    remove?: (path: string) => Promise<"deleted" | "raceSkipped">;
-  } = {},
 ) {
-  const deleted: string[] = [];
   return {
-    deleted,
-    value: {
-      listUploads: async () => uploads,
-      listReferencedObjectPaths: async () => referenced,
-      deleteIfUnreferenced: overrides.remove ?? (async (path: string) => {
-        deleted.push(path);
-        return "deleted" as const;
-      }),
-    },
+    listUploads: async () => uploads,
+    listReferencedObjectPaths: async () => referenced,
   };
 }
 
-test("dry run selects an old orphan but deletes nothing", async () => {
+test("reconciliation reports and preserves an old unregistered object", async () => {
   const deps = dependencies([{ objectPath: "/objects/uploads/old", createdAt: old }]);
-  const summary = await reconcileDeliveryUploads(deps.value, { now });
+  const summary = await reconcileDeliveryUploads(deps, { now });
   assert.equal(summary.candidates, 1);
+  assert.equal(summary.preserved, 1);
   assert.equal(summary.deleted, 0);
-  assert.deepEqual(deps.deleted, []);
 });
 
 test("referenced, young, threshold-equal, and unknown-age objects are skipped", async () => {
@@ -52,7 +41,7 @@ test("referenced, young, threshold-equal, and unknown-age objects are skipped", 
     ],
     ["/objects/uploads/referenced"],
   );
-  const summary = await reconcileDeliveryUploads(deps.value, { now });
+  const summary = await reconcileDeliveryUploads(deps, { now });
   assert.deepEqual(
     {
       referenced: summary.referenced,
@@ -64,71 +53,18 @@ test("referenced, young, threshold-equal, and unknown-age objects are skipped", 
   );
 });
 
-test("delete mode rechecks and deletes an old orphan", async () => {
-  const deps = dependencies([{ objectPath: "/objects/uploads/old", createdAt: old }]);
-  const summary = await reconcileDeliveryUploads(deps.value, { dryRun: false, now });
-  assert.equal(summary.deleted, 1);
-  assert.deepEqual(deps.deleted, ["/objects/uploads/old"]);
-});
-
-test("delete mode skips an object attached during reconciliation", async () => {
+test("all old unregistered objects are preserved without a deletion callback", async () => {
   const deps = dependencies(
-    [{ objectPath: "/objects/uploads/race", createdAt: old }],
-    [],
-    { remove: async () => "raceSkipped" },
+    [
+      { objectPath: "/objects/uploads/dev-db-unregistered", createdAt: old },
+      { objectPath: "/objects/uploads/prod-delivery-act", createdAt: old },
+    ],
   );
-  const summary = await reconcileDeliveryUploads(deps.value, { dryRun: false, now });
-  assert.equal(summary.raceSkipped, 1);
+  const summary = await reconcileDeliveryUploads(deps, { now });
+  assert.equal(summary.candidates, 2);
+  assert.equal(summary.preserved, 2);
   assert.equal(summary.deleted, 0);
-});
-
-test("individual delete failures are recorded and do not stop later deletes", async () => {
-  const deleted: string[] = [];
-  const deps = dependencies(
-    [
-      { objectPath: "/objects/uploads/fails", createdAt: old },
-      { objectPath: "/objects/uploads/succeeds", createdAt: old },
-    ],
-    [],
-    {
-      remove: async (path) => {
-        if (path.endsWith("/fails")) throw new Error("storage unavailable");
-        deleted.push(path);
-        return "deleted";
-      },
-    },
-  );
-  const summary = await reconcileDeliveryUploads(deps.value, { dryRun: false, now });
-  assert.equal(summary.failed, 1);
-  assert.equal(summary.deleted, 1);
-  assert.deepEqual(summary.failures, [
-    { objectPath: "/objects/uploads/fails", error: "storage unavailable" },
-  ]);
-  assert.deepEqual(deleted, ["/objects/uploads/succeeds"]);
-});
-
-test("delete decision is delegated as one coordinated operation per candidate", async () => {
-  const decisions: string[] = [];
-  const deps = dependencies(
-    [
-      { objectPath: "/objects/uploads/attached-during-run", createdAt: old },
-      { objectPath: "/objects/uploads/still-orphaned", createdAt: old },
-    ],
-    [],
-    {
-      remove: async (path) => {
-        decisions.push(path);
-        return path.endsWith("attached-during-run") ? "raceSkipped" : "deleted";
-      },
-    },
-  );
-  const summary = await reconcileDeliveryUploads(deps.value, { dryRun: false, now });
-  assert.deepEqual(decisions, [
-    "/objects/uploads/attached-during-run",
-    "/objects/uploads/still-orphaned",
-  ]);
-  assert.equal(summary.raceSkipped, 1);
-  assert.equal(summary.deleted, 1);
+  assert.equal(summary.failed, 0);
 });
 
 test("minimum age validation rejects unsafe thresholds", () => {

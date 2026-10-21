@@ -12,27 +12,33 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import {
   CheckCircle2, MapPin, Camera, Loader2,
-  ChevronLeft, ChevronRight, Search, Calendar, Edit2, AlertCircle, Check
+  ChevronLeft, ChevronRight, Search, Calendar, Edit2, AlertCircle, Check, Phone
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { usePermissions } from "@/hooks/use-permissions";
+import { useMoscowDeliveryDate } from "@/hooks/use-moscow-delivery-date";
 import { DeliveryPhotosDialog } from "@/components/delivery-photos-dialog";
 import { DeliveryCommentDialog } from "@/components/delivery-comment-dialog";
 import { cn } from "@/lib/utils";
+import {
+  AdditionalOrderItems,
+  AdditionalOrderLabel,
+  isAdditionalDelivery,
+  standardDeliveryLabel,
+} from "@/components/additional-order-display";
 
-function isoDate(d: Date): string {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
+type MyAdditionalDelivery = Delivery;
+
+function needsDeliveryAct(delivery: Delivery, month: string): boolean {
+  return !delivery.archivedAt && !!delivery.actualDate &&
+    (delivery.scheduleMonth ?? delivery.plannedDate?.slice(0, 7)) === month &&
+    delivery.photosCount === 0 && delivery.workflowStatus !== "closed";
 }
 
-const todayStr = isoDate(new Date());
-
 function moveDay(current: string, delta: number): string {
-  const d = new Date(current);
-  d.setDate(d.getDate() + delta);
-  return isoDate(d);
+  const d = new Date(`${current}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + delta);
+  return d.toISOString().slice(0, 10);
 }
 
 function FilterChip({ active, onClick, children }: any) {
@@ -40,7 +46,7 @@ function FilterChip({ active, onClick, children }: any) {
     <button
       onClick={onClick}
       className={cn(
-        "flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium transition-all whitespace-nowrap",
+        "flex min-h-9 items-center gap-1 px-2 py-1 rounded-full text-xs font-medium transition-all whitespace-nowrap",
         active
           ? "bg-slate-900 text-white shadow-sm"
           : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-50"
@@ -64,14 +70,33 @@ function StatusBadge({ delivery, isOverdue }: { delivery: Delivery, isOverdue: b
   return <Badge variant="secondary" className="shrink-0 text-slate-700">План</Badge>;
 }
 
+function managerPhoneHref(contact: string | null | undefined): string | null {
+  if (!contact) return null;
+  const phone = contact.match(/\+?\d[\d\s().-]{4,}\d/)?.[0];
+  if (!phone) return null;
+  const normalized = phone.replace(/[^\d+]/g, "");
+  if (normalized.replace(/\D/g, "").length < 6) return null;
+  return `tel:${normalized}`;
+}
+
 export default function MyDeliveries() {
-  const { user } = usePermissions();
-  const [selectedDate, setSelectedDate] = useState(todayStr);
+  const { user, canView } = usePermissions();
+  const canViewOrders =
+    typeof canView === "function" && canView("orders");
+  const { today: todayStr, selectedDate, setSelectedDate } = useMoscowDeliveryDate();
+  const selectedMonth = selectedDate.slice(0, 7);
+  const monthLabel = new Intl.DateTimeFormat("ru-RU", { month: "long", year: "numeric" })
+    .format(new Date(`${selectedMonth}-01T12:00:00`));
   const [search, setSearch] = useState("");
-  const [activeFilter, setActiveFilter] = useState<"all" | "planned" | "done" | "closed" | "not_completed">("all");
+  const searchText = search.trim();
+  const isSearching = searchText.length > 0;
+  const [activeFilter, setActiveFilter] = useState<"all" | "planned" | "done" | "closed" | "not_completed" | "without_act">("planned");
 
   const [photosDelivery, setPhotosDelivery] = useState<Delivery | null>(null);
   const [commentDelivery, setCommentDelivery] = useState<Delivery | null>(null);
+
+  const missingActsQuery = useListMyDeliveries();
+  const missingActsCount = (missingActsQuery.data ?? []).filter(d => needsDeliveryAct(d, selectedMonth)).length;
 
   const {
     data: deliveries,
@@ -80,52 +105,55 @@ export default function MyDeliveries() {
     isFetching,
     refetch,
   } = useListMyDeliveries({
-    from: selectedDate,
-    to: selectedDate,
-    search: search.trim().length > 0 ? search.trim() : undefined,
+    from: isSearching || activeFilter === "without_act" ? undefined : selectedDate,
+    to: isSearching || activeFilter === "without_act" ? undefined : selectedDate,
+    search: isSearching ? searchText : undefined,
   });
 
   const isToday = selectedDate === todayStr;
 
   const { counts, filtered } = useMemo(() => {
     const list = deliveries ?? [];
-    const c = { planned: 0, done: 0, closed: 0, not_completed: 0 };
+    const c = {
+      planned: list.length,
+      done: 0,
+      closed: 0,
+      not_completed: 0,
+    };
     const f = [];
 
     for (const d of list) {
-      let cat: "planned" | "done" | "closed" | "not_completed" = "planned";
+      let cat: "done" | "closed" | "not_completed";
 
       if (d.workflowStatus === "closed") {
         c.closed++;
+        c.done++;
         cat = "closed";
       } else if (d.workflowStatus === "done") {
         c.done++;
         cat = "done";
       } else {
-        const isOverdue = d.plannedDate !== null && d.plannedDate < todayStr;
-        if (isOverdue) {
-          c.not_completed++;
-          cat = "not_completed";
-        } else {
-          c.planned++;
-          cat = "planned";
-        }
+        c.not_completed++;
+        cat = "not_completed";
       }
 
-      if (activeFilter === "all" || activeFilter === cat) {
+      if (
+        activeFilter === "all" ||
+        activeFilter === "planned" ||
+        (activeFilter === "done" && !!d.actualDate) ||
+        (activeFilter === "without_act" && needsDeliveryAct(d, selectedMonth)) ||
+        activeFilter === cat
+      ) {
         f.push(d);
       }
     }
 
     f.sort((a, b) => {
-      const aDone = !!a.actualDate ? 1 : 0;
-      const bDone = !!b.actualDate ? 1 : 0;
-      if (aDone !== bDone) return aDone - bDone;
-      return a.siteName.localeCompare(b.siteName);
+      return a.siteName.localeCompare(b.siteName) || a.id.localeCompare(b.id);
     });
 
     return { counts: c, filtered: f };
-  }, [deliveries, activeFilter, todayStr]);
+  }, [deliveries, activeFilter, selectedMonth]);
 
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -133,10 +161,19 @@ export default function MyDeliveries() {
   const markDone = useMarkMyDeliveryDone({
     mutation: {
       onSuccess: () => {
+        if (activeFilter === "not_completed") setActiveFilter("planned");
         queryClient.invalidateQueries({ queryKey: getListMyDeliveriesQueryKey() });
         toast({ title: "Доставка отмечена выполненной" });
       },
       onError: (err: any) => {
+        if (err.response?.status === 404) {
+          queryClient.invalidateQueries({ queryKey: getListMyDeliveriesQueryKey() });
+          toast({
+            title: "Доставка больше недоступна",
+            description: "Список доставок обновлён.",
+          });
+          return;
+        }
         toast({ title: "Ошибка", description: err.response?.data?.error ?? err.message, variant: "destructive" });
       }
     }
@@ -147,50 +184,79 @@ export default function MyDeliveries() {
       data-testid="my-deliveries-page"
       className="mx-auto w-full min-w-0 max-w-lg overflow-x-hidden pb-12"
     >
+      {missingActsCount > 0 && (
+        <div role="status" className="mx-3 mb-2 rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-xs leading-5 text-red-800" data-testid="missing-acts-notice">
+          <p className="font-semibold">У вас есть доставки без подтверждения. Вложите акт.</p>
+          <p className="capitalize">{monthLabel}</p>
+          <a
+            href="#my-deliveries-list"
+            className="inline-block py-1 font-semibold underline underline-offset-4"
+            onClick={() => {
+              setSearch("");
+              setActiveFilter("without_act");
+            }}
+          >
+            Открыть доставки без акта ({missingActsCount})
+          </a>
+        </div>
+      )}
+      {missingActsQuery.isError && (
+        <div role="status" className="mx-3 mb-3 rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm">
+          Не удалось проверить доставки без акта.{" "}
+          <button type="button" className="underline" onClick={() => missingActsQuery.refetch()}>Повторить</button>
+        </div>
+      )}
       {/* Header section with date and search */}
-      <div className="bg-[#f5ecd9] px-4 py-4 rounded-b-3xl shadow-sm mb-4 space-y-4">
-        <h1 className="text-xl font-bold text-slate-900 flex items-center gap-2 min-w-0 break-words">
-          <Calendar className="h-6 w-6 text-orange-600 shrink-0" />
-          Мои доставки {user?.name ? <span className="opacity-70 font-normal truncate">— {user.name}</span> : ""}
+      <div className="bg-[#f5ecd9] px-3 py-2 rounded-b-xl shadow-sm mb-2 space-y-2">
+        <h1 className="text-base font-bold text-slate-900 flex items-center gap-2 min-w-0">
+          <Calendar className="h-4 w-4 text-orange-600 shrink-0" />
+          <span className="shrink-0">Мои доставки</span>
+          {user?.name ? <span className="min-w-0 text-xs opacity-70 font-normal truncate" title={user.name}>— {user.name}</span> : ""}
         </h1>
 
-        <div className="flex items-center justify-between bg-white rounded-2xl shadow-sm p-1">
-          <Button variant="ghost" size="icon" className="h-12 w-12 shrink-0 rounded-xl" onClick={() => setSelectedDate(moveDay(selectedDate, -1))}>
+        <div className="flex items-center justify-between bg-white rounded-lg shadow-sm">
+          <Button variant="ghost" size="icon" aria-label="Предыдущий день" className="h-10 w-11 shrink-0 rounded-lg" onClick={() => setSelectedDate(moveDay(selectedDate, -1))}>
             <ChevronLeft className="h-6 w-6 text-slate-600" />
           </Button>
-          <div className="flex flex-col items-center">
+          <div className="flex min-w-0 items-center gap-1">
             <input
               type="date"
               value={selectedDate}
               onChange={e => e.target.value && setSelectedDate(e.target.value)}
-              className="bg-transparent border-none text-[17px] font-bold text-center outline-none w-[140px] p-0 text-slate-900"
+              aria-label="Дата доставок"
+              className="bg-transparent border-none text-base font-bold text-center outline-none w-[140px] p-0 text-slate-900"
             />
             {isToday && <span className="text-[10px] uppercase font-extrabold text-orange-600 tracking-wider">Сегодня</span>}
           </div>
-          <Button variant="ghost" size="icon" className="h-12 w-12 shrink-0 rounded-xl" onClick={() => setSelectedDate(moveDay(selectedDate, 1))}>
+          <Button variant="ghost" size="icon" aria-label="Следующий день" className="h-10 w-11 shrink-0 rounded-lg" onClick={() => setSelectedDate(moveDay(selectedDate, 1))}>
             <ChevronRight className="h-6 w-6 text-slate-600" />
           </Button>
         </div>
 
         <div className="relative">
-          <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400" />
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
           <Input
             placeholder="Поиск по объекту или адресу..."
             value={search}
             onChange={e => setSearch(e.target.value)}
-            className="pl-11 h-12 text-base rounded-2xl bg-white/90 border-white focus:bg-white shadow-sm transition-colors placeholder:text-slate-400"
+            className="pl-9 h-10 text-base rounded-lg bg-white/90 border-white focus:bg-white shadow-sm transition-colors placeholder:text-slate-400"
           />
         </div>
+        {(isSearching || activeFilter === "without_act") && (
+          <p className="mt-2 text-sm text-slate-600" role="status">
+            {activeFilter === "without_act" ? `Выполненные доставки без акта за выбранный месяц: ${monthLabel}` : "Поиск по всем дням"}
+          </p>
+        )}
       </div>
 
       {/* Filters */}
-      <div className="px-4 mb-4">
-        <div className="flex flex-wrap gap-2">
+      <div className="px-3 mb-2">
+        <div className="flex flex-wrap gap-1">
           <FilterChip active={activeFilter === 'all'} onClick={() => setActiveFilter('all')}>
             Все
           </FilterChip>
           <FilterChip active={activeFilter === 'planned'} onClick={() => setActiveFilter('planned')}>
-            {isToday ? "План на сегодня" : "План"}
+            {isSearching ? "План за все дни" : isToday ? "План на сегодня" : "План"}
             <span className={cn("px-1.5 py-0.5 rounded-full text-[10px]", activeFilter === 'planned' ? "bg-white/20 text-white" : "bg-slate-100 text-slate-500")}>{counts.planned}</span>
           </FilterChip>
           <FilterChip active={activeFilter === 'not_completed'} onClick={() => setActiveFilter('not_completed')}>
@@ -205,11 +271,14 @@ export default function MyDeliveries() {
             Закрыто
             <span className={cn("px-1.5 py-0.5 rounded-full text-[10px]", activeFilter === 'closed' ? "bg-white/20 text-white" : "bg-emerald-100 text-emerald-700")}>{counts.closed}</span>
           </FilterChip>
+          <FilterChip active={activeFilter === 'without_act'} onClick={() => setActiveFilter('without_act')}>
+            Выполнено без акта
+          </FilterChip>
         </div>
       </div>
 
       {/* List */}
-      <div className="px-4 space-y-4">
+      <div id="my-deliveries-list" className="space-y-2 px-3 sm:px-4">
         {isLoading ? (
           <div className="py-16 flex flex-col items-center justify-center text-slate-400">
             <Loader2 className="h-10 w-10 animate-spin mb-3 opacity-50" />
@@ -239,11 +308,17 @@ export default function MyDeliveries() {
           <div className="py-16 flex flex-col items-center justify-center text-slate-400 text-center px-4 bg-slate-50/50 rounded-3xl border border-dashed border-slate-200">
             <AlertCircle className="h-12 w-12 mb-3 opacity-20" />
             <p className="text-[17px] font-semibold text-slate-600">Нет доставок</p>
-            <p className="text-[15px] mt-1">По вашему запросу ничего не найдено на выбранную дату.</p>
+            <p className="text-[15px] mt-1">
+              {isSearching
+                ? "По вашему запросу ничего не найдено за все дни."
+                : "По вашему запросу ничего не найдено на выбранную дату."}
+            </p>
           </div>
         ) : (
           filtered.map(d => {
+            const additionalDelivery = d as MyAdditionalDelivery;
             const isOverdue = d.plannedDate !== null && d.plannedDate < todayStr;
+            const phoneHref = managerPhoneHref(d.managerContact);
             let toneBorderColor = "border-slate-200";
             if (d.workflowStatus === "closed") toneBorderColor = "border-emerald-500 bg-emerald-50/30";
             else if (d.workflowStatus === "done") toneBorderColor = "border-orange-500 bg-orange-50/30";
@@ -253,65 +328,133 @@ export default function MyDeliveries() {
               <Card
                 key={d.id}
                 data-testid={`delivery-card-${d.id}`}
-                className={cn("min-w-0 shadow-sm overflow-hidden border-l-[5px] rounded-2xl", toneBorderColor)}
+                className={cn("min-w-0 overflow-hidden rounded-xl border-l-4 shadow-sm", toneBorderColor)}
               >
-                <div className="p-4 sm:p-5">
-                  <div className="flex justify-between items-start gap-2 mb-2">
-                    <h3
+                <div className="p-3 sm:p-4">
+                  <div className="mb-1 flex items-start justify-between gap-2">
+                    <div className="min-w-0 flex-1">
+                      <h3
                       data-testid={`delivery-site-name-${d.id}`}
-                      className="min-w-0 break-words [overflow-wrap:anywhere] font-bold text-[18px] leading-tight text-slate-900"
+                      className="min-w-0 break-words text-[16px] font-bold leading-tight text-slate-900 [overflow-wrap:anywhere]"
+                      >
+                        {d.siteName}
+                      </h3>
+                      {d.tradeNetworkName?.trim() && (
+                        <p
+                          data-testid={`delivery-trade-network-${d.id}`}
+                          className="mt-1 break-words text-xs font-bold text-[#800020] [overflow-wrap:anywhere]"
+                        >
+                          Торговая сеть: {d.tradeNetworkName.trim()}
+                        </p>
+                      )}
+                      {d.deliveryType && <p className="mt-1 text-xs font-medium text-slate-700">Тип поставки: {d.deliveryType}</p>}
+                      {isSearching && (
+                        <p className="mt-1 text-sm text-slate-600">
+                          План: {d.plannedDate
+                            ? new Date(`${d.plannedDate.slice(0, 10)}T12:00:00`).toLocaleDateString("ru-RU")
+                            : "Дата не назначена"}
+                        </p>
+                      )}
+                      {(isAdditionalDelivery(additionalDelivery) || standardDeliveryLabel(d.deliveryType)) && (
+                        <div className="mt-1 flex flex-col items-start gap-1">
+                          <AdditionalOrderLabel
+                            delivery={additionalDelivery}
+                            canViewOrders={canViewOrders}
+                          />
+                          <AdditionalOrderItems
+                            items={additionalDelivery.additionalOrderItems}
+                            compact
+                          />
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex shrink-0 items-center gap-1">
+                      {phoneHref && (
+                        <Button
+                          asChild
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7 rounded-full text-emerald-700 hover:bg-emerald-50 hover:text-emerald-800"
+                        >
+                          <a
+                            href={phoneHref}
+                            aria-label={`Позвонить менеджеру объекта ${d.siteName}`}
+                            title={`Позвонить: ${d.managerContact}`}
+                            data-testid={`link-call-manager-${d.id}`}
+                          >
+                            <Phone className="h-4 w-4" />
+                          </a>
+                        </Button>
+                      )}
+                      <StatusBadge delivery={d} isOverdue={isOverdue} />
+                    </div>
+                  </div>
+
+                  <div className="mb-2 flex min-w-0 items-start gap-1.5 text-[13px] leading-snug text-slate-600">
+                    <MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-400" />
+                    <span className="line-clamp-2 min-w-0 flex-1 break-words [overflow-wrap:anywhere]">{d.siteAddress}</span>
+                  </div>
+
+                  {d.logisticianNote && (
+                    <div
+                      className="mb-2 rounded-lg border border-blue-200 bg-blue-50 p-2"
+                      data-testid={`delivery-logistician-note-${d.id}`}
                     >
-                      {d.siteName}
-                    </h3>
-                    <StatusBadge delivery={d} isOverdue={isOverdue} />
-                  </div>
+                      <div className="mb-0.5 text-[10px] font-bold uppercase tracking-wide text-blue-700">
+                        Примечание логиста
+                      </div>
+                      <div className="line-clamp-2 min-w-0 whitespace-pre-wrap break-words text-[13px] leading-snug text-blue-950 [overflow-wrap:anywhere]">
+                        {d.logisticianNote}
+                      </div>
+                    </div>
+                  )}
 
-                  <div className="mb-3 flex min-w-0 items-start gap-2 text-[15px] text-slate-600">
-                    <MapPin className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" />
-                    <span className="min-w-0 flex-1 break-words [overflow-wrap:anywhere]">{d.siteAddress}</span>
-                  </div>
-
-                  <div className="bg-white/80 border border-slate-100 rounded-xl p-3.5 mb-4 shadow-sm">
-                    <div className="flex justify-between items-center mb-1.5">
-                      <span className="text-[11px] font-bold uppercase tracking-widest text-slate-500">Комментарий</span>
+                  <div className="mb-2 rounded-lg border border-slate-100 bg-white/80 p-2 shadow-sm">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Комментарий</span>
                       {d.workflowStatus !== "closed" && (
-                        <Button variant="ghost" size="sm" className="h-7 px-2.5 text-xs font-semibold text-orange-600 hover:text-orange-700 hover:bg-orange-50 rounded-lg" onClick={() => setCommentDelivery(d)}>
-                          <Edit2 className="h-3 w-3 mr-1.5" /> {d.note ? "Изменить" : "Написать"}
+                        <Button variant="ghost" size="sm" className="h-6 rounded-md px-1.5 text-[11px] font-semibold text-orange-600 hover:bg-orange-50 hover:text-orange-700" onClick={() => setCommentDelivery(d)}>
+                          <Edit2 className="mr-1 h-3 w-3" /> {d.note ? "Изменить" : "Написать"}
                         </Button>
                       )}
                     </div>
                     {d.note ? (
                       <div
                         data-testid={`delivery-note-${d.id}`}
-                        className="min-w-0 break-words [overflow-wrap:anywhere] whitespace-pre-wrap text-[15px] leading-relaxed text-slate-800"
+                        className="line-clamp-2 min-w-0 whitespace-pre-wrap break-words text-[13px] leading-snug text-slate-800 [overflow-wrap:anywhere]"
                       >
                         {d.note}
                       </div>
                     ) : (
-                      <div className="text-[14px] text-slate-400 italic">Нет комментария</div>
+                      <div className="text-[12px] italic text-slate-400">Нет комментария</div>
                     )}
                   </div>
 
+                    {d.actualDate && d.workflowStatus !== "closed" && (
+                      <p className="mb-2 text-sm text-orange-700" role="status">
+                        {d.photosCount > 0 ? "Акт загружен · Ожидает проверки" : "Выполнено · Нет акта"}
+                      </p>
+                    )}
                   <div className="flex min-w-0 gap-2">
                     {!d.actualDate && (
                       <Button
-                        className="h-14 min-w-0 flex-1 rounded-xl bg-emerald-600 px-2 text-[16px] font-bold shadow-sm hover:bg-emerald-700"
+                        className="h-10 min-w-0 flex-1 rounded-lg bg-emerald-600 px-2 text-[14px] font-bold shadow-sm hover:bg-emerald-700"
                         onClick={() => markDone.mutate({ id: d.id })}
                         disabled={markDone.isPending}
                         data-testid={`button-mark-done-${d.id}`}
                       >
-                        {markDone.isPending ? <Loader2 className="animate-spin h-6 w-6" /> : <Check className="h-6 w-6 mr-1.5" />}
+                        {markDone.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="mr-1 h-4 w-4" />}
                         Выполнено
                       </Button>
                     )}
                     <Button
                       variant={d.photosCount > 0 ? "secondary" : "outline"}
-                      className={cn("h-14 min-w-0 px-2 text-[16px] font-bold rounded-xl shadow-sm", !d.actualDate ? "flex-1" : "w-full border-slate-300 bg-white")}
+                      className={cn("h-10 min-w-0 rounded-lg px-2 text-[14px] font-bold shadow-sm", !d.actualDate ? "flex-1" : "w-full border-slate-300 bg-white")}
                       onClick={() => setPhotosDelivery(d)}
                       data-testid={`button-acts-${d.id}`}
                     >
-                      <Camera className={cn("h-6 w-6 mr-2", d.photosCount > 0 ? "text-slate-800" : "text-slate-500")} />
-                      Акты {d.photosCount > 0 && <Badge className="ml-2 px-2 py-0.5 text-xs bg-white text-slate-900 rounded-full shadow-sm">{d.photosCount}</Badge>}
+                      <Camera className={cn("mr-1.5 h-4 w-4", d.photosCount > 0 ? "text-slate-800" : "text-slate-500")} />
+                      Акты {d.photosCount > 0 && <Badge className="ml-1.5 rounded-full bg-white px-1.5 py-0 text-[10px] text-slate-900 shadow-sm">{d.photosCount}</Badge>}
                     </Button>
                   </div>
                 </div>
@@ -327,6 +470,8 @@ export default function MyDeliveries() {
         onOpenChange={(open) => !open && setPhotosDelivery(null)}
         canEdit={true}
         canDelete={false}
+        canDownload
+        allowConfirmCompletion
       />
 
       <DeliveryCommentDialog

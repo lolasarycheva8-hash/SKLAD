@@ -3,8 +3,10 @@
   "version": "0.0.0",
   "private": true,
   "scripts": {
-    "codegen": "orval --config ./orval.config.ts && pnpm -w run typecheck:libs",
-    "check:generated": "node ./check-generated-output.mjs"
+    "codegen:generate": "orval --config ./orval.config.ts",
+    "codegen": "pnpm run codegen:generate && pnpm -w run typecheck:libs",
+    "check:generated": "pnpm run test:check-generated && node ./check-generated-output.mjs",
+    "test:check-generated": "node --test ./check-generated-output.test.mjs"
   },
   "devDependencies": {
     "orval": "^8.18.0"

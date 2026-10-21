@@ -13,11 +13,23 @@ import {
 } from "../lib/objectStorage";
 import {
   canAccessDeliveryActs,
+  canEditDeliveries,
   canUploadDeliveryActs,
 } from "../lib/delivery-acts";
+import { createStorageFailureLogFields } from "../lib/storage-log-sanitizer";
 
 const router: IRouter = Router();
 const objectStorageService = new ObjectStorageService();
+
+// External housekeeping is separate from authorization so integration tests can
+// exercise the real preflight route without touching stored files.
+export const storageUploadPreflightEffects = {
+  async runCleanupIfDue(): Promise<void> {
+    const { deliveryUploadCleanupCoordinator } =
+      await import("../lib/delivery-upload-cleanup-runtime");
+    await deliveryUploadCleanupCoordinator.runIfDue();
+  },
+};
 
 // This router is mounted behind requireAuth (Clerk); req.appUser is set for
 // every authenticated request.
@@ -51,7 +63,10 @@ router.post(
     try {
       const { name, size, contentType, deliveryId } = parsed.data;
       const [delivery] = await db
-        .select({ driverUserId: deliveriesTable.driverUserId })
+        .select({
+          driverUserId: deliveriesTable.driverUserId,
+          archivedAt: deliveriesTable.archivedAt,
+        })
         .from(deliveriesTable)
         .where(eq(deliveriesTable.id, deliveryId))
         .limit(1);
@@ -59,7 +74,15 @@ router.post(
         res.status(404).json({ error: "Доставка не найдена" });
         return;
       }
-      if (!canUploadDeliveryActs(req.appUser, delivery.driverUserId)) {
+      if (delivery.archivedAt) {
+        res
+          .status(409)
+          .json({ error: "Архивная доставка недоступна для загрузки актов" });
+        return;
+      }
+      if (
+        !canUploadDeliveryActs(req.appUser, delivery.driverUserId)
+      ) {
         res
           .status(403)
           .json({ error: "Нет прав загружать акты этой доставки" });
@@ -69,9 +92,7 @@ router.post(
       // Autoscaled instances may have been asleep past the timer deadline.
       // This shared coordinator coalesces simultaneous requests and never
       // rejects an upload request solely because cleanup failed.
-      const { deliveryUploadCleanupCoordinator } =
-        await import("../lib/delivery-upload-cleanup-runtime");
-      await deliveryUploadCleanupCoordinator.runIfDue();
+      await storageUploadPreflightEffects.runCleanupIfDue();
       const uploadURL = await objectStorageService.getObjectEntityUploadURL();
       const objectPath =
         objectStorageService.normalizeObjectEntityPath(uploadURL);
@@ -84,7 +105,13 @@ router.post(
         }),
       );
     } catch (error) {
-      req.log.error({ err: error }, "Error generating upload URL");
+      req.log.error(
+        createStorageFailureLogFields({
+          operation: "request-upload-url",
+          error,
+        }),
+        "Error generating upload URL",
+      );
       res.status(500).json({ error: "Failed to generate upload URL" });
     }
   },
@@ -123,7 +150,16 @@ router.get(
         res.end();
       }
     } catch (error) {
-      req.log.error({ err: error }, "Error serving public object");
+      const raw = req.params.filePath;
+      const filePath = Array.isArray(raw) ? raw.join("/") : raw;
+      req.log.error(
+        createStorageFailureLogFields({
+          operation: "download-public-object",
+          error,
+          objectPath: filePath,
+        }),
+        "Error serving public object",
+      );
       res.status(500).json({ error: "Failed to serve public object" });
     }
   },
@@ -137,11 +173,10 @@ router.get(
  * be protected with authentication or ACL checks based on the use case.
  */
 router.get("/storage/objects/*path", async (req: Request, res: Response) => {
+  const raw = req.params.path;
+  const wildcardPath = Array.isArray(raw) ? raw.join("/") : raw;
+  const objectPath = `/objects/${wildcardPath}`;
   try {
-    const raw = req.params.path;
-    const wildcardPath = Array.isArray(raw) ? raw.join("/") : raw;
-    const objectPath = `/objects/${wildcardPath}`;
-
     if (!hasAuthenticatedSession(req)) {
       res.status(401).json({ error: "Unauthorized" });
       return;
@@ -153,7 +188,9 @@ router.get("/storage/objects/*path", async (req: Request, res: Response) => {
     const [registered] = await db
       .select({
         id: deliveryPhotosTable.id,
+        fileName: deliveryPhotosTable.fileName,
         driverUserId: deliveriesTable.driverUserId,
+        archivedAt: deliveriesTable.archivedAt,
       })
       .from(deliveryPhotosTable)
       .innerJoin(
@@ -171,13 +208,23 @@ router.get("/storage/objects/*path", async (req: Request, res: Response) => {
       res.status(404).json({ error: "Object not found" });
       return;
     }
-    if (!canAccessDeliveryActs(req.appUser, registered.driverUserId)) {
+    if (
+      registered.archivedAt
+        ? !canEditDeliveries(req.appUser)
+        : !canAccessDeliveryActs(req.appUser, registered.driverUserId)
+    ) {
       res.status(404).json({ error: "Object not found" });
       return;
     }
 
     const objectFile =
       await objectStorageService.getObjectEntityFile(objectPath);
+
+    // Availability probes must not download the file from storage.
+    if (req.method === "HEAD") {
+      res.status(200).end();
+      return;
+    }
 
     const response = await objectStorageService.downloadObject(objectFile);
 
@@ -195,8 +242,19 @@ router.get("/storage/objects/*path", async (req: Request, res: Response) => {
       "image/heic",
       "image/heif",
     ]);
-    if (!safeInlineTypes.has(contentType)) {
-      res.setHeader("Content-Disposition", 'attachment; filename="download"');
+    if (req.query.download === "1" || !safeInlineTypes.has(contentType)) {
+      const fileName = Buffer.from(
+        registered.fileName.replace(/[\u0000-\u001f\u007f/\\]/g, "_"),
+        "utf8",
+      ).toString("utf8");
+      const encodedName = encodeURIComponent(fileName || "delivery-act")
+        .replace(/['()*]/g, (character) =>
+          `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
+        );
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="delivery-act"; filename*=UTF-8''${encodedName}`,
+      );
     }
 
     if (response.body) {
@@ -209,11 +267,25 @@ router.get("/storage/objects/*path", async (req: Request, res: Response) => {
     }
   } catch (error) {
     if (error instanceof ObjectNotFoundError) {
-      req.log.warn({ err: error }, "Object not found");
+      req.log.warn(
+        createStorageFailureLogFields({
+          operation: "download-private-object",
+          error,
+          objectPath,
+        }),
+        "Object not found",
+      );
       res.status(404).json({ error: "Object not found" });
       return;
     }
-    req.log.error({ err: error }, "Error serving object");
+    req.log.error(
+      createStorageFailureLogFields({
+        operation: "download-private-object",
+        error,
+        objectPath,
+      }),
+      "Error serving object",
+    );
     res.status(500).json({ error: "Failed to serve object" });
   }
 });

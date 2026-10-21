@@ -5,7 +5,7 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
-import type { AuditLogEntry } from './auditLogEntry';
+import type { AuditLogEntry } from "./auditLogEntry";
 
 export interface AuditLogPage {
   items: AuditLogEntry[];

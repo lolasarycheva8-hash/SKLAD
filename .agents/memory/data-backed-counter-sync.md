@@ -9,4 +9,8 @@ In browser smoke tests, wait until a counter reflects a fixture-guaranteed value
 
 **How to apply:** When a fixture guarantees at least one row, synchronize on a positive counter or the fixture row itself before recording the baseline. Continue to verify the post-mutation counter from that loaded baseline.
 
+Capture and return the value from the same read that satisfies the wait condition; do not wait for a populated element and then separately read it again.
+
+**Why:** A query refresh or page reload between those two reads can turn a successful wait into an empty baseline. Waiting alone does not make the later read atomic.
+
 Release validation can run under enough parallel load that headless Chromium needs substantially longer than a local manual run to open its DevTools port. Keep startup budgets separate from UI assertion budgets and avoid relying on `/dev/shm`.

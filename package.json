@@ -8,10 +8,13 @@
     "typecheck:libs": "tsc --build",
     "typecheck": "pnpm run typecheck:libs && pnpm -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck",
     "check:api-generated": "pnpm --filter @workspace/api-spec run check:generated",
+    "test:release:structure": "node --test lib/api-spec/check-release-command.test.mjs",
     "test:release:roles": "pnpm run check:api-generated && ROLE_SMOKE_ALLOW_DEVELOPMENT_MUTATIONS=1 pnpm --filter @workspace/api-server run test:roles-smoke"
   },
   "private": true,
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1136.0",
+    "@aws-sdk/lib-storage": "^3.1136.0",
     "@replit/connectors-sdk": "^0.4.1"
   },
   "devDependencies": {

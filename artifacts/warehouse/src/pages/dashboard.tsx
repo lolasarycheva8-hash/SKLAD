@@ -5,6 +5,7 @@ import {
   useGetDashboardSummary,
   useGetDeliveryDashboardSummary,
   useListOrders,
+  useListOrderSummaries,
   useUpdateDelivery,
   getGetDeliveryDashboardSummaryQueryKey,
   getListDeliveriesQueryKey,
@@ -16,6 +17,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { usePermissions } from "@/hooks/use-permissions";
+import { createOverdueDeliveryBuckets } from "@/lib/overdue-delivery-buckets";
+import { currentMoscowMonth, formatMoscowDate } from "@/lib/moscow-date";
 import {
   AlertTriangle,
   Truck,
@@ -33,7 +36,7 @@ import {
 } from "lucide-react";
 
 function currentMonthValue() {
-  return new Date().toISOString().slice(0, 7);
+  return currentMoscowMonth();
 }
 
 const currency = new Intl.NumberFormat("ru-RU", {
@@ -44,7 +47,7 @@ const currency = new Intl.NumberFormat("ru-RU", {
 const dateFormatter = new Intl.DateTimeFormat("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric" });
 
 function todayValue() {
-  return new Date().toISOString().slice(0, 10);
+  return formatMoscowDate();
 }
 
 export default function Dashboard() {
@@ -53,6 +56,7 @@ export default function Dashboard() {
     month: currentMonthValue(),
   });
   const { data: orders, isLoading: isOrdersLoading } = useListOrders();
+  const { data: orderSummaries, isLoading: isSummariesLoading, isError: isSummariesError } = useListOrderSummaries();
   const { canEdit } = usePermissions();
   const canEditDeliveries = canEdit("deliveries");
   const { toast } = useToast();
@@ -63,9 +67,12 @@ export default function Dashboard() {
   const monthPaidTotal = monthOrders
     .filter((order) => order.isPaid)
     .reduce((sum, order) => sum + order.totalAmount, 0);
-  const unpaidOrders = (orders ?? [])
-    .filter((order) => !order.isPaid)
+  const summaryOrders = [...(orderSummaries ?? [])]
     .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+  const overdueBuckets = createOverdueDeliveryBuckets(
+    deliverySummary?.overdueDeliveries ?? [],
+    deliverySummary?.totalScheduled ?? 0,
+  );
 
   return (
     <div className="space-y-6">
@@ -256,18 +263,22 @@ export default function Dashboard() {
           <div>
             <Card className="h-full">
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-base">Заказы, ожидающие оплаты</CardTitle>
-                <Link href="/orders" className="text-sm text-primary hover:underline" data-testid="link-view-all-orders">
+                <CardTitle className="text-base">Итоговые заказы</CardTitle>
+                <Link href="/order-summaries" className="text-sm text-primary hover:underline" data-testid="link-view-all-orders">
                   Все заказы
                 </Link>
               </CardHeader>
               <CardContent>
-                {isOrdersLoading ? (
+                {isSummariesLoading ? (
                   <div className="space-y-2">
                     <Skeleton className="h-10 w-full" />
                     <Skeleton className="h-10 w-full" />
                   </div>
-                ) : unpaidOrders.length > 0 ? (
+                ) : isSummariesError ? (
+                  <p role="alert" className="text-sm text-destructive py-8 text-center">
+                    Не удалось загрузить итоговые заказы
+                  </p>
+                ) : summaryOrders.length > 0 ? (
                   <Table>
                     <TableHeader>
                       <TableRow>
@@ -278,16 +289,16 @@ export default function Dashboard() {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {unpaidOrders.map((order) => (
-                        <TableRow key={order.id} data-testid={`row-unpaid-order-${order.id}`}>
+                      {summaryOrders.map((order) => (
+                        <TableRow key={order.id} data-testid={`row-summary-order-${order.id}`}>
                           <TableCell className="font-medium">{order.clientName}</TableCell>
                           <TableCell className="text-muted-foreground whitespace-nowrap">
                             {dateFormatter.format(new Date(order.createdAt))}
                           </TableCell>
                           <TableCell className="text-right">{currency.format(order.totalAmount)}</TableCell>
                           <TableCell>
-                            <Link href={`/orders/${order.id}`}>
-                              <Button variant="outline" size="sm" data-testid={`button-open-unpaid-order-${order.id}`}>
+                            <Link href={`/order-summaries/${order.id}`}>
+                              <Button variant="outline" size="sm" data-testid={`button-open-summary-order-${order.id}`}>
                                 Открыть
                               </Button>
                             </Link>
@@ -298,7 +309,7 @@ export default function Dashboard() {
                   </Table>
                 ) : (
                   <p className="text-sm text-muted-foreground py-8 text-center">
-                    Заказов, ожидающих оплаты, нет
+                    Итоговых заказов пока нет
                   </p>
                 )}
               </CardContent>
@@ -454,11 +465,8 @@ export default function Dashboard() {
         </Card>
 
         <Card>
-          <CardHeader className="flex flex-row items-center justify-between">
+          <CardHeader>
             <CardTitle>Просроченные доставки</CardTitle>
-            <Link href="/deliveries" className="text-sm text-primary hover:underline" data-testid="link-view-overdue-deliveries">
-              Все доставки
-            </Link>
           </CardHeader>
           <CardContent>
             {isDeliveryLoading ? (
@@ -466,27 +474,27 @@ export default function Dashboard() {
                 <Skeleton className="h-10 w-full" />
                 <Skeleton className="h-10 w-full" />
               </div>
-            ) : deliverySummary && deliverySummary.overdueDeliveries.length > 0 ? (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Объект</TableHead>
-                    <TableHead>Водитель</TableHead>
-                    <TableHead className="text-right">Отставание</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {deliverySummary.overdueDeliveries.map((delivery) => (
-                    <TableRow key={delivery.id} data-testid={`row-overdue-${delivery.id}`}>
-                      <TableCell className="font-medium">{delivery.siteName}</TableCell>
-                      <TableCell className="text-muted-foreground">{delivery.driver}</TableCell>
-                      <TableCell className="text-right">
-                        <Badge variant="destructive">{delivery.lagDays} дн.</Badge>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+            ) : deliverySummary && deliverySummary.overdueCount > 0 ? (
+              <div className="divide-y">
+                {overdueBuckets.map((bucket) => (
+                  <Link
+                    key={bucket.id}
+                    href={`/deliveries?month=${month}&view=${bucket.id}`}
+                    className="flex min-h-14 items-center justify-between gap-4 py-3 transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    data-testid={`link-overdue-bucket-${bucket.id}`}
+                  >
+                    <span className="text-sm font-medium">{bucket.label}</span>
+                    <span className="flex shrink-0 items-center gap-2">
+                      <strong className="text-lg text-destructive">
+                        {bucket.count}
+                      </strong>
+                      <Badge variant="destructive">
+                        {bucket.percent.toFixed(0)}%
+                      </Badge>
+                    </span>
+                  </Link>
+                ))}
+              </div>
             ) : (
               <p className="text-sm text-muted-foreground py-8 text-center">
                 Просроченных доставок нет

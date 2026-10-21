@@ -5,8 +5,8 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
-import type { Section } from './section';
-import type { UserRole } from './userRole';
+import type { Section } from "./section";
+import type { UserRole } from "./userRole";
 
 export interface AppUser {
   id: string;
@@ -15,6 +15,8 @@ export interface AppUser {
   name: string | null;
   phone: string | null;
   role: UserRole;
+  /** Legacy-флаг водительской учётной записи */
+  isDriver: boolean;
   /** Разделы, доступные пользователю */
   editableSections: Section[];
   /** Объекты, закреплённые за пользователем (менеджер/руководитель проекта) */

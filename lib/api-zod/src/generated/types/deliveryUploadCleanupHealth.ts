@@ -5,8 +5,9 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
-import type { DeliveryUploadCleanupHealthStatus } from './deliveryUploadCleanupHealthStatus';
-import type { DeliveryUploadCleanupSummary } from './deliveryUploadCleanupSummary';
+import type { DeliveryUploadCleanupHealthFailureKind } from "./deliveryUploadCleanupHealthFailureKind";
+import type { DeliveryUploadCleanupHealthStatus } from "./deliveryUploadCleanupHealthStatus";
+import type { DeliveryUploadCleanupSummary } from "./deliveryUploadCleanupSummary";
 
 export interface DeliveryUploadCleanupHealth {
   /** @nullable */
@@ -14,6 +15,10 @@ export interface DeliveryUploadCleanupHealth {
   /** @nullable */
   lastSuccessfulRunAt: Date | null;
   status: DeliveryUploadCleanupHealthStatus;
+  failureKind: DeliveryUploadCleanupHealthFailureKind;
+  /** @minimum 0 */
+  consecutiveFailures: number;
+  hasRepeatedFailures: boolean;
   summary: DeliveryUploadCleanupSummary | null;
   staleAfterHours: number;
   isStale: boolean;

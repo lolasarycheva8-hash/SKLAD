@@ -5,6 +5,7 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
+import type { SiteServiceMode } from "./siteServiceMode";
 
 export interface DeliverySiteLookup {
   id: string;
@@ -12,7 +13,10 @@ export interface DeliverySiteLookup {
   address: string;
   branch: string;
   manager: string;
+  managerContact?: string;
   deliveryType: string;
+  serviceMode?: SiteServiceMode;
+  features: string;
   client: string;
   driver: string;
   /** @nullable */

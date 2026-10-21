@@ -10,11 +10,10 @@ import {
   UpdateCategoryResponse,
   DeleteCategoryParams,
 } from "@workspace/api-zod";
-import { requirePermission, requireSectionAccess } from "../middlewares/requirePermission";
+import { requireAdmin, requireSectionAccess } from "../middlewares/requirePermission";
 
 const router: IRouter = Router();
 router.use("/categories", requireSectionAccess("products"));
-const canEditProducts = requirePermission("products");
 
 router.get("/categories", async (_req, res): Promise<void> => {
   const categories = await db
@@ -24,7 +23,7 @@ router.get("/categories", async (_req, res): Promise<void> => {
   res.json(ListCategoriesResponse.parse(categories));
 });
 
-router.post("/categories", canEditProducts, async (req, res): Promise<void> => {
+router.post("/categories", requireAdmin, async (req, res): Promise<void> => {
   const parsed = CreateCategoryBody.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.message });
@@ -39,7 +38,7 @@ router.post("/categories", canEditProducts, async (req, res): Promise<void> => {
   res.status(201).json(CreateCategoryResponse.parse(category));
 });
 
-router.patch("/categories/:id", canEditProducts, async (req, res): Promise<void> => {
+router.patch("/categories/:id", requireAdmin, async (req, res): Promise<void> => {
   const params = UpdateCategoryParams.safeParse(req.params);
   if (!params.success) {
     res.status(400).json({ error: params.error.message });
@@ -65,7 +64,7 @@ router.patch("/categories/:id", canEditProducts, async (req, res): Promise<void>
   res.json(UpdateCategoryResponse.parse(category));
 });
 
-router.delete("/categories/:id", canEditProducts, async (req, res): Promise<void> => {
+router.delete("/categories/:id", requireAdmin, async (req, res): Promise<void> => {
   const params = DeleteCategoryParams.safeParse(req.params);
   if (!params.success) {
     res.status(400).json({ error: params.error.message });

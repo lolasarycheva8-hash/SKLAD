@@ -5,9 +5,9 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
-import type { InventoryRequestStatus } from './inventoryRequestStatus';
+import type { InventoryRequestStatus } from "./inventoryRequestStatus";
 
 export type ListInventoryRequestsParams = {
-status?: InventoryRequestStatus;
-siteId?: string;
+  status?: InventoryRequestStatus;
+  siteId?: string;
 };

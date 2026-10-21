@@ -7,7 +7,7 @@
  */
 
 export type ListProductsParams = {
-search?: string;
-categoryId?: string;
-lowStockOnly?: boolean;
+  search?: string;
+  categoryId?: string;
+  lowStockOnly?: boolean;
 };

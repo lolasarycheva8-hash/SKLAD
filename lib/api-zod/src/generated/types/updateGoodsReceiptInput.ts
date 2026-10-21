@@ -5,7 +5,7 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
-import type { UpdateGoodsReceiptInputItemsItem } from './updateGoodsReceiptInputItemsItem';
+import type { UpdateGoodsReceiptInputItemsItem } from "./updateGoodsReceiptInputItemsItem";
 
 export interface UpdateGoodsReceiptInput {
   docNumber?: string;

@@ -5,12 +5,12 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
-import type { LegacyDriverAssignmentResolution } from './legacyDriverAssignmentResolution';
+import type { LegacyDriverAssignmentResolution } from "./legacyDriverAssignmentResolution";
 
 export interface LegacyDriverAssignmentResolutionInput {
   /**
-     * @minItems 1
-     * @maxItems 200
-     */
+   * @minItems 1
+   * @maxItems 200
+   */
   mappings: LegacyDriverAssignmentResolution[];
 }

@@ -5,7 +5,7 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
-import type { LegacyDriverAssignment } from './legacyDriverAssignment';
+import type { LegacyDriverAssignment } from "./legacyDriverAssignment";
 
 export type LegacyDriverAssignmentResolutionItem = LegacyDriverAssignment & {
   driverUserId: string;

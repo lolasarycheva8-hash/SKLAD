@@ -44,8 +44,8 @@ export default function Categories() {
 
   const queryClient = useQueryClient();
   const { toast } = useToast();
-  const { canEdit } = usePermissions();
-  const canEditCategories = canEdit("products");
+  const { isAdmin } = usePermissions();
+  const canEditCategories = isAdmin;
 
   const { data: categories, isLoading } = useListCategories();
 

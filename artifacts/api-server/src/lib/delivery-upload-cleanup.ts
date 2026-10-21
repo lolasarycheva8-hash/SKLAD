@@ -12,10 +12,51 @@ import {
   type ReconciliationEvent,
   type ReconciliationSummary,
 } from "./reconcile-delivery-uploads";
+import {
+  sanitizePrivateStorageObjectPath,
+  sanitizePrivateStorageText,
+} from "./storage-log-sanitizer";
 
 export const DEFAULT_DELIVERY_UPLOAD_RETENTION_HOURS = 24;
 export const DEFAULT_DELIVERY_UPLOAD_CLEANUP_INTERVAL_HOURS = 6;
 export const DEFAULT_DELIVERY_UPLOAD_CLEANUP_INITIAL_DELAY_SECONDS = 60;
+export const DEFAULT_DELIVERY_UPLOAD_STORAGE_LIST_TIMEOUT_MS = 30_000;
+export const DEFAULT_DELIVERY_UPLOAD_STORAGE_FINALIZATION_TIMEOUT_MS = 30_000;
+
+export class DeliveryUploadStorageListTimeoutError extends Error {
+  constructor(timeoutMs: number) {
+    super(`Storage upload listing timed out after ${timeoutMs}ms`);
+    this.name = "DeliveryUploadStorageListTimeoutError";
+  }
+}
+
+export class DeliveryUploadStorageFinalizationTimeoutError extends Error {
+  constructor(timeoutMs: number) {
+    super(`Storage finalization timed out after ${timeoutMs}ms`);
+    this.name = "DeliveryUploadStorageFinalizationTimeoutError";
+  }
+}
+
+async function withStorageOperationTimeout<T>(
+  operation: (signal: AbortSignal) => Promise<T>,
+  timeoutMs: number,
+  createTimeoutError: () => Error,
+): Promise<T> {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      reject(createTimeoutError());
+      controller.abort();
+    }, timeoutMs);
+    timer.unref();
+  });
+  try {
+    return await Promise.race([operation(controller.signal), timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 
 export interface DeliveryUploadCleanupConfig {
   retentionHours: number;
@@ -88,13 +129,9 @@ export interface LiveDeliveryUploadCleanupDependencies {
   runWithGlobalCleanupLock: <T>(
     callback: (database: any) => Promise<T>,
   ) => Promise<T | null>;
-  listUploads: () => Promise<DeliveryUploadObject[]>;
+  listUploads: (signal: AbortSignal) => Promise<DeliveryUploadObject[]>;
   listReferencedObjectPaths: (database: any) => Promise<Iterable<string>>;
-  isObjectPathReferenced: (
-    transaction: any,
-    objectPath: string,
-  ) => Promise<boolean>;
-  deleteObject: (objectPath: string) => Promise<boolean>;
+  storageListTimeoutMs?: number;
   resumePendingDeletions?: (
     database: any,
   ) => Promise<PendingDeletionResumeSummary>;
@@ -114,6 +151,21 @@ export interface PendingDeletionResumeSummary {
 export interface DeliveryUploadCleanupSummary extends ReconciliationSummary {
   resumedPhotoDeletions: number;
   resumedDeliveryDeletions: number;
+}
+
+export function finalizeDeliveryUploadStorageObject(
+  deleteObject: (
+    objectPath: string,
+    signal?: AbortSignal,
+  ) => Promise<boolean>,
+  objectPath: string,
+  timeoutMs: number,
+): Promise<boolean> {
+  return withStorageOperationTimeout(
+    (signal) => deleteObject(objectPath, signal),
+    timeoutMs,
+    () => new DeliveryUploadStorageFinalizationTimeoutError(timeoutMs),
+  );
 }
 
 const EMPTY_PENDING_DELETION_SUMMARY: PendingDeletionResumeSummary = {
@@ -143,23 +195,31 @@ function mergePendingDeletionSummary(
   };
 }
 
+function sanitizeCleanupFailureForLog(
+  failure: { objectPath: string; error: string },
+): { objectPath: string; error: string } {
+  return {
+    objectPath: sanitizePrivateStorageObjectPath(failure.objectPath),
+    error: sanitizePrivateStorageText(failure.error),
+  };
+}
+
 function logEvent(logger: CleanupLogger, event: ReconciliationEvent): void {
-  if (event.type === "failure") {
-    logger.error(
-      { objectPath: event.object.objectPath, error: event.error },
-      "Delivery upload cleanup object deletion failed",
-    );
-  } else {
-    logger.debug(
-      { objectPath: event.object.objectPath, event: event.type },
-      "Delivery upload cleanup object processed",
-    );
-  }
+  logger.debug(
+    {
+      objectPath: sanitizePrivateStorageObjectPath(
+        event.object.objectPath,
+      ),
+      event: event.type,
+    },
+    "Delivery upload cleanup object processed",
+  );
 }
 
 /**
- * Executes an actual cleanup run. The global advisory lock, reference reads,
- * path locks, rechecks, and object deletes all use one transaction connection.
+ * Reconciles upload visibility and, in live mode, resumes only durable
+ * tombstones created by an authorized delete flow. Unregistered objects are
+ * always report-only because another database may own the shared namespace.
  */
 export async function runDeliveryUploadCleanup(
   dependencies: LiveDeliveryUploadCleanupDependencies,
@@ -174,9 +234,29 @@ export async function runDeliveryUploadCleanup(
         ? await dependencies.resumePendingDeletions(database)
         : EMPTY_PENDING_DELETION_SUMMARY;
 
-    const uploads = await dependencies.listUploads();
+    const storageListTimeoutMs =
+      dependencies.storageListTimeoutMs ??
+      DEFAULT_DELIVERY_UPLOAD_STORAGE_LIST_TIMEOUT_MS;
+    if (
+      !Number.isSafeInteger(storageListTimeoutMs) ||
+      storageListTimeoutMs < 1
+    ) {
+      throw new Error(
+        "Delivery upload storage list timeout must be a finite integer greater than or equal to 1",
+      );
+    }
+    const uploads = await withStorageOperationTimeout(
+      dependencies.listUploads,
+      storageListTimeoutMs,
+      () => new DeliveryUploadStorageListTimeoutError(storageListTimeoutMs),
+    );
     dependencies.logger.info(
-      { event: "start", dryRun, minimumAgeHours: options.minimumAgeHours ?? 24 },
+      {
+        event: "start",
+        dryRun,
+        orphanDisposition: "report-only",
+        minimumAgeHours: options.minimumAgeHours ?? 24,
+      },
       "Delivery upload cleanup started",
     );
     const reconciliationSummary = await reconcileDeliveryUploads(
@@ -184,42 +264,34 @@ export async function runDeliveryUploadCleanup(
         listUploads: async () => uploads,
         listReferencedObjectPaths: () =>
           dependencies.listReferencedObjectPaths(database),
-        deleteIfUnreferenced: async (objectPath) => {
-          return database.transaction(async (transaction: any) => {
-            await acquireDeliveryUploadLock(transaction, objectPath);
-            if (
-              await dependencies.isObjectPathReferenced(transaction, objectPath)
-            ) {
-              return "raceSkipped";
-            }
-            await dependencies.deleteObject(objectPath);
-            return "deleted";
-          });
-        },
         onEvent: (event) => logEvent(dependencies.logger, event),
       },
-      { dryRun, minimumAgeHours: options.minimumAgeHours },
+      { minimumAgeHours: options.minimumAgeHours },
     );
     const summary = mergePendingDeletionSummary(
       reconciliationSummary,
       pendingSummary,
     );
     dependencies.logger.info(
-      { event: "summary", ...summary },
+      {
+        event: "summary",
+        ...summary,
+        failures: summary.failures.map(sanitizeCleanupFailureForLog),
+      },
       "Delivery upload cleanup finished",
     );
     return summary;
   };
 
   if (dryRun) return execute(dependencies.db);
-  const summary = await dependencies.runWithGlobalCleanupLock(execute);
-  if (summary === null) {
+  const lockedSummary = await dependencies.runWithGlobalCleanupLock(execute);
+  if (lockedSummary === null) {
     dependencies.logger.info(
       { event: "concurrentRunSkipped" },
       "Delivery upload cleanup skipped because another instance is running",
     );
   }
-  return summary;
+  return lockedSummary;
 }
 
 export async function runLiveDeliveryUploadCleanup(
@@ -328,11 +400,41 @@ export function createProductionDeliveryUploadCleanupDependencies(
   deliveriesTable: any,
   deliveryPhotosTable: any,
   objectStorage: {
-    listPrivateUploadObjects: () => Promise<DeliveryUploadObject[]>;
-    deleteObjectEntity: (objectPath: string) => Promise<boolean>;
+    listPrivateUploadObjects: (
+      signal?: AbortSignal,
+    ) => Promise<DeliveryUploadObject[]>;
+    deleteObjectEntity: (
+      objectPath: string,
+      signal?: AbortSignal,
+    ) => Promise<boolean>;
   },
   logger: CleanupLogger,
+  storageFinalizationTimeoutMs =
+    DEFAULT_DELIVERY_UPLOAD_STORAGE_FINALIZATION_TIMEOUT_MS,
+  storageListTimeoutMs = DEFAULT_DELIVERY_UPLOAD_STORAGE_LIST_TIMEOUT_MS,
 ): LiveDeliveryUploadCleanupDependencies {
+  if (
+    !Number.isSafeInteger(storageFinalizationTimeoutMs) ||
+    storageFinalizationTimeoutMs < 1
+  ) {
+    throw new Error(
+      "Delivery upload storage finalization timeout must be a finite integer greater than or equal to 1",
+    );
+  }
+  if (
+    !Number.isSafeInteger(storageListTimeoutMs) ||
+    storageListTimeoutMs < 1
+  ) {
+    throw new Error(
+      "Delivery upload storage list timeout must be a finite integer greater than or equal to 1",
+    );
+  }
+  const finalizeTombstoneStorageObject = (objectPath: string) =>
+    finalizeDeliveryUploadStorageObject(
+      objectStorage.deleteObjectEntity.bind(objectStorage),
+      objectPath,
+      storageFinalizationTimeoutMs,
+    );
   const pool = db.$client;
   if (!pool) {
     throw new Error("Delivery upload cleanup requires a PostgreSQL pool");
@@ -342,6 +444,7 @@ export function createProductionDeliveryUploadCleanupDependencies(
     runWithGlobalCleanupLock: async (callback) => {
       const client = await pool.connect();
       let acquired = false;
+      let releaseError: Error | undefined;
       try {
         acquired = await tryAcquireDeliveryUploadCleanupSessionLock(client);
         if (!acquired) return null;
@@ -351,33 +454,24 @@ export function createProductionDeliveryUploadCleanupDependencies(
           try {
             await releaseDeliveryUploadCleanupSessionLock(client);
           } catch (error) {
-            client.release(
+            releaseError =
               error instanceof Error
                 ? error
-                : new Error("Failed to release delivery cleanup session lock"),
-            );
-            throw error;
+                : new Error("Failed to release delivery cleanup session lock");
           }
         }
-        client.release();
+        client.release(releaseError);
+        if (releaseError) throw releaseError;
       }
     },
-    listUploads: () => objectStorage.listPrivateUploadObjects(),
+    listUploads: (signal) => objectStorage.listPrivateUploadObjects(signal),
+    storageListTimeoutMs,
     listReferencedObjectPaths: async (database) => {
       const rows = await database
         .select({ objectPath: deliveryPhotosTable.objectPath })
         .from(deliveryPhotosTable);
       return rows.map(({ objectPath }: { objectPath: string }) => objectPath);
     },
-    isObjectPathReferenced: async (transaction, objectPath) => {
-      const [row] = await transaction
-        .select({ objectPath: deliveryPhotosTable.objectPath })
-        .from(deliveryPhotosTable)
-        .where(eq(deliveryPhotosTable.objectPath, objectPath))
-        .limit(1);
-      return row !== undefined;
-    },
-    deleteObject: (objectPath) => objectStorage.deleteObjectEntity(objectPath),
     resumePendingDeletions: async (database) => {
       const summary: PendingDeletionResumeSummary = {
         candidates: 0,
@@ -392,7 +486,12 @@ export function createProductionDeliveryUploadCleanupDependencies(
         transaction
           .select({ id: deliveriesTable.id })
           .from(deliveriesTable)
-          .where(isNotNull(deliveriesTable.deletionPendingAt))
+          .where(
+            and(
+              isNotNull(deliveriesTable.deletionPendingAt),
+              isNull(deliveriesTable.archivedAt),
+            ),
+          )
           .orderBy(deliveriesTable.id),
       )) as Array<{ id: string }>;
       for (const pendingDelivery of pendingDeliveries) {
@@ -407,6 +506,7 @@ export function createProductionDeliveryUploadCleanupDependencies(
                 and(
                   eq(deliveriesTable.id, pendingDelivery.id),
                   isNotNull(deliveriesTable.deletionPendingAt),
+                  isNull(deliveriesTable.archivedAt),
                 ),
               )
               .for("update")
@@ -423,7 +523,7 @@ export function createProductionDeliveryUploadCleanupDependencies(
             for (const photo of photos) {
               failurePath = photo.objectPath;
               await acquireDeliveryUploadLock(transaction, photo.objectPath);
-              await objectStorage.deleteObjectEntity(photo.objectPath);
+              await finalizeTombstoneStorageObject(photo.objectPath);
             }
             await transaction
               .delete(deliveriesTable)
@@ -431,6 +531,7 @@ export function createProductionDeliveryUploadCleanupDependencies(
                 and(
                   eq(deliveriesTable.id, delivery.id),
                   isNotNull(deliveriesTable.deletionPendingAt),
+                  isNull(deliveriesTable.archivedAt),
                 ),
               );
             return true;
@@ -444,7 +545,10 @@ export function createProductionDeliveryUploadCleanupDependencies(
           summary.failed += 1;
           summary.failures.push({ objectPath: failurePath, error: message });
           logger.error(
-            { objectPath: failurePath, error: message },
+            sanitizeCleanupFailureForLog({
+              objectPath: failurePath,
+              error: message,
+            }),
             "Delivery upload cleanup pending delivery finalization failed",
           );
         }
@@ -466,6 +570,7 @@ export function createProductionDeliveryUploadCleanupDependencies(
             and(
               isNotNull(deliveryPhotosTable.deletionPendingAt),
               isNull(deliveriesTable.deletionPendingAt),
+              isNull(deliveriesTable.archivedAt),
             ),
           )
           .orderBy(deliveryPhotosTable.objectPath),
@@ -478,14 +583,21 @@ export function createProductionDeliveryUploadCleanupDependencies(
               .select({
                 id: deliveriesTable.id,
                 deletionPendingAt: deliveriesTable.deletionPendingAt,
+                archivedAt: deliveriesTable.archivedAt,
               })
               .from(deliveriesTable)
               .where(eq(deliveriesTable.id, row.deliveryId))
               .for("update")
               .limit(1);
-            if (!delivery || delivery.deletionPendingAt !== null) return false;
+            if (
+              !delivery ||
+              delivery.deletionPendingAt !== null ||
+              delivery.archivedAt !== null
+            ) {
+              return false;
+            }
             await acquireDeliveryUploadLock(transaction, row.objectPath);
-            const [pending] = await transaction
+            const [pendingPhoto] = await transaction
               .select({
                 id: deliveryPhotosTable.id,
                 objectPath: deliveryPhotosTable.objectPath,
@@ -499,13 +611,13 @@ export function createProductionDeliveryUploadCleanupDependencies(
               )
               .for("update")
               .limit(1);
-            if (!pending) return false;
-            await objectStorage.deleteObjectEntity(pending.objectPath);
+            if (!pendingPhoto) return false;
+            await finalizeTombstoneStorageObject(pendingPhoto.objectPath);
             await transaction
               .delete(deliveryPhotosTable)
               .where(
                 and(
-                  eq(deliveryPhotosTable.id, pending.id),
+                  eq(deliveryPhotosTable.id, pendingPhoto.id),
                   isNotNull(deliveryPhotosTable.deletionPendingAt),
                 ),
               );
@@ -520,7 +632,10 @@ export function createProductionDeliveryUploadCleanupDependencies(
           summary.failed += 1;
           summary.failures.push({ objectPath: row.objectPath, error: message });
           logger.error(
-            { objectPath: row.objectPath, error: message },
+            sanitizeCleanupFailureForLog({
+              objectPath: row.objectPath,
+              error: message,
+            }),
             "Delivery upload cleanup pending photo finalization failed",
           );
         }

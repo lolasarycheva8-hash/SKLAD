@@ -5,7 +5,7 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
-import type { DeliveryActualInput } from './deliveryActualInput';
+import type { DeliveryActualInput } from "./deliveryActualInput";
 
 export interface UpdateDeliveriesActualBulkInput {
   items: DeliveryActualInput[];

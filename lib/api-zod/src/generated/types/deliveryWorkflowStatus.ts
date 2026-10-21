@@ -9,11 +9,11 @@
 /**
  * planned — not completed; done — actual date set but act unapproved; closed — act approved
  */
-export type DeliveryWorkflowStatus = typeof DeliveryWorkflowStatus[keyof typeof DeliveryWorkflowStatus];
-
+export type DeliveryWorkflowStatus =
+  (typeof DeliveryWorkflowStatus)[keyof typeof DeliveryWorkflowStatus];
 
 export const DeliveryWorkflowStatus = {
-  planned: 'planned',
-  done: 'done',
-  closed: 'closed',
+  planned: "planned",
+  done: "done",
+  closed: "closed",
 } as const;

@@ -19,6 +19,8 @@ export const deliveryUploadCleanupStatusTable = pgTable(
       .notNull()
       .default(0),
     failed: integer("failed").notNull().default(0),
+    failureKind: text("failure_kind").notNull().default("none"),
+    consecutiveFailures: integer("consecutive_failures").notNull().default(0),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
 );

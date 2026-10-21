@@ -14,6 +14,18 @@ test("активный водитель получает доступ по св�
   );
 });
 
+test("пользователь с legacy-флагом водителя получает тот же доступ", () => {
+  assert.equal(
+    getMyDeliveriesAccess({
+      id: "legacy-driver-id",
+      role: "manager",
+      isDriver: true,
+      assignedSiteIds: [],
+    }),
+    "driver",
+  );
+});
+
 test("руководитель с объектами не получает водительский список", () => {
   assert.equal(
     getMyDeliveriesAccess({

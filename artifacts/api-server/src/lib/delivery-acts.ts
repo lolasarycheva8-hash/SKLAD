@@ -1,3 +1,5 @@
+import { isDriverUser, isLogisticianRole } from "./user-roles.ts";
+
 type DeliveryActor = {
   id: string;
   isDriver: boolean;
@@ -26,17 +28,14 @@ export function isDateInPlannedMonth(
 export function canEditDeliveries(user?: DeliveryActor | null): boolean {
   return (
     user?.role === "admin" ||
-    (user?.role === "logistician" &&
+    (!!user &&
+      isLogisticianRole(user.role) &&
       user.editableSections.includes("deliveries"))
   );
 }
 
 export function canApproveDeliveryActs(user?: DeliveryActor | null): boolean {
-  return (
-    canEditDeliveries(user) ||
-    (user?.role === "manager" &&
-      user.editableSections.includes("deliveries"))
-  );
+  return canEditDeliveries(user);
 }
 
 export function canUploadDeliveryActs(
@@ -45,7 +44,8 @@ export function canUploadDeliveryActs(
 ): boolean {
   return (
     canEditDeliveries(user) ||
-    ((user?.role === "driver" || !!user?.isDriver) &&
+    (!!user &&
+      isDriverUser(user) &&
       user.id === deliveryDriverUserId)
   );
 }

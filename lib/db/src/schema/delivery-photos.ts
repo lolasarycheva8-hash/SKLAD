@@ -17,6 +17,7 @@ export const deliveryPhotosTable = pgTable(
       .references(() => deliveriesTable.id, { onDelete: "cascade" }),
     objectPath: text("object_path").notNull(),
     fileName: text("file_name").notNull().default("Акт доставки"),
+    caption: text("caption"),
     mimeType: text("mime_type").notNull().default("image/jpeg"),
     uploadedBy: text("uploaded_by").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

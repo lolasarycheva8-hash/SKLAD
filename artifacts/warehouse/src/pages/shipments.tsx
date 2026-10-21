@@ -315,7 +315,10 @@ export default function Shipments() {
   }
 
   const payableOrders = (orders ?? []).filter(
-    (o) => o.isPaid && o.items.some((i) => i.remainingQuantity > 0),
+    // Payment is no longer a prerequisite; billed/paid sources are immutable.
+    (o) => !o.isPaid && !o.summaryId &&
+      o.status !== "awaiting_payment" && o.status !== "paid" &&
+      o.items.some((i) => i.remainingQuantity > 0),
   );
 
   const filteredShipments = useMemo(() => {
@@ -784,7 +787,7 @@ export default function Shipments() {
               <Label>Заказ</Label>
               <Select value={orderId} onValueChange={setOrderId} required>
                 <SelectTrigger data-testid="select-shipment-order">
-                  <SelectValue placeholder="Выберите оплаченный заказ" />
+                  <SelectValue placeholder="Выберите заказ" />
                 </SelectTrigger>
                 <SelectContent>
                   {payableOrders.map((order) => (
@@ -796,7 +799,7 @@ export default function Shipments() {
               </Select>
               {payableOrders.length === 0 && (
                 <p className="text-xs text-muted-foreground">
-                  Нет оплаченных заказов с неотгруженными позициями
+                  Нет заказов с неотгруженными позициями
                 </p>
               )}
             </div>

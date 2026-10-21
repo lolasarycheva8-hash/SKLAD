@@ -10,6 +10,7 @@ import { getDeliveryUploadCleanupConfig } from "../lib/delivery-upload-cleanup";
 import { requireAdmin } from "../middlewares/requirePermission";
 
 const router: IRouter = Router();
+const REPEATED_CLEANUP_FAILURE_THRESHOLD = 2;
 
 router.get("/audit/delivery-upload-cleanup", requireAdmin, async (_req, res): Promise<void> => {
   const [row] = await db
@@ -28,6 +29,10 @@ router.get("/audit/delivery-upload-cleanup", requireAdmin, async (_req, res): Pr
       lastRunAt: row?.lastRunAt ?? null,
       lastSuccessfulRunAt,
       status: row?.status ?? "never",
+      failureKind: row?.failureKind ?? "none",
+      consecutiveFailures: row?.consecutiveFailures ?? 0,
+      hasRepeatedFailures:
+        (row?.consecutiveFailures ?? 0) >= REPEATED_CLEANUP_FAILURE_THRESHOLD,
       summary: row
         ? {
             scanned: row.scanned,

@@ -5,24 +5,26 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
-import type { LegacyDriverAssignment } from './legacyDriverAssignment';
+import type { LegacyDriverAssignment } from "./legacyDriverAssignment";
 
-export type LegacyDriverAssignmentCandidate = LegacyDriverAssignment & ({
+export type LegacyDriverAssignmentCandidate = LegacyDriverAssignment & {
   /**
-     * Одинаковый идентификатор у вероятных дублей; null у имён без похожих вариантов. Не влияет на применение сопоставления.
-     * @nullable
-     */
+   * Одинаковый идентификатор у вероятных дублей; null у имён без похожих вариантов. Не влияет на применение сопоставления.
+   * @nullable
+   */
   similarityGroup: string | null;
   /** Администратор уже подтвердил, что варианты этой группы не нужно автоматически объединять. */
   similarityReviewed: boolean;
   /**
-     * Время актуальной проверки группы; null у непроверенной группы.
-     * @nullable
-     */
+   * Время актуальной проверки группы; null у непроверенной группы.
+   * @nullable
+   */
   similarityReviewedAt: Date | null;
   /**
-     * Имя проверившего администратора; null у непроверенной группы или после удаления его учётной записи.
-     * @nullable
-     */
+   * Текущее или сохранённое историческое имя проверившего администратора; null у непроверенной группы или старой записи без снимка имени.
+   * @nullable
+   */
   similarityReviewedByName: string | null;
-});
+  /** Учётная запись проверившего администратора была удалена. Для старой записи имя при этом может быть null. */
+  similarityReviewedByDeleted: boolean;
+};

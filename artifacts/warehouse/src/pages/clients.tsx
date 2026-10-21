@@ -7,6 +7,9 @@ import {
   useUpdateClient,
   useDeleteClient,
   getListClientsQueryKey,
+  getListDeliveriesQueryKey,
+  getListSitesQueryKey,
+  extractApiError,
 } from "@workspace/api-client-react";
 import type { Client } from "@workspace/api-client-react";
 import { Button } from "@/components/ui/button";
@@ -30,22 +33,64 @@ import { Label } from "@/components/ui/label";
 import { Plus, Pencil, Trash2, Search } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { usePermissions } from "@/hooks/use-permissions";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
+import { ClientDeleteDialog } from "@/components/client-delete-dialog";
 
 const dateFormatter = new Intl.DateTimeFormat("ru-RU", {
   day: "2-digit",
   month: "2-digit",
   year: "numeric",
 });
+
+function getClientNameConflictMessage(error: unknown): string | null {
+  const details = extractApiError(error);
+  if (details?.status !== 409) return null;
+
+  return details.data === null
+    ? "Клиент с таким названием уже существует"
+    : details.message;
+}
+
+type BlockingSites = {
+  count: number;
+  preview: Array<{ id: string; name: string }>;
+};
+
+function getDeleteClientError(error: unknown): {
+  message: string;
+  blockingSites: BlockingSites | null;
+} {
+  const fallback = error instanceof Error ? error.message : "Не удалось удалить клиента";
+  if (typeof error !== "object" || error === null || !("data" in error)) {
+    return { message: fallback, blockingSites: null };
+  }
+  const data = error.data;
+  if (typeof data !== "object" || data === null) {
+    return { message: fallback, blockingSites: null };
+  }
+  const message =
+    "error" in data && typeof data.error === "string" ? data.error : fallback;
+  const raw = "blockingSites" in data ? data.blockingSites : null;
+  if (
+    typeof raw !== "object" ||
+    raw === null ||
+    !("count" in raw) ||
+    typeof raw.count !== "number" ||
+    !("preview" in raw) ||
+    !Array.isArray(raw.preview)
+  ) {
+    return { message, blockingSites: null };
+  }
+  const preview = raw.preview.filter(
+    (site): site is { id: string; name: string } =>
+      typeof site === "object" &&
+      site !== null &&
+      "id" in site &&
+      typeof site.id === "string" &&
+      "name" in site &&
+      typeof site.name === "string",
+  );
+  return { message, blockingSites: { count: raw.count, preview } };
+}
 
 export default function Clients() {
   const [search, setSearch] = useState("");
@@ -54,6 +99,9 @@ export default function Clients() {
   const [contact, setContact] = useState("");
   const [editTarget, setEditTarget] = useState<Client | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Client | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [blockingSites, setBlockingSites] = useState<BlockingSites | null>(null);
+  const [nameError, setNameError] = useState<string | null>(null);
 
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -69,6 +117,11 @@ export default function Clients() {
     queryClient.invalidateQueries({ queryKey: getListClientsQueryKey() });
   };
 
+  const invalidateClientDependents = () => {
+    queryClient.invalidateQueries({ queryKey: getListSitesQueryKey() });
+    queryClient.invalidateQueries({ queryKey: getListDeliveriesQueryKey() });
+  };
+
   const createClient = useCreateClient({
     mutation: {
       onSuccess: () => {
@@ -76,9 +129,15 @@ export default function Clients() {
         setDialogOpen(false);
         setName("");
         setContact("");
+        setNameError(null);
         toast({ title: "Клиент добавлен" });
       },
       onError: (error) => {
+        const conflictMessage = getClientNameConflictMessage(error);
+        if (conflictMessage) {
+          setNameError(conflictMessage);
+          return;
+        }
         toast({
           title: "Ошибка",
           description: error.message,
@@ -93,15 +152,19 @@ export default function Clients() {
       onSuccess: () => {
         invalidate();
         setDeleteTarget(null);
+        setDeleteError(null);
+        setBlockingSites(null);
         toast({ title: "Клиент удалён" });
       },
       onError: (error) => {
+        const details = getDeleteClientError(error);
         toast({
           title: "Ошибка",
-          description: error.message,
+          description: details.message,
           variant: "destructive",
         });
-        setDeleteTarget(null);
+        setDeleteError(details.message);
+        setBlockingSites(details.blockingSites);
       },
     },
   });
@@ -110,13 +173,20 @@ export default function Clients() {
     mutation: {
       onSuccess: () => {
         invalidate();
+        invalidateClientDependents();
         setDialogOpen(false);
         setEditTarget(null);
         setName("");
         setContact("");
+        setNameError(null);
         toast({ title: "Изменения сохранены" });
       },
       onError: (error) => {
+        const conflictMessage = getClientNameConflictMessage(error);
+        if (conflictMessage) {
+          setNameError(conflictMessage);
+          return;
+        }
         toast({
           title: "Ошибка",
           description: error.message,
@@ -158,6 +228,7 @@ export default function Clients() {
               setName("");
               setContact("");
               setEditTarget(null);
+              setNameError(null);
               setDialogOpen(true);
             }}
             data-testid="button-add-client"
@@ -185,6 +256,7 @@ export default function Clients() {
             <TableRow>
               <TableHead>Название</TableHead>
               <TableHead>Контакт</TableHead>
+              <TableHead className="w-28 text-right">Объекты</TableHead>
               <TableHead>Добавлен</TableHead>
               <TableHead className="w-16"></TableHead>
             </TableRow>
@@ -193,7 +265,7 @@ export default function Clients() {
             {isLoading ? (
               <TableRow>
                 <TableCell
-                  colSpan={4}
+                  colSpan={5}
                   className="text-center text-muted-foreground py-8"
                 >
                   Загрузка...
@@ -213,6 +285,12 @@ export default function Clients() {
                   <TableCell className="text-muted-foreground py-1.5">
                     {client.contact || "—"}
                   </TableCell>
+                  <TableCell
+                    className="py-1.5 text-right tabular-nums"
+                    data-testid={`text-client-site-count-${client.id}`}
+                  >
+                    {client.siteCount.toLocaleString("ru-RU")}
+                  </TableCell>
                   <TableCell className="text-muted-foreground whitespace-nowrap py-1.5">
                     {dateFormatter.format(new Date(client.createdAt))}
                   </TableCell>
@@ -228,6 +306,7 @@ export default function Clients() {
                             setEditTarget(client);
                             setName(client.name);
                             setContact(client.contact ?? "");
+                            setNameError(null);
                             setDialogOpen(true);
                           }}
                           data-testid={`button-edit-client-${client.id}`}
@@ -241,6 +320,8 @@ export default function Clients() {
                           className="h-7 w-7"
                           onClick={(e) => {
                             e.stopPropagation();
+                            setDeleteError(null);
+                            setBlockingSites(null);
                             setDeleteTarget(client);
                           }}
                           data-testid={`button-delete-client-${client.id}`}
@@ -255,7 +336,7 @@ export default function Clients() {
             ) : (
               <TableRow>
                 <TableCell
-                  colSpan={4}
+                  colSpan={5}
                   className="text-center text-muted-foreground py-8"
                 >
                   Клиенты не найдены
@@ -270,7 +351,10 @@ export default function Clients() {
         open={dialogOpen}
         onOpenChange={(open) => {
           setDialogOpen(open);
-          if (!open) setEditTarget(null);
+          if (!open) {
+            setEditTarget(null);
+            setNameError(null);
+          }
         }}
       >
         <DialogContent className="max-w-md">
@@ -286,9 +370,23 @@ export default function Clients() {
                 id="name"
                 required
                 value={name}
-                onChange={(e) => setName(e.target.value)}
+                onChange={(e) => {
+                  setName(e.target.value);
+                  setNameError(null);
+                }}
+                aria-invalid={nameError ? true : undefined}
+                aria-describedby={nameError ? "client-name-error" : undefined}
                 data-testid="input-client-name"
               />
+              {nameError && (
+                <p
+                  id="client-name-error"
+                  role="alert"
+                  className="text-sm text-destructive"
+                >
+                  {nameError}
+                </p>
+              )}
             </div>
             <div className="space-y-2">
               <Label htmlFor="contact">Контакт</Label>
@@ -312,33 +410,29 @@ export default function Clients() {
         </DialogContent>
       </Dialog>
 
-      <AlertDialog
-        open={!!deleteTarget}
-        onOpenChange={(open) => !open && setDeleteTarget(null)}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Удалить клиента?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Клиент «{deleteTarget?.name}» будет удалён без возможности
-              восстановления.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel data-testid="button-cancel-delete-client">
-              Отмена
-            </AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() =>
-                deleteTarget && deleteClient.mutate({ id: deleteTarget.id })
-              }
-              data-testid="button-confirm-delete-client"
-            >
-              Удалить
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <ClientDeleteDialog
+        clientName={deleteTarget?.name ?? null}
+        error={deleteError}
+        blockingSites={blockingSites}
+        isPending={deleteClient.isPending}
+        onClose={() => {
+          setDeleteTarget(null);
+          setDeleteError(null);
+          setBlockingSites(null);
+        }}
+        onConfirm={() =>
+          deleteTarget && deleteClient.mutate({ id: deleteTarget.id })
+        }
+        onViewSites={() => {
+          if (!deleteTarget) return;
+          navigate(
+            `/sites?clientId=${encodeURIComponent(deleteTarget.id)}&clientName=${encodeURIComponent(deleteTarget.name)}`,
+          );
+          setDeleteTarget(null);
+          setDeleteError(null);
+          setBlockingSites(null);
+        }}
+      />
     </div>
   );
 }

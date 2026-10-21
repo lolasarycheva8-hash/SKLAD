@@ -41,6 +41,14 @@ type PermissionsContextValue = {
 
 const PermissionsContext = createContext<PermissionsContextValue | null>(null);
 
+export function isLogisticianRole(role: AppUser["role"] | undefined): boolean {
+  return role === "logistician" || role === "manager";
+}
+
+export function isDriverUser(user: Pick<AppUser, "role" | "isDriver"> | undefined): boolean {
+  return !!user && (user.role === "driver" || user.isDriver);
+}
+
 export function PermissionsProvider({ children }: { children: React.ReactNode }) {
   const { data: user, isLoading, error } = useGetCurrentUser({
     query: { queryKey: getGetCurrentUserQueryKey(), retry: false },
@@ -55,25 +63,26 @@ export function PermissionsProvider({ children }: { children: React.ReactNode })
   }
 
   const isAdmin = user?.role === "admin";
-  const isDriver = user?.role === "driver";
+  const isDriver = isDriverUser(user);
 
   function canView(section: Section): boolean {
     if (!user) return false;
     if (user.role === "admin") return true;
+    if (isLogisticianRole(user.role) && (section === "products" || section === "orders")) return true;
     return user.editableSections.includes(section);
   }
 
   function canEdit(section: Section): boolean {
     if (!user) return false;
     if (user.role === "admin") return true;
-    if (user.role === "logistician") return user.editableSections.includes(section);
+    if (isLogisticianRole(user.role)) return section === "products" || section === "orders" || user.editableSections.includes(section);
     return false;
   }
 
   const canApproveDeliveryActs =
     !!user &&
     (user.role === "admin" ||
-      ((user.role === "logistician" || user.role === "manager") &&
+      (isLogisticianRole(user.role) &&
         user.editableSections.includes("deliveries")));
 
   return (

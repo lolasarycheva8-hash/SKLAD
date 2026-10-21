@@ -3,10 +3,14 @@ import { Link, useLocation } from "wouter";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   useListOrders,
+  listOrders,
   useCreateOrder,
   useListOrderClientLookup,
   useListOrderProductLookup,
+  useListOrderSiteLookup,
   getListOrdersQueryKey,
+  getListDeliveriesQueryKey,
+  getGetDeliveryDashboardSummaryQueryKey,
 } from "@workspace/api-client-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -26,20 +30,7 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
 import {
   SortableHeader,
   type SortDirection,
@@ -47,15 +38,31 @@ import {
 import {
   Plus,
   Printer,
-  Trash2,
   Search,
-  Filter,
   X,
+  FileStack,
   Truck,
   Copy,
+  Download,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { usePermissions } from "@/hooks/use-permissions";
+import {
+  EMPTY_ORDER_FORM_ITEM,
+  OrderFormFields,
+  copiedOrderSiteSelection,
+  siteSelectionAfterClientChange,
+  orderSiteIdForRequest,
+  type OrderFormItem,
+} from "@/components/order-form-fields";
+import { downloadOrdersWorkbook } from "@/lib/orders-export";
+import {
+  ORDER_STATUS_CLASSES,
+  ORDER_STATUS_LABELS,
+  isOrderBilled,
+  orderMatchesTab,
+  type OrderTab,
+} from "@/lib/order-status";
 
 const dateFormatter = new Intl.DateTimeFormat("ru-RU", {
   day: "2-digit",
@@ -68,13 +75,7 @@ const currency = new Intl.NumberFormat("ru-RU", {
   maximumFractionDigits: 0,
 });
 
-type ItemRow = {
-  productId: string;
-  quantity: string;
-  price: string;
-};
-
-const EMPTY_ITEM: ItemRow = { productId: "", quantity: "1", price: "0" };
+type ItemRow = OrderFormItem;
 
 function getQueryParam(name: string): string | null {
   if (typeof window === "undefined") return null;
@@ -85,22 +86,45 @@ type SortField =
   | "clientName"
   | "itemsCount"
   | "totalAmount"
-  | "isPaid"
+  | "status"
   | "createdAt";
-type PaidFilter = "all" | "paid" | "unpaid";
+type PaidFilter = "all" | "awaiting_payment" | "paid" | "unbilled";
+const ORDER_TABS: { value: OrderTab; label: string }[] = [
+  { value: "work", label: "Заказы в работе" },
+  { value: "awaiting", label: "Ожидают оплаты" },
+  { value: "paid", label: "Оплачено" },
+];
+const validMonth = (value: string) => /^[0-9]{4}-(0[1-9]|1[0-2])$/.test(value);
+function moscowCurrentMonth() {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Europe/Moscow", year: "numeric", month: "2-digit",
+  }).formatToParts(new Date());
+  return `${parts.find((p) => p.type === "year")!.value}-${parts.find((p) => p.type === "month")!.value}`;
+}
 
 export default function Orders() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [clientId, setClientId] = useState("");
+  const [siteId, setSiteId] = useState("");
   const [note, setNote] = useState("");
-  const [items, setItems] = useState<ItemRow[]>([{ ...EMPTY_ITEM }]);
+  const [plannedMonth, setPlannedMonth] = useState("");
+  const [plannedDeliveryDate, setPlannedDeliveryDate] = useState("");
+  const [monthFilter, setMonthFilter] = useState<"all" | "without" | "month">("all");
+  const [selectedMonth, setSelectedMonth] = useState(moscowCurrentMonth);
+  const [items, setItems] = useState<ItemRow[]>([
+    { ...EMPTY_ORDER_FORM_ITEM },
+  ]);
 
   const [search, setSearch] = useState("");
-  const [clientFilter, setClientFilter] = useState("");
   const [clientIdFilter, setClientIdFilter] = useState("");
   const [paidFilter, setPaidFilter] = useState<PaidFilter>("all");
+  const [tab, setTab] = useState<OrderTab>(() => {
+    const requested = getQueryParam("tab");
+    return requested === "awaiting" || requested === "paid" ? requested : "work";
+  });
   const [sortField, setSortField] = useState<SortField>("createdAt");
   const [sortDir, setSortDir] = useState<SortDirection>("desc");
+  const [exporting, setExporting] = useState(false);
 
   const queryClient = useQueryClient();
   const [, navigate] = useLocation();
@@ -109,9 +133,17 @@ export default function Orders() {
   const canEditOrders = canEdit("orders");
   const canEditShipments = canEdit("shipments");
 
-  const { data: orders, isLoading } = useListOrders();
+  const { data: orders, isLoading, isError: ordersError } = useListOrders(
+    monthFilter === "all" ? undefined :
+      { plannedMonth: monthFilter === "without" ? "without" : selectedMonth },
+  );
   const { data: clients } = useListOrderClientLookup();
   const { data: products } = useListOrderProductLookup();
+  const {
+    data: sites,
+    isLoading: sitesLoading,
+    isError: sitesError,
+  } = useListOrderSiteLookup();
 
   useEffect(() => {
     const id = getQueryParam("clientId");
@@ -126,6 +158,8 @@ export default function Orders() {
     mutation: {
       onSuccess: () => {
         invalidate();
+        queryClient.invalidateQueries({ queryKey: getListDeliveriesQueryKey() });
+        queryClient.invalidateQueries({ queryKey: getGetDeliveryDashboardSummaryQueryKey() });
         setDialogOpen(false);
         toast({ title: "Заказ создан" });
       },
@@ -141,14 +175,22 @@ export default function Orders() {
 
   function openCreateDialog() {
     setClientId("");
+    setSiteId("");
     setNote("");
-    setItems([{ ...EMPTY_ITEM }]);
+    setPlannedMonth("");
+    setPlannedDeliveryDate("");
+    setItems([{ ...EMPTY_ORDER_FORM_ITEM }]);
     setDialogOpen(true);
   }
 
   function openCopyDialog(order: NonNullable<typeof orders>[number]) {
     setClientId(order.clientId);
+    setSiteId(
+      copiedOrderSiteSelection(order.siteId, order.clientId, sites ?? []),
+    );
     setNote(order.note ?? "");
+    setPlannedMonth(order.plannedMonth ?? "");
+    setPlannedDeliveryDate("");
     setItems(
       order.items.map((item) => {
         const product = (products ?? []).find((p) => p.id === item.productId);
@@ -160,6 +202,13 @@ export default function Orders() {
       }),
     );
     setDialogOpen(true);
+  }
+
+  function handleClientChange(nextClientId: string) {
+    setClientId(nextClientId);
+    setSiteId(
+      siteSelectionAfterClientChange(siteId, nextClientId, sites ?? []),
+    );
   }
 
   function updateItem(index: number, patch: Partial<ItemRow>) {
@@ -177,7 +226,7 @@ export default function Orders() {
   }
 
   function addItem() {
-    setItems((prev) => [...prev, { ...EMPTY_ITEM }]);
+    setItems((prev) => [...prev, { ...EMPTY_ORDER_FORM_ITEM }]);
   }
 
   function removeItem(index: number) {
@@ -186,6 +235,10 @@ export default function Orders() {
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (!validMonth(plannedMonth) || !plannedDeliveryDate || plannedDeliveryDate.slice(0, 7) !== plannedMonth || !orderSiteIdForRequest(siteId)) {
+      toast({ title: "Укажите магазин и дату доставки в месяце плана", variant: "destructive" });
+      return;
+    }
 
     const validItems = items.filter(
       (item) => item.productId && Number(item.quantity) > 0,
@@ -198,7 +251,10 @@ export default function Orders() {
     createOrder.mutate({
       data: {
         clientId,
+        siteId: orderSiteIdForRequest(siteId),
         note: note || undefined,
+        plannedMonth,
+        plannedDeliveryDate,
         items: validItems.map((item) => ({
           productId: item.productId,
           quantity: Number(item.quantity),
@@ -208,11 +264,27 @@ export default function Orders() {
     });
   }
 
-  const totalPreview = items.reduce((sum, item) => {
-    const qty = Number(item.quantity) || 0;
-    const price = Number(item.price) || 0;
-    return sum + qty * price;
-  }, 0);
+  async function handleExport() {
+    if (exporting || isLoading || !orders?.length) return;
+    setExporting(true);
+    try {
+      // Fetch the unfiltered collection afresh; neither UI filters nor cached results
+      // should turn an export into an incomplete snapshot.
+      const allOrders = await listOrders();
+      if (!Array.isArray(allOrders) || allOrders.length === 0) {
+        throw new Error("Заказы для выгрузки не найдены");
+      }
+      downloadOrdersWorkbook(allOrders);
+    } catch (error) {
+      toast({
+        title: "Не удалось выгрузить заказы",
+        description: error instanceof Error ? error.message : "Не удалось получить заказы",
+        variant: "destructive",
+      });
+    } finally {
+      setExporting(false);
+    }
+  }
 
   const filteredOrders = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -220,21 +292,21 @@ export default function Orders() {
       if (q) {
         const haystack = [
           order.clientName,
+          order.siteName ?? "",
+          order.siteAddress ?? "",
           order.id.slice(0, 8),
+          order.orderNumber,
           order.note ?? "",
         ]
           .join(" ")
           .toLowerCase();
         if (!haystack.includes(q)) return false;
       }
-      if (
-        clientFilter &&
-        !order.clientName.toLowerCase().includes(clientFilter.toLowerCase())
-      )
-        return false;
+      if (!orderMatchesTab(order.status, tab)) return false;
       if (clientIdFilter && order.clientId !== clientIdFilter) return false;
-      if (paidFilter === "paid" && !order.isPaid) return false;
-      if (paidFilter === "unpaid" && order.isPaid) return false;
+      if (paidFilter === "paid" && order.status !== "paid") return false;
+      if (paidFilter === "awaiting_payment" && order.status !== "awaiting_payment") return false;
+      if (paidFilter === "unbilled" && isOrderBilled(order)) return false;
       return true;
     });
 
@@ -247,8 +319,8 @@ export default function Orders() {
           return (a.items.length - b.items.length) * dir;
         case "totalAmount":
           return (a.totalAmount - b.totalAmount) * dir;
-        case "isPaid":
-          return (Number(a.isPaid) - Number(b.isPaid)) * dir;
+        case "status":
+          return a.status.localeCompare(b.status) * dir;
         case "createdAt":
           return (
             (new Date(a.createdAt).getTime() -
@@ -262,7 +334,7 @@ export default function Orders() {
   }, [
     orders,
     search,
-    clientFilter,
+    tab,
     clientIdFilter,
     paidFilter,
     sortField,
@@ -278,58 +350,102 @@ export default function Orders() {
     }
   }
 
-  const clientIdFilterName = clientIdFilter
-    ? ((clients ?? []).find((c) => c.id === clientIdFilter)?.name ?? "")
-    : "";
+  const tabCounts = useMemo(() => {
+    const counts: Record<OrderTab, number> = { work: 0, awaiting: 0, paid: 0 };
+    for (const o of orders ?? []) {
+      for (const t of ORDER_TABS) if (orderMatchesTab(o.status, t.value)) counts[t.value] += 1;
+    }
+    return counts;
+  }, [orders]);
   const activeFilterCount = [
-    clientFilter,
     clientIdFilter,
     paidFilter !== "all" ? paidFilter : "",
+    monthFilter !== "all" ? monthFilter : "",
   ].filter(Boolean).length;
 
   return (
-    <div className="space-y-6">
+    <div className="flex h-full min-h-0 flex-col gap-6">
+      <div className="shrink-0 space-y-6 max-h-[65%] overflow-y-auto" data-testid="orders-fixed-header">
       <h1
         className="text-2xl font-bold text-blue-900 bg-[#f5ecd9] rounded-md px-4 py-2 block w-full"
         data-testid="text-page-title"
       >
         Заказы клиентов
       </h1>
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <p className="text-muted-foreground text-sm mt-1">
             Заказы и статус оплаты/отгрузки
           </p>
         </div>
-        {canEditOrders && (
-          <Button onClick={openCreateDialog} data-testid="button-add-order">
-            <Plus className="h-4 w-4 mr-2" />
-            Новый заказ
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            variant="outline"
+            onClick={handleExport}
+            disabled={isLoading || !orders?.length || exporting}
+            title="Все заказы всех клиентов, независимо от поиска и фильтров"
+            data-testid="button-export-all-orders"
+          >
+            <Download className="h-4 w-4 mr-2" />
+            {exporting ? "Выгрузка..." : "Выгрузить в Excel"}
           </Button>
-        )}
+          <Link href="/order-summaries">
+            <Button variant="outline" data-testid="button-open-summaries">
+              <FileStack className="h-4 w-4 mr-2" />
+              Итоговые заказы
+            </Button>
+          </Link>
+          {canEditOrders && (
+            <Button onClick={openCreateDialog} data-testid="button-add-order">
+              <Plus className="h-4 w-4 mr-2" />
+              Новый заказ
+            </Button>
+          )}
+        </div>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Excel содержит все заказы всех клиентов, независимо от поиска и фильтров.
+      </p>
+
+      <div className="flex flex-wrap gap-1 border-b" role="tablist" data-testid="order-tabs">
+        {ORDER_TABS.map((t) => (
+          <button
+            key={t.value}
+            type="button"
+            role="tab"
+            aria-selected={tab === t.value}
+            onClick={() => setTab(t.value)}
+            className={`-mb-px border-b-2 px-4 py-2 text-sm font-medium transition-colors ${tab === t.value ? "border-blue-900 text-blue-900" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+            data-testid={`tab-orders-${t.value}`}
+          >
+            {t.label}
+            <span className="ml-2 rounded bg-muted px-1.5 py-0.5 text-xs">{tabCounts[t.value]}</span>
+          </button>
+        ))}
+        <Link
+          href="/order-summaries"
+          role="tab"
+          aria-selected={false}
+          className="-mb-px border-b-2 border-transparent px-4 py-2 text-sm font-medium text-muted-foreground hover:text-foreground"
+          data-testid="tab-orders-summaries"
+        >
+          Итоговые заказы
+        </Link>
       </div>
 
-      {clientIdFilter && (
-        <div className="flex items-center gap-2">
-          <Badge
-            variant="secondary"
-            className="gap-1"
-            data-testid="badge-client-filter"
-          >
-            Клиент: {clientIdFilterName || "—"}
-            <button
-              type="button"
-              onClick={() => setClientIdFilter("")}
-              className="ml-1"
-              data-testid="button-clear-client-filter"
-            >
-              <X className="h-3 w-3" />
-            </button>
-          </Badge>
-        </div>
-      )}
-
       <div className="flex items-center gap-4 flex-wrap">
+        <select value={monthFilter} onChange={(e) => setMonthFilter(e.target.value as typeof monthFilter)}
+          className="h-10 w-44 rounded-md border border-input bg-background px-3 text-sm"
+          aria-label="Фильтр по месяцу" data-testid="select-order-month-filter">
+          <option value="all">Все месяцы</option>
+          <option value="month">За месяц</option>
+          <option value="without">Без месяца</option>
+        </select>
+        {monthFilter === "month" && (
+          <Input type="month" className="w-44" value={selectedMonth}
+            onChange={(e) => { if (validMonth(e.target.value)) setSelectedMonth(e.target.value); }}
+            data-testid="input-order-month-filter" />
+        )}
         <div className="relative w-64">
           <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
           <Input
@@ -340,66 +456,54 @@ export default function Orders() {
             data-testid="input-search-orders"
           />
         </div>
-        <Popover>
-          <PopoverTrigger asChild>
-            <Button variant="outline" data-testid="button-open-order-filters">
-              <Filter className="h-4 w-4 mr-2" />
-              Фильтры
-              {activeFilterCount > 0 && (
-                <Badge variant="secondary" className="ml-2">
-                  {activeFilterCount}
-                </Badge>
-              )}
-            </Button>
-          </PopoverTrigger>
-          <PopoverContent className="w-72 space-y-3" align="start">
-            <div className="space-y-2">
-              <Label>Клиент</Label>
-              <Input
-                placeholder="Фильтр по клиенту..."
-                value={clientFilter}
-                onChange={(e) => setClientFilter(e.target.value)}
-                data-testid="input-filter-order-client"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label>Оплата</Label>
-              <Select
-                value={paidFilter}
-                onValueChange={(value) => setPaidFilter(value as PaidFilter)}
-              >
-                <SelectTrigger data-testid="select-filter-paid">
-                  <SelectValue placeholder="Все" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">Все</SelectItem>
-                  <SelectItem value="paid">Оплачен</SelectItem>
-                  <SelectItem value="unpaid">Не оплачен</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            {activeFilterCount > 0 && (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="w-full"
-                onClick={() => {
-                  setClientFilter("");
-                  setPaidFilter("all");
-                }}
-                data-testid="button-reset-order-filters"
-              >
-                <X className="h-4 w-4 mr-1" />
-                Сбросить фильтры
-              </Button>
-            )}
-          </PopoverContent>
-        </Popover>
+        <select
+          value={clientIdFilter}
+          onChange={(e) => setClientIdFilter(e.target.value)}
+          className="h-10 w-56 rounded-md border border-input bg-background px-3 text-sm"
+          aria-label="Фильтр по клиенту"
+          data-testid="select-filter-order-client"
+        >
+          <option value="">Все клиенты</option>
+          {(clients ?? []).map((c) => (
+            <option key={c.id} value={c.id}>{c.name}</option>
+          ))}
+        </select>
+        <select
+          value={paidFilter}
+          onChange={(e) => setPaidFilter(e.target.value as PaidFilter)}
+          className="h-10 w-52 rounded-md border border-input bg-background px-3 text-sm"
+          aria-label="Фильтр по статусу оплаты"
+          data-testid="select-filter-paid"
+        >
+          <option value="all">Оплата: все</option>
+          <option value="unbilled">Не выставлен</option>
+          <option value="awaiting_payment">Ожидает оплаты</option>
+          <option value="paid">Оплачен</option>
+        </select>
+        {activeFilterCount > 0 && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              setClientIdFilter("");
+              setPaidFilter("all");
+              setMonthFilter("all");
+            }}
+            data-testid="button-reset-order-filters"
+          >
+            <X className="h-4 w-4 mr-1" />
+            Сбросить фильтры ({activeFilterCount})
+          </Button>
+        )}
       </div>
 
-      <div className="border rounded-md overflow-x-auto">
-        <Table className="text-xs">
-          <TableHeader>
+      </div>
+      <div className="flex-1 min-h-0 border rounded-md overflow-hidden">
+        <Table
+          className="text-xs"
+          containerClassName="h-full overflow-auto"
+        >
+          <TableHeader className="sticky top-0 z-10 bg-background shadow-sm">
             <TableRow>
               <SortableHeader
                 field="clientName"
@@ -408,6 +512,8 @@ export default function Orders() {
                 sortDir={sortDir}
                 onSort={handleSort}
               />
+              <TableHead>Магазин</TableHead>
+              <TableHead>Месяц плана</TableHead>
               <SortableHeader
                 field="itemsCount"
                 label="Позиций"
@@ -425,8 +531,8 @@ export default function Orders() {
                 align="right"
               />
               <SortableHeader
-                field="isPaid"
-                label="Оплата"
+                field="status"
+                label="Статус"
                 sortField={sortField}
                 sortDir={sortDir}
                 onSort={handleSort}
@@ -445,7 +551,7 @@ export default function Orders() {
             {isLoading ? (
               <TableRow>
                 <TableCell
-                  colSpan={6}
+                  colSpan={8}
                   className="text-center text-muted-foreground py-8"
                 >
                   Загрузка...
@@ -462,26 +568,32 @@ export default function Orders() {
                   <TableCell className="font-medium py-1.5">
                     {order.clientName}
                   </TableCell>
+                  <TableCell className="py-1.5">
+                    {order.siteName ? (
+                      <div>
+                        <div className="font-medium">{order.siteName}</div>
+                        <div className="text-muted-foreground">
+                          {order.siteAddress || "Адрес не указан"}
+                        </div>
+                      </div>
+                    ) : (
+                      <span className="text-muted-foreground">
+                        Без привязки к магазину
+                      </span>
+                    )}
+                  </TableCell>
+                  <TableCell className="py-1.5 whitespace-nowrap" data-testid={`month-order-${order.id}`}>
+                    {order.plannedMonth ?? "Без месяца"}
+                    {order.monthFromDelivery && <span className="block text-muted-foreground" title="Месяц берётся из исходного плана доставки">Из доставки</span>}
+                  </TableCell>
                   <TableCell className="py-1.5">{order.items.length}</TableCell>
                   <TableCell className="text-right py-1.5">
                     {currency.format(order.totalAmount)}
                   </TableCell>
                   <TableCell className="py-1.5">
-                    {order.isPaid ? (
-                      <Badge
-                        className="bg-green-100 text-green-800 hover:bg-green-100"
-                        variant="outline"
-                      >
-                        Оплачен
-                      </Badge>
-                    ) : (
-                      <Badge
-                        className="bg-yellow-100 text-yellow-800 hover:bg-yellow-100"
-                        variant="outline"
-                      >
-                        Ожидается оплата
-                      </Badge>
-                    )}
+                    <Badge variant="outline" className={ORDER_STATUS_CLASSES[order.status]} data-testid={`status-order-${order.id}`}>
+                      {ORDER_STATUS_LABELS[order.status]}
+                    </Badge>
                   </TableCell>
                   <TableCell className="text-muted-foreground whitespace-nowrap py-1.5">
                     {dateFormatter.format(new Date(order.createdAt))}
@@ -498,7 +610,7 @@ export default function Orders() {
                         </Button>
                       </Link>
                       {canEditShipments &&
-                        order.isPaid &&
+                        !isOrderBilled(order) &&
                         order.items.some((i) => i.remainingQuantity > 0) && (
                           <Link href={`/shipments?orderId=${order.id}`}>
                             <Button
@@ -517,6 +629,7 @@ export default function Orders() {
                           size="icon"
                           title="Копировать заказ"
                           onClick={() => openCopyDialog(order)}
+                          disabled={sitesLoading}
                           data-testid={`button-copy-order-${order.id}`}
                         >
                           <Copy className="h-3.5 w-3.5" />
@@ -538,10 +651,10 @@ export default function Orders() {
             ) : (
               <TableRow>
                 <TableCell
-                  colSpan={6}
+                  colSpan={8}
                   className="text-center text-muted-foreground py-8"
                 >
-                  Заказов пока нет
+                  {ordersError ? "Не удалось загрузить заказы" : (orders ?? []).length > 0 ? "Нет заказов по выбранной вкладке и фильтрам" : "Заказов пока нет"}
                 </TableCell>
               </TableRow>
             )}
@@ -556,115 +669,46 @@ export default function Orders() {
           </DialogHeader>
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-2">
-              <Label>Клиент</Label>
-              <Select value={clientId} onValueChange={setClientId} required>
-                <SelectTrigger data-testid="select-order-client">
-                  <SelectValue placeholder="Выберите клиента" />
-                </SelectTrigger>
-                <SelectContent>
-                  {(clients ?? []).map((client) => (
-                    <SelectItem key={client.id} value={client.id}>
-                      {client.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <Label htmlFor="order-planned-month">Месяц плана *</Label>
+              <div className="flex gap-2">
+                <Input id="order-planned-month" type="month" required value={plannedMonth}
+                  onChange={(e) => setPlannedMonth(e.target.value)} data-testid="input-create-order-month" />
+              </div>
             </div>
-
             <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <Label>Позиции заказа</Label>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={addItem}
-                  data-testid="button-add-order-item"
-                >
-                  <Plus className="h-3.5 w-3.5 mr-1" />
-                  Добавить позицию
-                </Button>
-              </div>
-              <div className="space-y-2">
-                {items.map((item, index) => (
-                  <div key={index} className="flex items-center gap-2">
-                    <Select
-                      value={item.productId}
-                      onValueChange={(value) =>
-                        handleProductSelect(index, value)
-                      }
-                    >
-                      <SelectTrigger
-                        className="flex-1"
-                        data-testid={`select-order-item-product-${index}`}
-                      >
-                        <SelectValue placeholder="Товар" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {(products ?? []).map((product) => (
-                          <SelectItem key={product.id} value={product.id}>
-                            {product.name} ({product.unit})
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <Input
-                      type="number"
-                      min="0.01"
-                      step="0.01"
-                      className="w-24"
-                      placeholder="Кол-во"
-                      value={item.quantity}
-                      onChange={(e) =>
-                        updateItem(index, { quantity: e.target.value })
-                      }
-                      data-testid={`input-order-item-quantity-${index}`}
-                    />
-                    <Input
-                      type="number"
-                      className="w-28"
-                      placeholder="Цена"
-                      value={item.price}
-                      readOnly
-                      disabled
-                      title="Цена подтягивается из справочника товаров"
-                      data-testid={`input-order-item-price-${index}`}
-                    />
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => removeItem(index)}
-                      disabled={items.length === 1}
-                      data-testid={`button-remove-order-item-${index}`}
-                    >
-                      <Trash2 className="h-4 w-4 text-destructive" />
-                    </Button>
-                  </div>
-                ))}
-              </div>
-              <div className="text-sm text-muted-foreground text-right">
-                Итого:{" "}
-                <span className="font-medium text-foreground">
-                  {currency.format(totalPreview)}
-                </span>
-              </div>
+              <Label htmlFor="order-delivery-date">Дата доставки *</Label>
+              <p className="text-sm text-muted-foreground">Выберите магазин и дату — заказ автоматически появится в графике доставок.</p>
+              <Input id="order-delivery-date" type="date" required value={plannedDeliveryDate}
+                onChange={(e) => {
+                  setPlannedDeliveryDate(e.target.value);
+                  if (e.target.value) setPlannedMonth(e.target.value.slice(0, 7));
+                }} data-testid="input-create-order-delivery-date" />
             </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="note">Примечание</Label>
-              <Textarea
-                id="note"
-                value={note}
-                onChange={(e) => setNote(e.target.value)}
-                data-testid="input-order-note"
-              />
-            </div>
+            <OrderFormFields
+              clients={clients ?? []}
+              products={products ?? []}
+              clientId={clientId}
+              onClientChange={handleClientChange}
+              sites={sites ?? []}
+              siteId={siteId}
+              onSiteChange={setSiteId}
+              sitesLoading={sitesLoading}
+              sitesError={sitesError}
+              items={items}
+              onItemChange={updateItem}
+              onProductSelect={handleProductSelect}
+              onAddItem={addItem}
+              onRemoveItem={removeItem}
+              note={note}
+              onNoteChange={setNote}
+            />
 
             <DialogFooter>
               <Button
                 type="submit"
-                disabled={createOrder.isPending || !clientId}
+                disabled={
+                  createOrder.isPending || !clientId || !orderSiteIdForRequest(siteId) || sitesError || !validMonth(plannedMonth) || !plannedDeliveryDate || plannedDeliveryDate.slice(0, 7) !== plannedMonth
+                }
                 data-testid="button-save-order"
               >
                 Создать заказ

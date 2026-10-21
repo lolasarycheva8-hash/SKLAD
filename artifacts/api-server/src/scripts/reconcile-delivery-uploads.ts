@@ -7,30 +7,34 @@ import {
 } from "../lib/delivery-upload-cleanup";
 
 interface CliOptions {
-  dryRun: boolean;
   minimumAgeHours: number;
   help: boolean;
 }
 
 function usage(): string {
   return [
-    "Usage: pnpm run cleanup:delivery-uploads [--dry-run|--delete] [--min-age-hours=N]",
+    "Usage: pnpm run cleanup:delivery-uploads [--dry-run] [--min-age-hours=N]",
     "",
-    "  --dry-run          List candidates without deleting (default)",
-    "  --delete           Delete candidates after an exact DB reference re-check",
+    "  --dry-run          List and preserve unregistered candidates (default)",
     "  --min-age-hours=N  Minimum object age, integer >= 1 (default: 24)",
     "  --help             Show this help",
+    "",
+    "Physical orphan deletion is disabled because a storage prefix may be shared",
+    "by deployments backed by separate databases.",
   ].join("\n");
 }
 
 export function parseCliOptions(args: string[]): CliOptions {
-  let dryRun = true;
   let minimumAgeHours = 24;
   let help = false;
   for (const arg of args) {
     if (arg === "--") continue;
-    else if (arg === "--dry-run") dryRun = true;
-    else if (arg === "--delete") dryRun = false;
+    else if (arg === "--dry-run") continue;
+    else if (arg === "--delete") {
+      throw new Error(
+        "--delete is disabled: storage namespace ownership cannot be proven across databases",
+      );
+    }
     else if (arg === "--help") help = true;
     else if (arg.startsWith("--min-age-hours=")) {
       const raw = arg.slice("--min-age-hours=".length);
@@ -40,7 +44,7 @@ export function parseCliOptions(args: string[]): CliOptions {
       throw new Error(`Unknown argument: ${arg}`);
     }
   }
-  return { dryRun, minimumAgeHours, help };
+  return { minimumAgeHours, help };
 }
 
 function writeJson(
@@ -77,7 +81,8 @@ async function main(): Promise<number> {
     const objectStorage = new ObjectStorageService();
     writeJson(process.stdout, {
       event: "start",
-      dryRun: options.dryRun,
+      dryRun: true,
+      orphanDisposition: "report-only",
       minimumAgeHours: options.minimumAgeHours,
     });
 
@@ -93,7 +98,7 @@ async function main(): Promise<number> {
           error: (bindings, _message) => writeJson(process.stderr, bindings),
         },
       ),
-      { dryRun: options.dryRun, minimumAgeHours: options.minimumAgeHours },
+      { dryRun: true, minimumAgeHours: options.minimumAgeHours },
     );
     if (summary === null) {
       writeJson(process.stdout, { event: "skipped" });

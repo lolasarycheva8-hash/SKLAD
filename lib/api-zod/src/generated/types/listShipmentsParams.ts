@@ -7,6 +7,6 @@
  */
 
 export type ListShipmentsParams = {
-orderId?: string;
-siteId?: string;
+  orderId?: string;
+  siteId?: string;
 };

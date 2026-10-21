@@ -38,6 +38,7 @@ import {
 import { CheckCircle2, AlertTriangle } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
+import { Input } from "@/components/ui/input";
 
 export function LegacyDriverMappingDialog({
   open,
@@ -71,6 +72,7 @@ export function LegacyDriverMappingDialog({
     useState(false);
   const [showUnreviewedDuplicatesOnly, setShowUnreviewedDuplicatesOnly] =
     useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
   const [result, setResult] = useState<{
     sites: number;
     deliveries: number;
@@ -123,13 +125,14 @@ export function LegacyDriverMappingDialog({
 
   const selectedCount = Object.keys(selections).length;
 
-  const assignmentGroups = useMemo(() => {
+  const { groups: assignmentGroups, metadataError } = useMemo(() => {
     const groups: Array<{
       key: string;
       similarityGroup: string | null;
       similarityReviewed: boolean;
       similarityReviewedAt: string | null;
       similarityReviewedByName: string | null;
+      similarityReviewedByDeleted: boolean;
       items: typeof assignments;
     }> = [];
     const duplicateGroupIndexes = new Map<string, number>();
@@ -142,6 +145,7 @@ export function LegacyDriverMappingDialog({
           similarityReviewed: false,
           similarityReviewedAt: null,
           similarityReviewedByName: null,
+          similarityReviewedByDeleted: false,
           items: [assignment],
         });
         continue;
@@ -158,14 +162,27 @@ export function LegacyDriverMappingDialog({
           similarityReviewed: assignment.similarityReviewed,
           similarityReviewedAt: assignment.similarityReviewedAt,
           similarityReviewedByName: assignment.similarityReviewedByName,
+          similarityReviewedByDeleted: assignment.similarityReviewedByDeleted,
           items: [assignment],
         });
       } else {
-        groups[existingIndex].items.push(assignment);
+        const group = groups[existingIndex];
+        if (
+          group.similarityReviewed !== assignment.similarityReviewed ||
+          group.similarityReviewedAt !== assignment.similarityReviewedAt ||
+          group.similarityReviewedByName !== assignment.similarityReviewedByName ||
+          group.similarityReviewedByDeleted !== assignment.similarityReviewedByDeleted
+        ) {
+          return {
+            groups: [] as typeof groups,
+            metadataError: "Получены противоречивые сведения о проверке группы совпадений. Обновите список.",
+          };
+        }
+        group.items.push(assignment);
       }
     }
 
-    return groups;
+    return { groups, metadataError: null };
   }, [assignments]);
 
   const duplicateNameCount = useMemo(
@@ -179,15 +196,37 @@ export function LegacyDriverMappingDialog({
       ).length,
     [assignmentGroups],
   );
-  const visibleAssignmentGroups = assignmentGroups.filter((group) => {
-    if (showUnreviewedDuplicatesOnly) {
-      return group.similarityGroup && !group.similarityReviewed;
-    }
-    if (showPossibleDuplicatesOnly) {
-      return Boolean(group.similarityGroup);
-    }
-    return true;
-  });
+  const visibleAssignmentGroups = useMemo(() => {
+    const normalizedSearchQuery = searchQuery.trim().toLocaleLowerCase("ru-RU");
+
+    return assignmentGroups.filter((group) => {
+      if (
+        showUnreviewedDuplicatesOnly &&
+        (!group.similarityGroup || group.similarityReviewed)
+      ) {
+        return false;
+      }
+      if (showPossibleDuplicatesOnly && !group.similarityGroup) {
+        return false;
+      }
+      if (
+        normalizedSearchQuery &&
+        !group.items.some((assignment) =>
+          assignment.legacyName
+            .toLocaleLowerCase("ru-RU")
+            .includes(normalizedSearchQuery),
+        )
+      ) {
+        return false;
+      }
+      return true;
+    });
+  }, [
+    assignmentGroups,
+    searchQuery,
+    showPossibleDuplicatesOnly,
+    showUnreviewedDuplicatesOnly,
+  ]);
 
   const summary = useMemo(() => {
     let sites = 0;
@@ -203,6 +242,7 @@ export function LegacyDriverMappingDialog({
   }, [selections, assignments]);
 
   function handleConfirm() {
+    if (metadataError) return;
     const mappings = Object.entries(selections).map(
       ([legacyName, driverUserId]) => ({
         legacyName,
@@ -222,6 +262,7 @@ export function LegacyDriverMappingDialog({
         setConfirmOpen(false);
         setShowPossibleDuplicatesOnly(false);
         setShowUnreviewedDuplicatesOnly(false);
+        setSearchQuery("");
       }, 300);
     }
   }
@@ -252,13 +293,13 @@ export function LegacyDriverMappingDialog({
                 </p>
               </div>
             </div>
-          ) : isError ? (
+          ) : isError || metadataError ? (
             <div className="py-8 flex flex-col items-center justify-center text-center space-y-4 text-destructive" data-testid="mapping-error">
               <AlertTriangle className="h-8 w-8" />
               <p className="text-sm">
                 Не удалось загрузить список.
                 <br />
-                {error instanceof Error ? error.message : String(error)}
+                {metadataError ?? (error instanceof Error ? error.message : String(error))}
               </p>
             </div>
           ) : isLoading ? (
@@ -291,6 +332,20 @@ export function LegacyDriverMappingDialog({
             </div>
           ) : (
             <div className="space-y-3">
+              <div className="space-y-1.5">
+                <label htmlFor="legacy-name-search" className="text-sm font-medium">
+                  Поиск по старому имени
+                </label>
+                <Input
+                  id="legacy-name-search"
+                  type="search"
+                  value={searchQuery}
+                  onChange={(event) => setSearchQuery(event.target.value)}
+                  placeholder="Введите имя..."
+                  autoComplete="off"
+                  data-testid="input-legacy-name-search"
+                />
+              </div>
               <div className="space-y-3 rounded-md border bg-muted/30 px-3 py-2.5">
                 <div className="flex items-center justify-between gap-4">
                   <div>
@@ -350,7 +405,15 @@ export function LegacyDriverMappingDialog({
                 className="max-h-[52vh] space-y-3 overflow-y-auto pr-2"
                 data-testid="mapping-list"
               >
-                {visibleAssignmentGroups.map((group) => (
+                {visibleAssignmentGroups.length === 0 ? (
+                  <div
+                    className="py-8 text-center text-sm text-muted-foreground"
+                    data-testid="mapping-filter-empty"
+                  >
+                    По заданным условиям ничего не найдено. Измените строку
+                    поиска или параметры фильтра.
+                  </div>
+                ) : visibleAssignmentGroups.map((group) => (
                   <div
                     key={group.key}
                     className={
@@ -391,8 +454,12 @@ export function LegacyDriverMappingDialog({
                               >
                                 ·{" "}
                                 {group.similarityReviewedByName
-                                  ? `${group.similarityReviewedByName}, `
-                                  : ""}
+                                  ? `${group.similarityReviewedByName}${
+                                      group.similarityReviewedByDeleted
+                                        ? " (учётная запись удалена)"
+                                        : ""
+                                    }, `
+                                  : "администратор удалён, "}
                                 {new Intl.DateTimeFormat("ru-RU", {
                                   dateStyle: "medium",
                                   timeStyle: "short",
@@ -547,7 +614,7 @@ export function LegacyDriverMappingDialog({
                 </Button>
                 <Button
                   onClick={() => setConfirmOpen(true)}
-                  disabled={selectedCount === 0 || resolveMutation.isPending || assignments.length === 0 || drivers.length === 0}
+                  disabled={!!metadataError || selectedCount === 0 || resolveMutation.isPending || assignments.length === 0 || drivers.length === 0}
                   data-testid="button-apply-mapping"
                 >
                   Применить ({selectedCount})
@@ -558,7 +625,7 @@ export function LegacyDriverMappingDialog({
         </DialogContent>
       </Dialog>
 
-      <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+      <AlertDialog open={confirmOpen && !metadataError} onOpenChange={setConfirmOpen}>
         <AlertDialogContent data-testid="dialog-mapping-confirm">
           <AlertDialogHeader>
             <AlertDialogTitle>Подтвердите изменение данных</AlertDialogTitle>
@@ -580,7 +647,7 @@ export function LegacyDriverMappingDialog({
                 e.preventDefault();
                 handleConfirm();
               }}
-              disabled={resolveMutation.isPending}
+              disabled={!!metadataError || resolveMutation.isPending}
               data-testid="button-confirm-mapping"
             >
               {resolveMutation.isPending ? "Сохранение..." : "Да, применить"}

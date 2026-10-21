@@ -5,12 +5,13 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
-import type { Delivery } from './delivery';
-import type { DriverCount } from './driverCount';
-import type { DriverPlanFactStat } from './driverPlanFactStat';
+import type { CalendarMonth } from "./calendarMonth";
+import type { Delivery } from "./delivery";
+import type { DriverCount } from "./driverCount";
+import type { DriverPlanFactStat } from "./driverPlanFactStat";
 
 export interface DeliveryDashboardSummary {
-  month: string;
+  month: CalendarMonth;
   totalScheduled: number;
   /** Количество доставок без назначенной даты в выбранном месяце */
   undatedCount: number;

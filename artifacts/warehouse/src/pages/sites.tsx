@@ -1,21 +1,30 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useLocation } from "wouter";
+import { useLocation, useSearch } from "wouter";
 import { useQueryClient } from "@tanstack/react-query";
+import { CreatableSiteLookup } from "@/components/creatable-site-lookup";
 import {
   useListSites,
+  useListSiteBranchLookup,
+  getListSiteBranchLookupQueryKey,
   useCreateSite,
+  useUpdateSite,
   useDeleteSite,
   useCreateSitesBulk,
   getListSitesQueryKey,
   useListTradeNames,
-  useListDeliveryTypes,
   useListOrderClientLookup,
   useListDrivers,
   useCreateTradeName,
   useDeleteTradeName,
   getListTradeNamesQueryKey,
+  getGetSiteQueryKey,
+  getListDeliverySiteLookupQueryKey,
   useGetLegacyDriverAssignments,
   getGetLegacyDriverAssignmentsQueryKey,
+  useListSiteChangeRequests,
+  useApproveSiteChangeRequest,
+  useRejectSiteChangeRequest,
+  getListSiteChangeRequestsQueryKey,
 } from "@workspace/api-client-react";
 import {
   Select,
@@ -24,18 +33,19 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import type { Site } from "@workspace/api-client-react";
+import type { Site, SiteChangeRequest } from "@workspace/api-client-react";
 import {
   parseExcelFile,
   readSheetHeaders,
   validateTemplateHeaders,
   downloadTemplate,
-  exportRowsToExcel,
+  exportRowsToEditableCsv,
   str,
   num,
 } from "@/lib/excel-import";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Table,
   TableBody,
@@ -57,7 +67,6 @@ import {
   SortableHeader,
   type SortDirection,
 } from "@/components/sortable-header";
-import { Checkbox } from "@/components/ui/checkbox";
 import {
   Plus,
   Pencil,
@@ -70,9 +79,13 @@ import {
   Lock,
   Unlock,
   AlertTriangle,
+  ChevronLeft,
+  ChevronRight,
+  SlidersHorizontal,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { usePermissions } from "@/hooks/use-permissions";
+import { isLogisticianRole, usePermissions } from "@/hooks/use-permissions";
+import { cn } from "@/lib/utils";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -86,7 +99,16 @@ import {
 import { CloseSiteDialog } from "@/components/close-site-dialog";
 import { LegacyDriverMappingDialog } from "@/components/legacy-driver-mapping-dialog";
 import { useReopenSite } from "@workspace/api-client-react";
-import { resolveImportDriver } from "@/lib/driver-import";
+import {
+  getImportDriverOptions,
+  resolveImportDriver,
+} from "@/lib/driver-import";
+import {
+  canonicalizeClientName,
+  resolveImportClient,
+} from "@/lib/client-import";
+
+import { SiteServiceModeSelect, SERVICE_MODES, siteServiceMode, parseServiceMode, type ServiceMode } from "@/components/site-service-mode";
 
 type FormState = {
   name: string;
@@ -94,12 +116,14 @@ type FormState = {
   branch: string;
   customer: string;
   client: string;
+  clientId: string;
   manager: string;
   managerContact: string;
   director: string;
   project: string;
   driverUserId: string;
-  deliveryType: string;
+  serviceMode: ServiceMode;
+  features: string;
 };
 
 const EMPTY_FORM: FormState = {
@@ -108,12 +132,14 @@ const EMPTY_FORM: FormState = {
   branch: "",
   customer: "",
   client: "",
+  clientId: "",
   manager: "",
   managerContact: "",
   director: "",
   project: "",
   driverUserId: "",
-  deliveryType: "",
+  serviceMode: "monthly",
+  features: "",
 };
 
 const TEMPLATE_HEADERS = [
@@ -127,9 +153,10 @@ const TEMPLATE_HEADERS = [
   "Руководитель",
   "Проект",
   "Водитель",
-  "Email водителя",
-  "Тип поставки",
+  "Формат обслуживания",
+  "Особенности",
 ];
+const EXPORT_HEADERS = ["ID объекта", ...TEMPLATE_HEADERS];
 
 const FILTER_FIELDS: { key: keyof Site; label: string }[] = [
   { key: "branch", label: "Куст" },
@@ -138,7 +165,7 @@ const FILTER_FIELDS: { key: keyof Site; label: string }[] = [
   { key: "manager", label: "Менеджер" },
   { key: "director", label: "Руководитель" },
   { key: "driver", label: "Водитель" },
-  { key: "deliveryType", label: "Тип поставки" },
+  { key: "serviceMode", label: "Формат обслуживания" },
 ];
 
 type SortField =
@@ -151,7 +178,7 @@ type SortField =
   | "director"
   | "project"
   | "driver"
-  | "deliveryType"
+  | "serviceMode"
   | "createdAt";
 
 const dateFormatter = new Intl.DateTimeFormat("ru-RU", {
@@ -159,26 +186,83 @@ const dateFormatter = new Intl.DateTimeFormat("ru-RU", {
   month: "2-digit",
   year: "numeric",
 });
+const DEFAULT_SITE_PAGE_SIZE = 250;
+const SITE_PAGE_SIZE_OPTIONS = [100, 250, 500] as const;
+const CHANGE_FIELD_LABELS: Record<string, string> = {
+  name: "Название",
+  address: "Адрес",
+  branch: "Куст",
+  customer: "Торговое название",
+  clientId: "Клиент",
+  manager: "Менеджер",
+  managerContact: "Контакт менеджера",
+  director: "Руководитель",
+  project: "Проект",
+  driverUserId: "Водитель",
+  deliveryType: "Тип поставки",
+  serviceMode: "Формат обслуживания",
+};
 
 export default function Sites() {
-  const [location, setLocation] = useLocation();
+  const [, setLocation] = useLocation();
+  const searchString = useSearch();
   const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [templateDownloaded, setTemplateDownloaded] = useState(false);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [deleteTarget, setDeleteTarget] = useState<Site | null>(null);
   const [closeTarget, setCloseTarget] = useState<Site | null>(null);
+  const [closureDecision, setClosureDecision] = useState<{
+    request: SiteChangeRequest;
+    decision: "approved" | "rejected";
+  } | null>(null);
   const [fieldFilters, setFieldFilters] = useState<Record<string, string>>({});
   const [openFilter, setOpenFilter] = useState<string | null>(null);
-  const [showClosed, setShowClosed] = useState(false);
+  const [siteView, setSiteView] = useState<"active" | "archived">("active");
   const [sortField, setSortField] = useState<SortField>("name");
   const [sortDir, setSortDir] = useState<SortDirection>("asc");
   const [mappingDialogOpen, setMappingDialogOpen] = useState(false);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(DEFAULT_SITE_PAGE_SIZE);
+  const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
+  const routeParams = useMemo(
+    () => new URLSearchParams(searchString),
+    [searchString],
+  );
+  const isDeliveryImportFlow =
+    routeParams.get("fromDeliveryImport") === "1";
+  const deliveryImportMonth = routeParams.get("month");
+  const deliveryImportMode =
+    routeParams.get("importMode") === "add" ? "add" : "replace";
+  const clientIdFilter = useMemo(
+    () => routeParams.get("clientId"),
+    [routeParams],
+  );
+  const clientNameFilter = useMemo(
+    () => routeParams.get("clientName"),
+    [routeParams],
+  );
+  const [editingDriverSiteId, setEditingDriverSiteId] = useState<string | null>(
+    null,
+  );
 
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const { canEdit, isAdmin } = usePermissions();
+  const { canEdit, isAdmin, user } = usePermissions();
   const canEditSites = canEdit("sites");
+  const hasCompactMobileHeader =
+    isLogisticianRole(user?.role);
+  const { data: pendingChangeRequests = [] } = useListSiteChangeRequests(
+    { status: "pending" },
+    {
+      query: {
+        enabled: isAdmin,
+        queryKey: getListSiteChangeRequestsQueryKey({ status: "pending" }),
+      },
+    },
+  );
 
   const { data: legacyAssignments = [] } = useGetLegacyDriverAssignments({
     query: {
@@ -188,15 +272,40 @@ export default function Sites() {
   });
 
   useEffect(() => {
-    if (!canEditSites || !location.includes("add=1")) return;
+    if (!canEditSites || routeParams.get("add") !== "1") return;
     setForm(EMPTY_FORM);
     setDialogOpen(true);
-    setLocation("/sites");
-  }, [canEditSites, location, setLocation]);
+    const preservedParams = new URLSearchParams();
+    if (isDeliveryImportFlow) {
+      preservedParams.set("fromDeliveryImport", "1");
+      if (deliveryImportMonth) preservedParams.set("month", deliveryImportMonth);
+      preservedParams.set("importMode", deliveryImportMode);
+    }
+    const search = preservedParams.toString();
+    setLocation(search ? `/sites?${search}` : "/sites");
+  }, [
+    deliveryImportMode,
+    deliveryImportMonth,
+    canEditSites,
+    isDeliveryImportFlow,
+    routeParams,
+    setLocation,
+  ]);
 
-  const { data: tradeNames } = useListTradeNames();
-  const { data: deliveryTypes } = useListDeliveryTypes();
+  const { data: tradeNames, isLoading: tradeNamesLoading, isError: tradeNamesError, refetch: refetchTradeNames } = useListTradeNames();
   const {
+    data: siteBranches,
+    isLoading: siteBranchesLoading,
+    isError: siteBranchesError,
+    refetch: refetchSiteBranches,
+  } = useListSiteBranchLookup({
+    query: {
+      enabled: dialogOpen && canEditSites,
+      queryKey: getListSiteBranchLookupQueryKey(),
+    },
+  });
+  const {
+    data: clients = [],
     isLoading: clientsLoading,
     isFetching: clientsFetching,
     refetch: refetchClients,
@@ -237,16 +346,34 @@ export default function Sites() {
     },
   });
 
+  useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      setDebouncedSearch(search.trim());
+    }, 300);
+    return () => window.clearTimeout(timeout);
+  }, [search]);
+
   const { data: sites, isLoading } = useListSites({
-    search: search || undefined,
+    search: debouncedSearch || undefined,
   });
-  const { data: drivers = [] } = useListDrivers();
+  const filteredClientName = useMemo(
+    () =>
+      clientNameFilter ??
+      sites?.find((site) => site.clientId === clientIdFilter)?.client ??
+      null,
+    [clientIdFilter, clientNameFilter, sites],
+  );
+  const { data: drivers = [], refetch: refetchDrivers } = useListDrivers();
+  const importDriverOptions = useMemo(
+    () => getImportDriverOptions(drivers),
+    [drivers],
+  );
 
   const reopenSite = useReopenSite({
     mutation: {
-      onSuccess: () => {
-        invalidate();
-        toast({ title: "Объект открыт" });
+      onSuccess: (_site, variables) => {
+        invalidateSiteCaches(variables.id);
+        toast({ title: "Объект возвращён на обслуживание" });
       },
       onError: (error) => {
         toast({
@@ -260,16 +387,27 @@ export default function Sites() {
 
   const filteredSites = useMemo(() => {
     let filtered = sites ?? [];
-    
-    if (!showClosed) {
-      filtered = filtered.filter(site => !site.isClosed);
+
+    filtered = filtered.filter((site) =>
+      siteView === "archived" ? site.isClosed : !site.isClosed,
+    );
+
+    if (clientIdFilter) {
+      filtered = filtered.filter(
+        (site) =>
+          site.clientId === clientIdFilter ||
+          (site.clientId === null &&
+            clientNameFilter !== null &&
+            canonicalizeClientName(site.client) ===
+              canonicalizeClientName(clientNameFilter)),
+      );
     }
 
     filtered = filtered.filter((site) =>
       FILTER_FIELDS.every(({ key }) => {
         const value = fieldFilters[key];
         if (!value) return true;
-        return String(site[key] ?? "") === value;
+        return (key === "serviceMode" ? SERVICE_MODES[siteServiceMode(site)] : String(site[key] ?? "")) === value;
       }),
     );
 
@@ -294,8 +432,8 @@ export default function Sites() {
           return a.project.localeCompare(b.project, "ru") * dir;
         case "driver":
           return a.driver.localeCompare(b.driver, "ru") * dir;
-        case "deliveryType":
-          return a.deliveryType.localeCompare(b.deliveryType, "ru") * dir;
+        case "serviceMode":
+          return SERVICE_MODES[siteServiceMode(a)].localeCompare(SERVICE_MODES[siteServiceMode(b)], "ru") * dir;
         case "createdAt":
           return (
             (new Date(a.createdAt).getTime() -
@@ -306,7 +444,15 @@ export default function Sites() {
           return 0;
       }
     });
-  }, [sites, fieldFilters, showClosed, sortField, sortDir]);
+  }, [
+    sites,
+    clientIdFilter,
+    clientNameFilter,
+    fieldFilters,
+    siteView,
+    sortField,
+    sortDir,
+  ]);
 
   const filterOptions = useMemo(
     () =>
@@ -316,7 +462,7 @@ export default function Sites() {
           Array.from(
             new Set(
               (sites ?? [])
-                .map((site) => String(site[key] ?? "").trim())
+                .map((site) => key === "serviceMode" ? SERVICE_MODES[siteServiceMode(site)] : String(site[key] ?? "").trim())
                 .filter(Boolean),
             ),
           ).sort((a, b) => a.localeCompare(b, "ru")),
@@ -324,6 +470,24 @@ export default function Sites() {
       ) as Record<string, string[]>,
     [sites],
   );
+
+  const pageCount = Math.max(
+    1,
+    Math.ceil(filteredSites.length / pageSize),
+  );
+  const currentPage = Math.min(page, pageCount);
+  const visibleSites = useMemo(
+    () =>
+      filteredSites.slice(
+        (currentPage - 1) * pageSize,
+        currentPage * pageSize,
+      ),
+    [currentPage, filteredSites, pageSize],
+  );
+
+  useEffect(() => {
+    setPage(1);
+  }, [debouncedSearch, fieldFilters, siteView, sortField, sortDir]);
 
   function handleSort(field: SortField) {
     if (field === sortField) {
@@ -334,18 +498,49 @@ export default function Sites() {
     }
   }
 
-  const hasActiveFilters = Object.values(fieldFilters).some(Boolean);
+  const hasActiveFilters =
+    Boolean(clientIdFilter) || Object.values(fieldFilters).some(Boolean);
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: getListSitesQueryKey() });
+  };
+
+  const invalidateSiteCaches = (siteId: string) => {
+    queryClient.invalidateQueries({ queryKey: getListSitesQueryKey() });
+    queryClient.invalidateQueries({ queryKey: getGetSiteQueryKey(siteId) });
+    queryClient.invalidateQueries({
+      queryKey: getListDeliverySiteLookupQueryKey(),
+    });
   };
 
   const createSite = useCreateSite({
     mutation: {
       onSuccess: () => {
         invalidate();
+        queryClient.invalidateQueries({ queryKey: getListSiteBranchLookupQueryKey() });
         setDialogOpen(false);
-        toast({ title: "Объект добавлен" });
+        toast({
+          title: "Объект добавлен",
+          description: isDeliveryImportFlow
+            ? "Добавьте остальные отсутствующие объекты, затем вернитесь к доставкам и повторно выберите Excel-файл."
+            : undefined,
+        });
+      },
+      onError: (error) => {
+        toast({
+          title: "Ошибка",
+          description: error.message,
+          variant: "destructive",
+        });
+      },
+    },
+  });
+
+  const updateSiteDriver = useUpdateSite({
+    mutation: {
+      onSuccess: () => {
+        invalidate();
+        toast({ title: "Закреплённый водитель обновлён" });
       },
       onError: (error) => {
         toast({
@@ -393,14 +588,49 @@ export default function Sites() {
     },
   });
 
+  const invalidateChangeRequests = () => {
+    invalidate();
+    queryClient.invalidateQueries({
+      queryKey: getListSiteChangeRequestsQueryKey({ status: "pending" }),
+    });
+  };
+  const approveChangeRequest = useApproveSiteChangeRequest({
+    mutation: {
+      onSuccess: () => {
+        setClosureDecision(null);
+        invalidateChangeRequests();
+        toast({ title: "Предложение принято" });
+      },
+      onError: (error) =>
+        toast({ title: "Ошибка", description: error.message, variant: "destructive" }),
+    },
+  });
+  const rejectChangeRequest = useRejectSiteChangeRequest({
+    mutation: {
+      onSuccess: () => {
+        setClosureDecision(null);
+        invalidateChangeRequests();
+        toast({ title: "Предложение отклонено" });
+      },
+      onError: (error) =>
+        toast({ title: "Ошибка", description: error.message, variant: "destructive" }),
+    },
+  });
+
   async function handleImportFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     e.target.value = "";
     if (!file) return;
+    if (!templateDownloaded) {
+      toast({ title: "Сначала скачайте и заполните шаблон объектов", variant: "destructive" });
+      return;
+    }
 
     try {
       const headers = await readSheetHeaders(file);
-      const missing = validateTemplateHeaders(headers, TEMPLATE_HEADERS);
+      const missing = validateTemplateHeaders(headers, TEMPLATE_HEADERS.map(header =>
+        header === "Формат обслуживания" && !headers.includes(header) && headers.includes("Тип поставки")
+          ? "Тип поставки" : header));
       if (missing.length > 0) {
         toast({
           title: "Файл не соответствует шаблону",
@@ -411,24 +641,34 @@ export default function Sites() {
       }
 
       const rows = await parseExcelFile(file);
+      const clientsResult = await refetchClients();
+      if (clientsResult.isError || !clientsResult.data) {
+        throw new Error("Не удалось получить актуальный справочник клиентов");
+      }
       const items = rows.map((row) => {
+        const id = str(row["ID объекта"]).trim();
+        const clientName = str(row["Клиент"]).trim();
+        const client = resolveImportClient(clientsResult.data, clientName);
         const driver = resolveImportDriver(
           drivers,
           str(row["Водитель"]),
           str(row["Email водителя"]),
         );
         return {
+          ...(id ? { id } : {}),
           name: str(row["Название"]),
           address: str(row["Адрес"]),
           branch: str(row["Куст"]),
           customer: str(row["Торговое название объекта"]),
-          client: str(row["Клиент"]),
+          clientId: client.id,
           manager: str(row["Менеджер"]),
           managerContact: str(row["Контакт менеджера"]),
           director: str(row["Руководитель"]),
           project: str(row["Проект"]),
           driverUserId: driver?.id ?? null,
-          deliveryType: str(row["Тип поставки"]),
+          deliveryType: headers.includes("Тип поставки") ? str(row["Тип поставки"]) : undefined,
+          serviceMode: parseServiceMode(str(row["Формат обслуживания"])),
+          features: str(row["Особенности"]),
         };
       });
 
@@ -449,6 +689,7 @@ export default function Sites() {
 
   function handleExport() {
     const rows = (sites ?? []).map((site) => ({
+      "ID объекта": site.id,
       Название: site.name,
       Адрес: site.address,
       Куст: site.branch,
@@ -458,43 +699,63 @@ export default function Sites() {
       "Контакт менеджера": site.managerContact,
       Руководитель: site.director,
       Проект: site.project,
-      Водитель: site.driver,
-      "Email водителя": drivers.find((driver) => driver.id === site.driverUserId)?.email ?? "",
-      "Тип поставки": site.deliveryType,
+      Водитель:
+        importDriverOptions.find((driver) => driver.id === site.driverUserId)
+          ?.label ?? "",
+      "Формат обслуживания": SERVICE_MODES[siteServiceMode(site)],
+      Особенности: site.features,
     }));
-    exportRowsToExcel(rows, TEMPLATE_HEADERS, "объекты.xlsx");
+    exportRowsToEditableCsv(
+      rows,
+      EXPORT_HEADERS,
+      "объекты-для-редактирования.csv",
+    );
   }
 
   async function handleDownloadTemplate() {
-    const result = await refetchClients();
-    if (result.isError || !result.data) {
+    const [clientsResult, driversResult] = await Promise.all([
+      refetchClients(),
+      refetchDrivers(),
+    ]);
+    if (
+      clientsResult.isError ||
+      !clientsResult.data ||
+      driversResult.isError ||
+      !driversResult.data
+    ) {
       toast({
-        title: "Не удалось загрузить справочник клиентов",
+        title: "Не удалось загрузить справочники",
         description:
-          "Шаблон не скачан. Проверьте соединение и попробуйте ещё раз.",
+          "Шаблон не скачан. Не удалось получить актуальные списки клиентов и водителей.",
         variant: "destructive",
       });
       return;
     }
+    const freshDriverOptions = getImportDriverOptions(driversResult.data);
 
-    downloadTemplate(TEMPLATE_HEADERS, "шаблон-объекты.xlsx", [
+    downloadTemplate(EXPORT_HEADERS, "шаблон-объекты.xlsx", [
       {
         name: "Справочник клиентов",
+        dropdownForHeader: "Клиент",
+        allowBlank: false,
+        dropdownError: "Выберите компанию из справочника клиентов.",
         headers: ["Название клиента", "Контакт"],
-        rows: result.data.map((client) => ({
+        rows: clientsResult.data.map((client) => ({
           "Название клиента": client.name,
           Контакт: "",
         })),
       },
       {
         name: "Справочник водителей",
-        headers: ["Водитель", "Email"],
-        rows: drivers.map((driver) => ({
-          Водитель: driver.name || driver.email,
-          Email: driver.email,
+        headers: ["Водитель"],
+        rows: freshDriverOptions.map((driver) => ({
+          Водитель: driver.label,
         })),
+        dropdownForHeader: "Водитель",
+        hidden: true,
       },
     ]);
+    setTemplateDownloaded(true);
   }
 
   function openCreateDialog() {
@@ -504,161 +765,417 @@ export default function Sites() {
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (!canEditSites || createSite.isPending) return;
+    if (!form.branch.trim() || !form.customer.trim() || !form.clientId) {
+      toast({ title: "Заполните обязательные поля", description: "Выберите куст, клиента и торговое название объекта.", variant: "destructive" });
+      return;
+    }
 
     const data = {
       name: form.name,
       address: form.address,
-      branch: form.branch,
-      customer: form.customer,
-      client: form.client,
+      branch: form.branch.trim(),
+      customer: form.customer.trim(),
+      clientId: form.clientId,
       manager: form.manager,
       managerContact: form.managerContact,
       director: form.director,
       project: form.project,
       driverUserId: form.driverUserId || null,
-      deliveryType: form.deliveryType,
+      serviceMode: form.serviceMode,
+      features: form.features,
     };
 
     createSite.mutate({ data });
   }
 
   return (
-    <div className="flex h-[calc(100vh-2rem)] min-h-0 flex-col gap-6">
-      <h1
-        className="text-2xl font-bold text-blue-900 bg-[#f5ecd9] rounded-md px-4 py-2 block w-full"
-        data-testid="text-page-title"
-      >
-        Объекты
-      </h1>
-      <div className="flex items-center justify-between">
-        <div>
-          <p className="text-muted-foreground text-sm mt-1">
-            Справочник обслуживаемых объектов
-          </p>
-        </div>
-        <div className="flex items-center gap-2 flex-wrap justify-end">
-          {isAdmin && (
-            <Button
-              variant="outline"
-              className="border-orange-500 text-orange-600 hover:bg-orange-50 hover:text-orange-700"
-              onClick={() => setMappingDialogOpen(true)}
-              data-testid="button-open-legacy-mapping"
-            >
-              <AlertTriangle className="h-4 w-4 mr-2" />
-              Привязка водителей ({legacyAssignments.length})
-            </Button>
-          )}
-          {canEditSites && (
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".xlsx,.xls,.csv"
-              className="hidden"
-              onChange={handleImportFile}
-              data-testid="input-import-sites"
-            />
-          )}
+    <div className="flex h-[calc(100dvh-5.5rem)] min-h-0 flex-col md:h-[calc(100dvh-4rem)]">
+      {isAdmin && isDeliveryImportFlow && (
+        <div
+          className="mb-3 flex shrink-0 flex-wrap items-center justify-between gap-3 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950"
+          data-testid="sites-delivery-import-hint"
+        >
+          <div>
+            <div className="font-semibold">Добавьте отсутствующие объекты</div>
+            <div>
+              После добавления всех объектов вернитесь к доставкам и повторно
+              выберите исходный Excel-файл.
+            </div>
+          </div>
           <Button
-            variant="outline"
-            onClick={handleDownloadTemplate}
-            disabled={clientsLoading || clientsFetching}
-            data-testid="button-download-template-sites"
+            type="button"
+            size="sm"
+            onClick={() => {
+              const params = new URLSearchParams({
+                resumeImport: "1",
+                importMode: deliveryImportMode,
+              });
+              if (
+                deliveryImportMonth &&
+                /^\d{4}-(0[1-9]|1[0-2])$/.test(deliveryImportMonth)
+              ) {
+                params.set("month", deliveryImportMonth);
+              }
+              setLocation(`/deliveries?${params.toString()}`);
+            }}
+            data-testid="button-return-to-delivery-import"
           >
-            <FileDown className="h-4 w-4 mr-2" />
-            Выгрузить шаблон
+            Вернуться к импорту
           </Button>
-          {canEditSites && (
-            <Button
-              variant="outline"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={createSitesBulk.isPending}
-              data-testid="button-import-sites"
-            >
-              <Upload className="h-4 w-4 mr-2" />
-              Загрузить шаблон
-            </Button>
-          )}
-          <Button
-            variant="outline"
-            onClick={handleExport}
-            data-testid="button-export-sites"
-          >
-            <Download className="h-4 w-4 mr-2" />
-            Выгрузить
-          </Button>
-          {canEditSites && (
-            <Button onClick={openCreateDialog} data-testid="button-add-site">
-              <Plus className="h-4 w-4 mr-2" />
-              Добавить объект
-            </Button>
-          )}
         </div>
-      </div>
-
-      <div className="flex items-center gap-2 flex-wrap">
-        <div className="relative w-64">
-          <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-          <Input
-            placeholder="Поиск по части слова..."
-            className="pl-8"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            data-testid="input-search-sites"
-          />
-        </div>
-        {FILTER_FIELDS.map(({ key, label }) => (
-          <Select
-            key={key}
-            open={openFilter === key}
-            onOpenChange={(open) => setOpenFilter(open ? key : null)}
-            value={fieldFilters[key] || "__all__"}
-            onValueChange={(value) =>
-              setFieldFilters({
-                ...fieldFilters,
-                [key]: value === "__all__" ? "" : value,
-              })
-            }
-          >
-            <SelectTrigger
-              className="h-10 w-[175px] bg-background"
-              data-testid={`select-filter-${key}`}
-            >
-              <span className="truncate">
-                {fieldFilters[key] ? `${label}: ${fieldFilters[key]}` : label}
-              </span>
-            </SelectTrigger>
-            {openFilter === key && (
-              <SelectContent>
-                <SelectItem value="__all__">{label}: все</SelectItem>
-                {(filterOptions[key] ?? []).map((value) => (
-                  <SelectItem key={value} value={value}>
-                    {value}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            )}
-          </Select>
-        ))}
-        <div className="flex h-10 items-center gap-2 rounded-md border px-3">
-          <Checkbox
-            id="showClosed"
-            checked={showClosed}
-            onCheckedChange={(c) => setShowClosed(!!c)}
-          />
-          <Label htmlFor="showClosed" className="whitespace-nowrap">
-            Показывать закрытые
-          </Label>
-        </div>
-        {hasActiveFilters && (
-          <Button
-            variant="ghost"
-            onClick={() => setFieldFilters({})}
-            data-testid="button-reset-filters"
-          >
-            <X className="h-4 w-4 mr-1" />
-            Сбросить
-          </Button>
+      )}
+      <div
+        className={cn(
+          "relative z-30 shrink-0 bg-background",
+          hasCompactMobileHeader
+            ? "space-y-2 pb-2 md:space-y-6 md:pb-6"
+            : "space-y-6 pb-6",
         )}
+      >
+        <h1
+          className={cn(
+            "block w-full rounded-md bg-[#f5ecd9] px-4 py-2 text-2xl font-bold text-blue-900",
+            hasCompactMobileHeader && "text-lg md:text-2xl",
+          )}
+          data-testid="text-page-title"
+        >
+          Объекты
+        </h1>
+        <div
+          className={cn(
+            "flex items-center justify-between",
+            hasCompactMobileHeader && "gap-2",
+          )}
+        >
+          <div className="flex flex-wrap items-center gap-3">
+            <p
+              className={cn(
+                "mt-1 text-sm text-muted-foreground",
+                hasCompactMobileHeader && "hidden md:block",
+              )}
+            >
+              Справочник обслуживаемых объектов
+            </p>
+            <span
+              className="inline-flex h-8 items-center rounded-md border bg-muted/50 px-3 text-sm text-foreground"
+              data-testid="text-sites-count"
+            >
+              Объектов:&nbsp;
+              <strong>
+                {isLoading
+                  ? "…"
+                  : filteredSites.length.toLocaleString("ru-RU")}
+              </strong>
+            </span>
+          </div>
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            {isAdmin && (
+              <Button
+                variant="outline"
+                className="border-orange-500 text-orange-600 hover:bg-orange-50 hover:text-orange-700"
+                onClick={() => setMappingDialogOpen(true)}
+                data-testid="button-open-legacy-mapping"
+              >
+                <AlertTriangle className="h-4 w-4 mr-2" />
+                Привязка водителей ({legacyAssignments.length})
+              </Button>
+            )}
+            {isAdmin && (
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".xlsx,.xls,.csv"
+                className="hidden"
+                onChange={handleImportFile}
+                data-testid="input-import-sites"
+              />
+            )}
+            <Button
+              variant="outline"
+              size={hasCompactMobileHeader ? "sm" : "default"}
+              className={cn(hasCompactMobileHeader && "h-8 px-2 text-xs md:h-10 md:px-4 md:text-sm")}
+              onClick={handleDownloadTemplate}
+              disabled={clientsLoading || clientsFetching}
+              data-testid="button-download-template-sites"
+            >
+              <FileDown className="mr-1 h-4 w-4 md:mr-2" />
+              1. Скачать шаблон
+            </Button>
+            {isAdmin && (
+              <Button
+                variant="outline"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={
+                  createSitesBulk.isPending ||
+                  !templateDownloaded ||
+                  clientsLoading ||
+                  clientsFetching
+                }
+                data-testid="button-import-sites"
+              >
+                <Upload className="h-4 w-4 mr-2" />
+                2. Загрузить заполненный шаблон
+              </Button>
+            )}
+            <Button
+              variant="outline"
+              size={hasCompactMobileHeader ? "sm" : "default"}
+              className={cn(hasCompactMobileHeader && "h-8 px-2 text-xs md:h-10 md:px-4 md:text-sm")}
+              onClick={handleExport}
+              data-testid="button-export-sites"
+            >
+              <Download className="mr-1 h-4 w-4 md:mr-2" />
+              <span className="md:hidden">Выгрузить</span>
+              <span className="hidden md:inline">Выгрузить для редактирования</span>
+            </Button>
+            {canEditSites && (
+              <Button onClick={openCreateDialog} data-testid="button-add-site">
+                <Plus className="h-4 w-4 mr-2" />
+                Добавить объект
+              </Button>
+            )}
+          </div>
+        </div>
+
+        {isAdmin && (
+          <div className="rounded-md border bg-background p-4 space-y-3" data-testid="site-change-requests">
+            <div className="flex items-center gap-2">
+              <h2 className="font-semibold">Предложения правок</h2>
+              <Badge>{pendingChangeRequests.length}</Badge>
+            </div>
+            {pendingChangeRequests.length === 0 ? (
+              <p className="text-sm text-muted-foreground">Ожидающих предложений нет</p>
+            ) : (
+              <div className="max-h-72 space-y-3 overflow-y-auto">
+                {pendingChangeRequests.map((request) => (
+                  <div key={request.id} className="rounded-md border p-3 text-sm space-y-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <strong>{request.siteName}</strong>
+                        {request.kind === "closure" && (
+                          <Badge
+                            variant="outline"
+                            className="ml-2 border-amber-400 text-amber-700"
+                            data-testid={`badge-site-removal-request-${request.id}`}
+                          >
+                            Снятие с обслуживания
+                          </Badge>
+                        )}
+                        <span className="text-muted-foreground">
+                          {" "}— {request.authorName} ({request.authorEmail}),{" "}
+                          {new Date(request.createdAt).toLocaleString("ru-RU")}
+                        </span>
+                      </div>
+                      <div className="flex gap-2">
+                        <Button
+                          size="sm"
+                          onClick={() =>
+                            request.kind === "closure"
+                              ? setClosureDecision({
+                                  request,
+                                  decision: "approved",
+                                })
+                              : approveChangeRequest.mutate({ id: request.id })
+                          }
+                          disabled={approveChangeRequest.isPending || rejectChangeRequest.isPending}
+                          data-testid={`button-approve-site-request-${request.id}`}
+                        >
+                          Принять
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() =>
+                            request.kind === "closure"
+                              ? setClosureDecision({
+                                  request,
+                                  decision: "rejected",
+                                })
+                              : rejectChangeRequest.mutate({ id: request.id })
+                          }
+                          disabled={approveChangeRequest.isPending || rejectChangeRequest.isPending}
+                          data-testid={`button-reject-site-request-${request.id}`}
+                        >
+                          Отклонить
+                        </Button>
+                      </div>
+                    </div>
+                    {request.kind === "closure" &&
+                    "closedFrom" in request.payload ? (
+                      <div
+                        className="grid gap-1"
+                        data-testid={`details-closure-request-${request.id}`}
+                      >
+                         <div>
+                           <span className="font-medium">Дата снятия с обслуживания:</span>{" "}
+                          {request.payload.closedFrom}
+                        </div>
+                        <div>
+                          <span className="font-medium">Причина:</span>{" "}
+                          {request.payload.closureReason ?? "Не указана"}
+                        </div>
+                        <p className="text-amber-700">
+                           Снятие с обслуживания ожидает подтверждения администратора.
+                        </p>
+                      </div>
+                    ) : (
+                    <div className="grid gap-1">
+                      {Object.entries(request.payload).map(([field, after]) => {
+                        const before = request.originalPayload[field as keyof typeof request.originalPayload];
+                        const display = (value: unknown) => {
+                          if (field === "clientId") {
+                            return clients.find((client) => client.id === value)?.name ?? String(value ?? "Не выбран");
+                          }
+                          if (field === "driverUserId") {
+                            const driver = drivers.find((item) => item.id === value);
+                            return driver ? driver.name || driver.email : "Не назначен";
+                          }
+                          return String(value ?? "Не указано");
+                        };
+                        return (
+                          <div key={field}>
+                            <span className="font-medium">{CHANGE_FIELD_LABELS[field] ?? field}:</span>{" "}
+                            <span className="text-red-700 line-through">{display(before)}</span>
+                            {" → "}
+                            <span className="text-green-700">{display(after)}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        <div
+          className="flex flex-wrap items-center gap-2"
+          role="tablist"
+          aria-label="Состояние объектов"
+          data-testid="site-view-tabs"
+        >
+          <Button
+            type="button"
+            variant={siteView === "active" ? "default" : "outline"}
+            role="tab"
+            aria-selected={siteView === "active"}
+            onClick={() => setSiteView("active")}
+            data-testid="button-sites-active"
+          >
+            На обслуживании
+          </Button>
+          <Button
+            type="button"
+            variant={siteView === "archived" ? "default" : "outline"}
+            role="tab"
+            aria-selected={siteView === "archived"}
+            onClick={() => setSiteView("archived")}
+            data-testid="button-sites-archive"
+          >
+            Архив объектов
+          </Button>
+        </div>
+
+        <div className="flex items-center gap-2 flex-wrap">
+          <div
+            className={cn(
+              "relative w-64",
+              hasCompactMobileHeader && "min-w-0 flex-1 md:w-64 md:flex-none",
+            )}
+          >
+            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+            <Input
+              placeholder="Поиск по части слова..."
+              className="pl-8"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              data-testid="input-search-sites"
+            />
+          </div>
+          {hasCompactMobileHeader && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-10 px-3 md:hidden"
+              onClick={() => setMobileFiltersOpen((open) => !open)}
+              aria-expanded={mobileFiltersOpen}
+              data-testid="button-toggle-mobile-site-filters"
+            >
+              <SlidersHorizontal className="mr-1.5 h-4 w-4" />
+              Фильтры
+              {hasActiveFilters && (
+                <Badge variant="secondary" className="ml-1.5 px-1.5">
+                  {Object.values(fieldFilters).filter(Boolean).length +
+                    (clientIdFilter ? 1 : 0)}
+                </Badge>
+              )}
+            </Button>
+          )}
+          <div
+            className={cn(
+              "contents",
+              hasCompactMobileHeader &&
+                !mobileFiltersOpen &&
+                "hidden md:contents",
+            )}
+          >
+            {FILTER_FIELDS.map(({ key, label }) => (
+            <Select
+              key={key}
+              open={openFilter === key}
+              onOpenChange={(open) => setOpenFilter(open ? key : null)}
+              value={fieldFilters[key] || "__all__"}
+              onValueChange={(value) =>
+                setFieldFilters({
+                  ...fieldFilters,
+                  [key]: value === "__all__" ? "" : value,
+                })
+              }
+            >
+              <SelectTrigger
+                className="h-10 w-[175px] bg-background"
+                data-testid={`select-filter-${key}`}
+              >
+                <span className="truncate">
+                  {fieldFilters[key] ? `${label}: ${fieldFilters[key]}` : label}
+                </span>
+              </SelectTrigger>
+              {openFilter === key && (
+                <SelectContent>
+                  <SelectItem value="__all__">{label}: все</SelectItem>
+                  {(filterOptions[key] ?? []).map((value) => (
+                    <SelectItem key={value} value={value}>
+                      {value}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              )}
+            </Select>
+            ))}
+            {clientIdFilter && (
+            <Badge variant="secondary" data-testid="filter-sites-client">
+              Клиент: {filteredClientName ?? clientIdFilter}
+            </Badge>
+            )}
+            {hasActiveFilters && (
+            <Button
+              variant="ghost"
+              onClick={() => {
+                setFieldFilters({});
+                if (clientIdFilter) setLocation("/sites");
+              }}
+              data-testid="button-reset-filters"
+            >
+              <X className="h-4 w-4 mr-1" />
+              Сбросить
+            </Button>
+            )}
+          </div>
+        </div>
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto border rounded-md">
@@ -729,12 +1246,13 @@ export default function Sites() {
                 onSort={handleSort}
               />
               <SortableHeader
-                field="deliveryType"
-                label="Тип поставки"
+                field="serviceMode"
+                label="Формат обслуживания"
                 sortField={sortField}
                 sortDir={sortDir}
                 onSort={handleSort}
               />
+              <TableHead>Особенности</TableHead>
               <SortableHeader
                 field="createdAt"
                 label="Добавлен"
@@ -749,14 +1267,14 @@ export default function Sites() {
             {isLoading ? (
               <TableRow>
                 <TableCell
-                  colSpan={12}
+                  colSpan={13}
                   className="text-center text-muted-foreground py-8"
                 >
                   Загрузка...
                 </TableCell>
               </TableRow>
             ) : filteredSites.length > 0 ? (
-              filteredSites.map((site) => (
+              visibleSites.map((site) => (
                 <TableRow
                   key={site.id}
                   className="cursor-pointer"
@@ -768,10 +1286,25 @@ export default function Sites() {
                       {site.name}
                       {site.isClosed && (
                         <Badge variant="destructive" className="h-5 px-1 py-0 text-[10px]">
-                          Закрыт
+                          В архиве
+                        </Badge>
+                      )}
+                      {site.pendingClosureRequest && (
+                        <Badge
+                          variant="outline"
+                          className="h-auto border-amber-400 px-1 py-0 text-[10px] text-amber-700"
+                          data-testid={`status-pending-site-removal-${site.id}`}
+                        >
+                          Снятие с обслуживания ожидает подтверждения администратора
                         </Badge>
                       )}
                     </div>
+                    {site.isClosed && site.closedFrom && (
+                      <div className="text-[10px] text-muted-foreground mt-0.5">
+                        Снято с обслуживания:{" "}
+                        {dateFormatter.format(new Date(site.closedFrom))}
+                      </div>
+                    )}
                     {site.isClosed && site.closureReason && (
                       <div className="text-[10px] text-muted-foreground mt-0.5">
                         {site.closureReason}
@@ -821,16 +1354,75 @@ export default function Sites() {
                     {site.project}
                   </TableCell>
                   <TableCell
-                    className="truncate max-w-[90px] py-1.5"
-                    title={site.driver}
+                    className="max-w-[160px] py-1.5"
+                    onClick={(event) => event.stopPropagation()}
                   >
-                    {site.driver}
+                    {isAdmin && editingDriverSiteId === site.id ? (
+                      <Select
+                        open
+                        onOpenChange={(open) => {
+                          if (!open) setEditingDriverSiteId(null);
+                        }}
+                        value={site.driverUserId ?? "__none__"}
+                        onValueChange={(value) => {
+                          setEditingDriverSiteId(null);
+                          updateSiteDriver.mutate({
+                            id: site.id,
+                            data: {
+                              clientId: site.clientId,
+                              driverUserId:
+                                value === "__none__" ? null : value,
+                            },
+                          });
+                        }}
+                        disabled={updateSiteDriver.isPending}
+                      >
+                        <SelectTrigger
+                          className="h-8 min-w-36 text-xs"
+                          data-testid={`select-site-driver-${site.id}`}
+                        >
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__none__">Не назначен</SelectItem>
+                          {drivers.map((driver) => (
+                            <SelectItem key={driver.id} value={driver.id}>
+                              {driver.name || driver.email}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    ) : isAdmin ? (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        className="h-8 max-w-full justify-start px-2 text-xs font-normal"
+                        onClick={() => setEditingDriverSiteId(site.id)}
+                        data-testid={`button-edit-site-driver-${site.id}`}
+                        title="Изменить закреплённого водителя"
+                      >
+                        <span className="truncate">
+                          {site.driver || "Не назначен"}
+                        </span>
+                        <Pencil className="ml-2 h-3 w-3 shrink-0 text-muted-foreground" />
+                      </Button>
+                    ) : (
+                      <span className="truncate" title={site.driver}>
+                        {site.driver}
+                      </span>
+                    )}
                   </TableCell>
                   <TableCell
                     className="truncate max-w-[110px] py-1.5"
-                    title={site.deliveryType}
+                    title={SERVICE_MODES[siteServiceMode(site)]}
                   >
-                    {site.deliveryType}
+                    {SERVICE_MODES[siteServiceMode(site)]}
+                  </TableCell>
+                  <TableCell
+                    className="max-w-[220px] truncate py-1.5"
+                    title={site.features}
+                  >
+                    {site.features || "—"}
                   </TableCell>
                   <TableCell className="text-muted-foreground whitespace-nowrap py-1.5">
                     {dateFormatter.format(new Date(site.createdAt))}
@@ -839,31 +1431,47 @@ export default function Sites() {
                     className="py-1.5"
                     onClick={(e) => e.stopPropagation()}
                   >
-                    {canEditSites && (
+                    {(isAdmin || canEditSites) && (
                       <div className="flex items-center justify-end gap-1">
-                        {!site.isClosed ? (
+                        {isAdmin && !site.isClosed && !site.pendingClosureRequest ? (
                           <Button
                             variant="ghost"
                             size="icon"
                             className="h-7 w-7 text-muted-foreground"
                             onClick={() => setCloseTarget(site)}
-                            title="Закрыть объект"
+                            title="Снять с обслуживания"
+                            aria-label="Снять с обслуживания"
                           >
                             <Lock className="h-3.5 w-3.5" />
                           </Button>
-                        ) : (
+                        ) : isAdmin && site.isClosed ? (
                           <Button
                             variant="ghost"
-                            size="icon"
-                            className="h-7 w-7 text-green-600"
+                            size="sm"
+                            className="h-8 text-green-600"
                             onClick={() => reopenSite.mutate({ id: site.id })}
-                            title="Открыть объект"
+                            title="Вернуть на обслуживание"
+                            aria-label="Вернуть на обслуживание"
+                            data-testid={`button-return-site-${site.id}`}
                             disabled={reopenSite.isPending}
                           >
                             <Unlock className="h-3.5 w-3.5" />
+                            <span className="ml-1">Вернуть на обслуживание</span>
                           </Button>
-                        )}
-                        <Button
+                        ) : canEditSites && !site.isClosed && !site.pendingClosureRequest ? (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7 text-muted-foreground"
+                            onClick={() => setCloseTarget(site)}
+                            title="Запросить снятие с обслуживания"
+                            aria-label="Запросить снятие с обслуживания"
+                            data-testid={`button-request-site-removal-${site.id}`}
+                          >
+                            <Lock className="h-3.5 w-3.5" />
+                          </Button>
+                        ) : null}
+                        {isAdmin && <Button
                           variant="ghost"
                           size="icon"
                           className="h-7 w-7"
@@ -871,8 +1479,8 @@ export default function Sites() {
                           data-testid={`button-edit-site-${site.id}`}
                         >
                           <Pencil className="h-3.5 w-3.5" />
-                        </Button>
-                        <Button
+                        </Button>}
+                        {isAdmin && <Button
                           variant="ghost"
                           size="icon"
                           className="h-7 w-7"
@@ -880,7 +1488,7 @@ export default function Sites() {
                           data-testid={`button-delete-site-${site.id}`}
                         >
                           <Trash2 className="h-3.5 w-3.5 text-destructive" />
-                        </Button>
+                        </Button>}
                       </div>
                     )}
                   </TableCell>
@@ -889,7 +1497,7 @@ export default function Sites() {
             ) : (
               <TableRow>
                 <TableCell
-                  colSpan={12}
+                  colSpan={13}
                   className="text-center text-muted-foreground py-8"
                 >
                   Объекты не найдены
@@ -899,6 +1507,68 @@ export default function Sites() {
           </TableBody>
         </Table>
       </div>
+      {!isLoading && filteredSites.length > 0 && (
+        <div className="flex shrink-0 items-center justify-between gap-3 border-t bg-background py-2 text-sm">
+          <span className="text-muted-foreground">
+            Показаны{" "}
+            {(currentPage - 1) * pageSize + 1}–
+            {Math.min(currentPage * pageSize, filteredSites.length)} из{" "}
+            {filteredSites.length.toLocaleString("ru-RU")}
+          </span>
+          <div className="flex items-center gap-2">
+            <span className="text-muted-foreground">Строк:</span>
+            <Select
+              value={String(pageSize)}
+              onValueChange={(value) => {
+                setPageSize(Number(value));
+                setPage(1);
+              }}
+            >
+              <SelectTrigger
+                className="h-8 w-20"
+                aria-label="Количество объектов на странице"
+                data-testid="select-sites-page-size"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {SITE_PAGE_SIZE_OPTIONS.map((option) => (
+                  <SelectItem key={option} value={String(option)}>
+                    {option}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setPage((value) => Math.max(1, value - 1))}
+              disabled={currentPage === 1}
+              aria-label="Предыдущая страница объектов"
+              data-testid="button-sites-page-previous"
+            >
+              <ChevronLeft className="h-4 w-4" />
+            </Button>
+            <span className="min-w-24 text-center tabular-nums">
+              {currentPage} из {pageCount}
+            </span>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() =>
+                setPage((value) => Math.min(pageCount, value + 1))
+              }
+              disabled={currentPage === pageCount}
+              aria-label="Следующая страница объектов"
+              data-testid="button-sites-page-next"
+            >
+              <ChevronRight className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
+      )}
 
       <Dialog open={tradeNamesDialogOpen} onOpenChange={setTradeNamesDialogOpen}>
         <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
@@ -993,45 +1663,58 @@ export default function Sites() {
               />
             </div>
             <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="branch">Куст</Label>
-                <Input
-                  id="branch"
-                  required
-                  value={form.branch}
-                  onChange={(e) => setForm({ ...form, branch: e.target.value })}
-                  data-testid="input-site-branch"
-                />
-              </div>
+              <CreatableSiteLookup
+                id="site-branch"
+                label="Куст"
+                value={form.branch}
+                options={(siteBranches ?? []).map((branch) => branch.name)}
+                onChange={(branch) => setForm((current) => ({ ...current, branch }))}
+                isLoading={siteBranchesLoading}
+                isError={siteBranchesError}
+                onRetry={() => void refetchSiteBranches()}
+              />
               <div className="space-y-2">
                 <Label htmlFor="client">Клиент</Label>
-                <Input
-                  id="client"
-                  required
-                  value={form.client}
-                  onChange={(e) => setForm({ ...form, client: e.target.value })}
-                  data-testid="input-site-client"
-                />
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label>Торговое название объекта (необязательно)</Label>
                 <Select
-                  value={form.customer || undefined}
-                  onValueChange={(v) => setForm({ ...form, customer: v })}
+                  value={form.clientId || undefined}
+                  onValueChange={(clientId) => {
+                    const client = clients.find((item) => item.id === clientId);
+                    setForm({
+                      ...form,
+                      clientId,
+                      client: client?.name ?? "",
+                    });
+                  }}
                 >
-                  <SelectTrigger data-testid="select-site-customer">
-                    <SelectValue placeholder="Можно не указывать" />
+                  <SelectTrigger id="client" data-testid="select-site-client">
+                    <SelectValue placeholder="Выберите клиента" />
                   </SelectTrigger>
                   <SelectContent>
-                    {(tradeNames ?? []).map((t) => (
-                      <SelectItem key={t.id} value={t.name}>
-                        {t.name}
+                    {clients.map((client) => (
+                      <SelectItem key={client.id} value={client.id}>
+                        {client.name}
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <CreatableSiteLookup
+                  id="site-customer"
+                  label="Торговое название объекта"
+                  value={form.customer}
+                  options={(tradeNames ?? []).map((item) => item.name)}
+                  onChange={(customer) => setForm((current) => ({ ...current, customer }))}
+                  onCreate={async (name) => {
+                    const created = await createTradeName.mutateAsync({ data: { name } });
+                    return created.name;
+                  }}
+                  isLoading={tradeNamesLoading}
+                  isError={tradeNamesError}
+                  onRetry={() => void refetchTradeNames()}
+                />
                 <button
                   type="button"
                   className="text-xs text-muted-foreground underline"
@@ -1045,7 +1728,6 @@ export default function Sites() {
                 <Label htmlFor="manager">Закреплённый менеджер</Label>
                 <Input
                   id="manager"
-                  required
                   value={form.manager}
                   onChange={(e) =>
                     setForm({ ...form, manager: e.target.value })
@@ -1117,31 +1799,24 @@ export default function Sites() {
                 />
               </div>
               <div className="space-y-2">
-                <Label>Тип поставки</Label>
-                <Select
-                  value={form.deliveryType || "__none__"}
-                  onValueChange={(v) =>
-                    setForm({ ...form, deliveryType: v === "__none__" ? "" : v })
-                  }
-                >
-                  <SelectTrigger data-testid="select-site-delivery-type">
-                    <SelectValue placeholder="Выберите из справочника" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__none__">Не указан</SelectItem>
-                    {(deliveryTypes ?? []).map((t) => (
-                      <SelectItem key={t.id} value={t.name}>
-                        {t.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <Label>Формат обслуживания</Label>
+                <SiteServiceModeSelect value={form.serviceMode} onChange={serviceMode => setForm({ ...form, serviceMode })} />
               </div>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="features">Особенности</Label>
+              <Textarea
+                id="features"
+                value={form.features}
+                onChange={(e) => setForm({ ...form, features: e.target.value })}
+                placeholder="Особенности работы магазина или подъезда большой машины"
+                data-testid="textarea-site-features"
+              />
             </div>
             <DialogFooter>
               <Button
                 type="submit"
-                disabled={createSite.isPending}
+                disabled={createSite.isPending || !form.clientId || !form.branch.trim() || !form.customer.trim()}
                 data-testid="button-submit-site"
               >
                 Создать
@@ -1172,6 +1847,66 @@ export default function Sites() {
               data-testid="button-confirm-delete-site"
             >
               Удалить
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog
+        open={!!closureDecision}
+        onOpenChange={(open) => !open && setClosureDecision(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {closureDecision?.decision === "approved"
+                ? "Подтвердить снятие с обслуживания?"
+                : "Отклонить запрос на снятие с обслуживания?"}
+            </AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-2">
+                <p>
+                  Объект:{" "}
+                  <strong>{closureDecision?.request.siteName}</strong>
+                </p>
+                {closureDecision &&
+                  "closedFrom" in closureDecision.request.payload && (
+                    <>
+                      <p>
+                        Дата снятия с обслуживания:{" "}
+                        <strong>{closureDecision.request.payload.closedFrom}</strong>
+                      </p>
+                      <p>
+                        Причина:{" "}
+                        <strong>
+                          {closureDecision.request.payload.closureReason ?? "Не указана"}
+                        </strong>
+                      </p>
+                    </>
+                  )}
+                <p>
+                  {closureDecision?.decision === "approved"
+                    ? "После подтверждения объект будет снят с обслуживания и помещён в архив."
+                    : "После отклонения объект останется на обслуживании, а отметка ожидания исчезнет."}
+                </p>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Отмена</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (!closureDecision) return;
+                if (closureDecision.decision === "approved") {
+                  approveChangeRequest.mutate({ id: closureDecision.request.id });
+                } else {
+                  rejectChangeRequest.mutate({ id: closureDecision.request.id });
+                }
+              }}
+              disabled={approveChangeRequest.isPending || rejectChangeRequest.isPending}
+              data-testid="button-confirm-site-closure-decision"
+            >
+              {closureDecision?.decision === "approved" ? "Подтвердить" : "Отклонить"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

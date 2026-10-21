@@ -12,8 +12,14 @@ import {
   GetMySitesSummaryQueryParams,
   GetMySitesSummaryResponse,
 } from "@workspace/api-zod";
-import { toDeliveryDto, todayLocalISO, photosCountMap } from "../lib/deliveries";
+import {
+  toDeliveryDto,
+  todayLocalISO,
+  photosCountMap,
+  deliveryDtoEnrichmentMap,
+} from "../lib/deliveries";
 import { getMyDeliveriesAccess } from "../lib/my-deliveries-access";
+import { isDriverUser } from "../lib/user-roles";
 import { requireDriver } from "../middlewares/requirePermission";
 
 const router: IRouter = Router();
@@ -35,7 +41,7 @@ router.get("/my/deliveries", async (req, res): Promise<void> => {
     return;
   }
 
-  const conditions = [];
+  const conditions = [isNull(deliveriesTable.archivedAt)];
   if (access === "driver" && user) {
     conditions.push(eq(deliveriesTable.driverUserId, user.id));
   } else if (siteIds && siteIds.length > 0) {
@@ -64,6 +70,11 @@ router.get("/my/deliveries", async (req, res): Promise<void> => {
       delivery: deliveriesTable,
       siteName: sitesTable.name,
       siteAddress: sitesTable.address,
+      tradeNetworkName: sitesTable.customer,
+      siteDeliveryType: sitesTable.deliveryType,
+      clientId: sitesTable.clientId,
+      clientName: sitesTable.client,
+      managerContact: sitesTable.managerContact,
       driverName: appUsersTable.name,
       driverEmail: appUsersTable.email,
     })
@@ -74,15 +85,25 @@ router.get("/my/deliveries", async (req, res): Promise<void> => {
     .orderBy(sql`${deliveriesTable.plannedDate} asc nulls last`);
 
   const counts = await photosCountMap(rows.map((row) => row.delivery.id));
+  const enrichment = await deliveryDtoEnrichmentMap(
+    rows.map((row) => row.delivery.id),
+  );
   res.json(
     ListMyDeliveriesResponse.parse(
       rows.map((row) =>
         toDeliveryDto(
-          row.delivery,
+          { ...row.delivery, deliveryType: row.delivery.deliveryType ?? row.siteDeliveryType },
           row.siteName,
           row.siteAddress,
           counts.get(row.delivery.id) ?? 0,
           row.driverName || row.driverEmail || "Не назначен",
+          row.managerContact || null,
+          {
+            ...(enrichment.get(row.delivery.id) ?? {}),
+            tradeNetworkName: row.tradeNetworkName,
+            clientId: row.clientId,
+            clientName: row.clientName,
+          },
         ),
       ),
     ),
@@ -97,9 +118,7 @@ router.post("/my/deliveries/:id/done", async (req, res): Promise<void> => {
   }
 
   const driverUserId =
-    req.appUser?.role === "driver" || req.appUser?.isDriver
-      ? req.appUser.id
-      : null;
+    req.appUser && isDriverUser(req.appUser) ? req.appUser.id : null;
   if (!driverUserId) {
     res.status(403).json({ error: "Только пользователь-водитель может отметить доставку" });
     return;
@@ -108,7 +127,12 @@ router.post("/my/deliveries/:id/done", async (req, res): Promise<void> => {
   const [existing] = await db
     .select()
     .from(deliveriesTable)
-    .where(eq(deliveriesTable.id, params.data.id));
+    .where(
+      and(
+        eq(deliveriesTable.id, params.data.id),
+        isNull(deliveriesTable.archivedAt),
+      ),
+    );
 
   if (!existing) {
     res.status(404).json({ error: "Доставка не найдена" });
@@ -141,6 +165,10 @@ router.post("/my/deliveries/:id/done", async (req, res): Promise<void> => {
     .where(and(
       eq(deliveriesTable.id, params.data.id),
       eq(deliveriesTable.driverUserId, driverUserId),
+      isNull(deliveriesTable.archivedAt),
+      isNull(deliveriesTable.actualDate),
+      isNull(deliveriesTable.deletionPendingAt),
+      isNull(deliveriesTable.actApprovedAt),
     ))
     .returning();
   if (!updated) {
@@ -157,6 +185,7 @@ router.post("/my/deliveries/:id/done", async (req, res): Promise<void> => {
     { deliveryId: updated.id, driverUserId, userId: req.appUser?.id },
     "Delivery marked done by driver",
   );
+  const enrichment = await deliveryDtoEnrichmentMap([updated.id]);
   res.json(MarkMyDeliveryDoneResponse.parse(
     toDeliveryDto(
       updated,
@@ -164,6 +193,13 @@ router.post("/my/deliveries/:id/done", async (req, res): Promise<void> => {
       site?.address ?? "",
       0,
       req.appUser?.name || req.appUser?.email || "Не назначен",
+      null,
+      {
+        ...(enrichment.get(updated.id) ?? {}),
+        tradeNetworkName: site?.customer ?? null,
+        clientId: site?.clientId ?? null,
+        clientName: site?.client ?? null,
+      },
     ),
   ));
 });
@@ -181,9 +217,7 @@ router.patch("/my/deliveries/:id/comment", async (req, res): Promise<void> => {
   }
 
   const driverUserId =
-    req.appUser?.role === "driver" || req.appUser?.isDriver
-      ? req.appUser.id
-      : null;
+    req.appUser && isDriverUser(req.appUser) ? req.appUser.id : null;
   if (!driverUserId) {
     res.status(403).json({ error: "Только активный водитель может изменить комментарий" });
     return;
@@ -196,6 +230,7 @@ router.patch("/my/deliveries/:id/comment", async (req, res): Promise<void> => {
       eq(deliveriesTable.id, params.data.id),
       eq(deliveriesTable.driverUserId, driverUserId),
       isNull(deliveriesTable.actApprovedAt),
+      isNull(deliveriesTable.archivedAt),
     ))
     .returning();
   if (!updated) {
@@ -203,10 +238,19 @@ router.patch("/my/deliveries/:id/comment", async (req, res): Promise<void> => {
       .select({
         driverUserId: deliveriesTable.driverUserId,
         actApprovedAt: deliveriesTable.actApprovedAt,
+        archivedAt: deliveriesTable.archivedAt,
       })
       .from(deliveriesTable)
       .where(eq(deliveriesTable.id, params.data.id));
-    if (!current || current.driverUserId !== driverUserId) {
+    if (!current) {
+      res.status(404).json({ error: "Доставка не найдена" });
+      return;
+    }
+    if (current.archivedAt) {
+      res.status(404).json({ error: "Доставка не найдена" });
+      return;
+    }
+    if (current.driverUserId !== driverUserId) {
       res.status(403).json({ error: "Доставка не назначена этому водителю" });
       return;
     }
@@ -220,6 +264,7 @@ router.patch("/my/deliveries/:id/comment", async (req, res): Promise<void> => {
 
   const [site] = await db.select().from(sitesTable).where(eq(sitesTable.id, updated.siteId));
   const counts = await photosCountMap([updated.id]);
+  const enrichment = await deliveryDtoEnrichmentMap([updated.id]);
   req.log.info(
     { deliveryId: updated.id, driverUserId },
     "Delivery comment updated by driver",
@@ -231,6 +276,13 @@ router.patch("/my/deliveries/:id/comment", async (req, res): Promise<void> => {
       site?.address ?? "",
       counts.get(updated.id) ?? 0,
       req.appUser?.name || req.appUser?.email || "Не назначен",
+      null,
+      {
+        ...(enrichment.get(updated.id) ?? {}),
+        tradeNetworkName: site?.customer ?? null,
+        clientId: site?.clientId ?? null,
+        clientName: site?.client ?? null,
+      },
     ),
   ));
 });
@@ -253,7 +305,10 @@ router.get("/my/sites-summary", async (req, res): Promise<void> => {
     .from(sitesTable)
     .where(inArray(sitesTable.id, siteIds));
 
-  const conditions = [inArray(deliveriesTable.siteId, siteIds)];
+  const conditions = [
+    inArray(deliveriesTable.siteId, siteIds),
+    isNull(deliveriesTable.archivedAt),
+  ];
   if (query.data.from) {
     conditions.push(gte(deliveriesTable.plannedDate, query.data.from));
   }

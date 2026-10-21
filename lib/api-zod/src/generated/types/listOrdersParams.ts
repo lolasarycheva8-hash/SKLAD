@@ -7,6 +7,11 @@
  */
 
 export type ListOrdersParams = {
-clientId?: string;
-isPaid?: boolean;
+  clientId?: string;
+  isPaid?: boolean;
+  /**
+   * Effective planned month (YYYY-MM), or "without" for orders without a month. Omit for all.
+   * @pattern ^(?:[0-9]{4}-(?:0[1-9]|1[0-2])|without)$
+   */
+  plannedMonth?: string;
 };

@@ -9,11 +9,17 @@
 export interface UpdateDeliveryInput {
   /** @nullable */
   plannedDate?: Date | null;
-  actualDate?: Date | null;
-  note?: string | null;
   /**
-     * Замена водителя на эту конкретную доставку (не меняет привязку объекта)
-     * @nullable
-     */
+   * Уточнённая плановая дата только для отчётности; null очищает значение
+   * @nullable
+   */
+  correctedPlannedDate?: Date | null;
+  actualDate?: Date | null;
+  /** Примечание для водителя; изменять может только логист */
+  logisticianNote?: string | null;
+  /**
+   * Замена водителя на эту конкретную доставку (не меняет привязку объекта)
+   * @nullable
+   */
   driverUserId?: string | null;
 }

@@ -5,22 +5,33 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
-import type { DeliveryStatus } from './deliveryStatus';
+import type { CalendarMonth } from "./calendarMonth";
+import type { DeliveryStatus } from "./deliveryStatus";
 
 export type ListDeliveriesParams = {
-/**
- * Filter by month, format YYYY-MM
- */
-month?: string;
-/**
- * Filter deliveries with plannedDate >= dateFrom (format YYYY-MM-DD). Takes precedence over month when provided.
- */
-dateFrom?: string;
-/**
- * Filter deliveries with plannedDate <= dateTo (format YYYY-MM-DD). Takes precedence over month when provided.
- */
-dateTo?: string;
-siteId?: string;
-driverUserId?: string;
-status?: DeliveryStatus;
+  /**
+   * Filter by month, format YYYY-MM
+   */
+  month?: CalendarMonth;
+  /**
+   * Filter deliveries with plannedDate >= dateFrom (valid calendar date YYYY-MM-DD). Takes precedence over month when provided.
+   * @minLength 10
+   * @maxLength 10
+   * @pattern ^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$
+   */
+  dateFrom?: string;
+  /**
+   * Filter deliveries with plannedDate <= dateTo (valid calendar date YYYY-MM-DD). Takes precedence over month when provided.
+   * @minLength 10
+   * @maxLength 10
+   * @pattern ^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$
+   */
+  dateTo?: string;
+  siteId?: string;
+  driverUserId?: string;
+  status?: DeliveryStatus;
+  /**
+   * Return archived deliveries only; restricted to delivery editors
+   */
+  archived?: boolean;
 };
